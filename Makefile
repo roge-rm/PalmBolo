@@ -3,7 +3,9 @@
 #   make DEBUG=1     adds the debug log, timers and self-test (build-debug/)
 #   make host-test   builds and runs the game rules test on the host
 #   make build/maprender   host tool: maprender FILE.map OUT.png [TILE_PX [X Y W H]]
-# EXTRA="-DAUTOQUIT_SECONDS=9" makes a debug build quit by itself.
+# EXTRA="-DAUTOQUIT_SECONDS=9" makes a debug build quit by itself, and
+# EXTRA="-DSELFTEST_AT_START" runs the self-test at launch (it is on the menu),
+# and EXTRA="-DDEMO_START" puts the tank west of the first base for replays.
 
 SDK      = ../palm-os-sdk/sdk-5r3
 PRC      = PalmBolo.prc
@@ -22,7 +24,7 @@ CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES)
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
 SRCS     = main screen detect dlog timing mapload mapstore_palm tileview
-GAMESRCS = game tank shells script util map tiles
+GAMESRCS = game tank shells pills script util map tiles
 OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS)))
 
 all: build/$(PRC)
@@ -49,7 +51,7 @@ $(BUILD)/palmbolo: $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sectio
 	$(CC) $(LDFLAGS) $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld -o $@
 
 $(BUILD)/palmbolo.ro: src/palmbolo.rcp src/resource.h res/icon.bmp res/smallicon.bmp res/everard.map | $(BUILD)
-	pilrc -q -ro -I src src/palmbolo.rcp $@
+	pilrc -q -ro $(if $(DEBUG),-D DEBUG) -I src src/palmbolo.rcp $@
 
 # The PRC is always written to build/PalmBolo.prc, so build one flavour at a time.
 build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
@@ -58,10 +60,10 @@ build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
 host-test: build/hosttest
 	build/hosttest
 
-HOSTSRC  = src/game/game.c src/game/tank.c src/game/shells.c src/game/script.c src/game/util.c src/game/map.c src/game/tiles.c host/mapstore_host.c
+HOSTSRC  = src/game/game.c src/game/tank.c src/game/shells.c src/game/pills.c src/game/script.c src/game/util.c src/game/map.c src/game/tiles.c host/mapstore_host.c
 
 build/hosttest: host/hosttest.c $(HOSTSRC) src/game/*.h | $(BUILD)
-	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) -o $@
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) -lm -o $@
 
 build/maprender: host/maprender.c $(HOSTSRC) src/game/*.h | $(BUILD)
 	gcc -Wall -Wextra -O2 host/maprender.c $(HOSTSRC) -o $@

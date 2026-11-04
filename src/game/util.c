@@ -68,6 +68,42 @@ uint8_t util_dir16(uint16_t angle)
 	return d >= 16 ? 0 : (uint8_t)d;
 }
 
+// atan of min / max in 1/32 bradians, from the table with linear steps
+// between entries. max is not 0.
+static uint16_t atan_ratio(uint16_t mn, uint16_t mx)
+{
+	uint16_t r = (uint16_t)(((uint32_t)mn << 14) / mx);   // 0..16384
+	uint16_t i = (uint16_t)(r >> 6), f = (uint16_t)(r & 63);
+	uint16_t v = kAtan[i];
+
+	if (f)
+		v = (uint16_t)(v + (((uint16_t)(kAtan[i + 1] - v) * f) >> 6));
+	return (uint16_t)((v + 8) >> 4);
+}
+
+uint16_t util_angle(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
+{
+	uint16_t gx = x2 >= x1 ? (uint16_t)(x2 - x1) : (uint16_t)(x1 - x2);
+	uint16_t gy = y2 >= y1 ? (uint16_t)(y2 - y1) : (uint16_t)(y1 - y2);
+	uint16_t a;
+	uint8_t xle = x2 <= x1, xgt = x2 > x1, yle = y2 <= y1, yge = y2 >= y1;
+
+	if (gx == 0 && gy == 0)
+		return 0;
+	// a = atan(gx / gy)
+	if (gx <= gy)
+		a = atan_ratio(gx, gy);
+	else
+		a = (uint16_t)(64 * ANGLE_ONE - atan_ratio(gy, gx));
+	if (xle && yle)
+		a = (uint16_t)(ANGLE_MAX - a);
+	else if (xgt && yge)
+		a = (uint16_t)(128 * ANGLE_ONE - a);
+	else if (xle && yge)
+		a = (uint16_t)(a + 128 * ANGLE_ONE);
+	return a;
+}
+
 uint16_t util_isqrt(uint32_t v)
 {
 	uint32_t r = 0, bit = 1UL << 30;
@@ -102,6 +138,11 @@ uint32_t util_table_check(void)
 	for (i = 0; i < 2049; i++) {
 		b[0] = (uint8_t)(kCos[i] >> 8);
 		b[1] = (uint8_t)kCos[i];
+		crc = util_crc(crc, b, 2);
+	}
+	for (i = 0; i < 257; i++) {
+		b[0] = (uint8_t)(kAtan[i] >> 8);
+		b[1] = (uint8_t)kAtan[i];
 		crc = util_crc(crc, b, 2);
 	}
 	return ~crc;

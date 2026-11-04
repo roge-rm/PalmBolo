@@ -1,0 +1,21 @@
+# PalmBolo milestone 4 on the TX, with a debug build made with
+# EXTRA="-DDEMO_START": the tank starts six squares west of base 0, a
+# neutral base with pill 5 three squares south of it. Times are ms after
+# launch and settle.
+# Opens Everard Island, drives east onto the base (capturing it), and
+# waits there while the pill shoots at it.
+0 snapshot "start.png"
+2500 snapshot "list.png"
+3000 pen-down 100 48
+3100 pen-up
+5000 snapshot "everard.png"
+5100 key-down up
+7000 key-up up
+7100 snapshot "drive.png"
+8500 snapshot "on-base.png"
+10000 snapshot "base-owned.png"
+12000 snapshot "shot1.png"
+14000 snapshot "shot2.png"
+16000 snapshot "shot3.png"
+20000 snapshot "later.png"
+26000 snapshot "end.png"

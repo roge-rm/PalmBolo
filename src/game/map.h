@@ -40,22 +40,32 @@ enum {
 #define TERRAIN_MINE_LAST   15
 #define TERRAIN_MINE_ADD    8
 
+// Pills, bases and starts keep their file order and numbers for the whole
+// game. One in the mined border is marked inactive rather than removed, as
+// WinBolo does.
 typedef struct MapPill {
 	uint8_t x, y;
 	uint8_t owner;      // 0-15, or MAP_NEUTRAL
 	uint8_t armour;
-	uint8_t speed;      // time between shots
+	uint8_t speed;      // ticks between shots
+	uint8_t reload;     // ticks since the last shot, up to speed
+	uint8_t coolDown;   // ticks until speed eases back by one
+	uint8_t inTank;     // carried by its owner's tank
+	uint8_t justSeen;   // had a target last time it was ready
+	uint8_t active;
 } MapPill;
 
 typedef struct MapBase {
 	uint8_t x, y;
 	uint8_t owner;      // 0-15, or MAP_NEUTRAL
 	uint8_t armour, shells, mines;
+	uint8_t active, pad;
 } MapBase;
 
 typedef struct MapStart {
 	uint8_t x, y;
 	uint8_t dir;        // towards land, 0-15
+	uint8_t active;
 } MapStart;
 
 // Everything about a map except the terrain, which is in the map store.
@@ -96,8 +106,9 @@ void map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32
 
 // Reads a .map file into info and the map store. The store is cleared to
 // deep sea first. As in WinBolo the map is then centred and pills, bases
-// and starts in the mined border are dropped. Terrain under bases becomes road, and under pills any
-// water or building becomes road and any mine is removed. Returns MAP_OK or
+// and starts in the mined border are marked inactive. Terrain under active
+// bases becomes road, and under active pills any water or building becomes
+// road and any mine is removed. Returns MAP_OK or
 // an error code, and never reads or writes outside the arrays. On an error
 // the contents are unspecified (info is zeroed).
 int map_parse(MapInfo *info, MapSource *ms);

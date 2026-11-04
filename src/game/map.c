@@ -268,17 +268,15 @@ static void map_center(MapInfo *info)
 }
 
 // WinBolo's pills/bases/startsRemoveBorder*: items in the mined border are
-// dropped, as long as at least one of that kind is inside. WinBolo marks
-// them inactive; here the arrays close up, keeping their order.
+// marked inactive, as long as at least one of that kind is inside. They
+// keep their place, so pill and base numbers stay those of the file.
 #define REMOVE_BORDER(arr, num) do { \
-	uint8_t in = 0, k, n = 0; \
+	uint8_t in = 0, k; \
 	for (k = 0; k < (num); k++) \
 		if (in_bounds((arr)[k].x, (arr)[k].y)) in++; \
-	if (in) { \
+	if (in) \
 		for (k = 0; k < (num); k++) \
-			if (in_bounds((arr)[k].x, (arr)[k].y)) (arr)[n++] = (arr)[k]; \
-		(num) = n; \
-	} \
+			if (!in_bounds((arr)[k].x, (arr)[k].y)) (arr)[k].active = 0; \
 } while (0)
 
 static void remove_border(MapInfo *info)
@@ -319,6 +317,7 @@ static int parse(MapInfo *info, MapSource *ms)
 		p->owner = (b[2] > 15 && b[2] != MAP_NEUTRAL) ? MAP_NEUTRAL : b[2];
 		p->armour = b[3];
 		p->speed = b[4];
+		p->active = 1;
 	}
 	for (i = 0; i < info->numBases; i++) {
 		MapBase *p = &info->bases[i];
@@ -331,6 +330,7 @@ static int parse(MapInfo *info, MapSource *ms)
 		p->armour = b[3];
 		p->shells = b[4];
 		p->mines = b[5];
+		p->active = 1;
 	}
 	for (i = 0; i < info->numStarts; i++) {
 		MapStart *p = &info->starts[i];
@@ -340,6 +340,7 @@ static int parse(MapInfo *info, MapSource *ms)
 		p->x = b[0];
 		p->y = b[1];
 		p->dir = b[2] & 15;
+		p->active = 1;
 	}
 
 	err = read_runs(ms);
@@ -352,10 +353,13 @@ static int parse(MapInfo *info, MapSource *ms)
 	// Bases stand on road. A pill can't be in water or a building, and has
 	// no mine under it.
 	for (i = 0; i < info->numBases; i++)
-		mapstore_set(info->bases[i].x, info->bases[i].y, TERRAIN_ROAD);
+		if (info->bases[i].active)
+			mapstore_set(info->bases[i].x, info->bases[i].y, TERRAIN_ROAD);
 	for (i = 0; i < info->numPills; i++) {
 		uint8_t t = mapstore_get(info->pills[i].x, info->pills[i].y);
 
+		if (!info->pills[i].active)
+			continue;
 		if (t == TERRAIN_RIVER || t == TERRAIN_DEEP_SEA ||
 		    t == TERRAIN_BUILDING || t == TERRAIN_HALFBUILDING)
 			mapstore_set(info->pills[i].x, info->pills[i].y, TERRAIN_ROAD);

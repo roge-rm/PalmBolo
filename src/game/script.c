@@ -12,7 +12,15 @@ enum {
 	            // a boat if d
 	OP_STOCK,   // set armour a, shells b, mines c
 	OP_BACK,    // move the tank a squares west
-	OP_FACE     // turn the tank to face direction a (0-15)
+	OP_FACE,    // turn the tank to face direction a (0-15)
+	OP_BASE,    // put the tank on the first base with no live pill within
+	            // 9 squares, off the boat
+	OP_NEARPILL, // put the tank a squares west of the first pill with
+	            // grass or road there and between, facing east
+	OP_PILLARM, // set that pill's armour to a
+	OP_BASESTOCK, // set that base's armour a, shells b, mines c
+	OP_TYPE,    // a new game of type a (GAME_OPEN etc)
+	OP_AWAY     // move the tank a squares south
 };
 
 typedef struct Op {
@@ -62,12 +70,36 @@ static const Op kScripts[] = {
 	{ OP_KEYS, F, 0, 0, 0, 60 }, { OP_KEYS, 0, 0, 0, 0, 200 }, { OP_END, 0, 0, 0, 0, 0 },
 	// 8 refuel at a base after losses
 	{ OP_FIND, TERRAIN_ROAD, TERRAIN_ROAD, 1, 0, 0 },
-	{ OP_STOCK, 20, 30, 35, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 400 }, { OP_END, 0, 0, 0, 0, 0 }
+	{ OP_STOCK, 20, 30, 35, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 400 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 9 capture a neutral base
+	{ OP_BASE, 0, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 1 }, { OP_KEYS, 0, 0, 0, 0, 20 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 10 refuel at the captured base
+	{ OP_BASE, 0, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 1 }, { OP_STOCK, 20, 30, 35, 0, 0 },
+	{ OP_KEYS, 0, 0, 0, 0, 100 }, { OP_KEYS, 0, 0, 0, 0, 500 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 11 shot by a pill: still, then driving round
+	{ OP_NEARPILL, 5, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 1 }, { OP_KEYS, 0, 0, 0, 0, 100 },
+	{ OP_KEYS, 0, 0, 0, 0, 150 }, { OP_KEYS, F | IN_LEFT, 0, 0, 0, 200 },
+	{ OP_KEYS, 0, 0, 0, 0, 400 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 12 shoot a pill down and pick it up
+	{ OP_NEARPILL, 3, 0, 0, 0, 0 }, { OP_PILLARM, 2, 0, 0, 0, 0 },
+	{ OP_KEYS, IN_SIGHT_NEAR, 0, 0, 0, 7 }, { OP_KEYS, IN_FIRE, 0, 0, 0, 40 },
+	{ OP_KEYS, F, 0, 0, 0, 60 }, { OP_KEYS, IN_SLOWER, 0, 0, 0, 20 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 13 base restocking over time
+	{ OP_BASE, 0, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 1 }, { OP_BASESTOCK, 30, 20, 10, 0, 0 },
+	{ OP_AWAY, 1, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 998 }, { OP_KEYS, 0, 0, 0, 0, 2002 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 14 what each game type starts with
+	{ OP_TYPE, GAME_OPEN, 0, 0, 0, 0 }, { OP_TYPE, GAME_TOURNAMENT, 0, 0, 0, 0 },
+	{ OP_TYPE, GAME_STRICT, 0, 0, 0, 0 }, { OP_BASE, 0, 0, 0, 0, 0 },
+	{ OP_KEYS, 0, 0, 0, 0, 1 }, { OP_TYPE, GAME_TOURNAMENT, 1, 0, 0, 0 },
+	{ OP_END, 0, 0, 0, 0, 0 }
 };
 #undef F
 
 static const char kNames[] =
-	"drive\0speeds\0boat\0wading\0deep sea\0shoot\0range\0mines\0refuel\0";
+	"drive\0speeds\0boat\0wading\0deep sea\0shoot\0range\0mines\0refuel\0"
+	"capture\0base fuel\0pill shot\0pill down\0restock\0types\0";
 
 const char *script_name(uint8_t n)
 {
@@ -115,6 +147,64 @@ static uint8_t find(GameState *s, const Op *o)
 	return 0;
 }
 
+static void place(Tank *k, uint8_t x, uint8_t y)
+{
+	k->x = (uint16_t)(((uint16_t)x << 8) + 128U);
+	k->y = (uint16_t)(((uint16_t)y << 8) + 128U);
+	k->angle = 64 * ANGLE_ONE;
+	k->speed = 0;
+	k->residual = 0;
+	k->boat = BOAT_OFF;
+}
+
+// The first base with no live pill within 9 squares.
+static int8_t find_base(GameState *s)
+{
+	uint8_t i, j, ok;
+
+	for (i = 0; i < s->map.numBases; i++) {
+		const MapBase *b = &s->map.bases[i];
+
+		ok = b->active;
+		for (j = 0; j < s->map.numPills && ok; j++) {
+			const MapPill *p = &s->map.pills[j];
+			uint8_t dx = p->x > b->x ? p->x - b->x : b->x - p->x;
+			uint8_t dy = p->y > b->y ? p->y - b->y : b->y - p->y;
+
+			if (p->armour > 0 && dx <= 9 && dy <= 9)
+				ok = 0;
+		}
+		if (ok)
+			return (int8_t)i;
+	}
+	return -1;
+}
+
+static uint8_t open_ground(GameState *s, uint8_t x, uint8_t y)
+{
+	uint8_t t = game_terrain(x, y);
+
+	return (t == TERRAIN_GRASS || t == TERRAIN_ROAD) && g_pill_at(s, x, y) < 0 &&
+		g_base_at(s, x, y) < 0;
+}
+
+// The first pill with open ground from d squares west of it up to it.
+static int8_t find_pill(GameState *s, uint8_t d)
+{
+	uint8_t i, j, ok;
+
+	for (i = 0; i < s->map.numPills; i++) {
+		const MapPill *p = &s->map.pills[i];
+
+		ok = p->active && p->x > d;
+		for (j = 1; j <= d && ok; j++)
+			ok = open_ground(s, (uint8_t)(p->x - j), p->y);
+		if (ok)
+			return (int8_t)i;
+	}
+	return -1;
+}
+
 uint32_t script_run(GameState *s, uint8_t n,
 	void (*step)(const GameState *s, uint8_t n, uint8_t i, void *ctx), void *ctx)
 {
@@ -123,14 +213,17 @@ uint32_t script_run(GameState *s, uint8_t n,
 	uint8_t i = 0, b[8];
 	uint16_t t;
 	uint8_t n0 = n;
+	int8_t pill = -1, base = -1;
 	GameInput in;
+	GameSetup setup;
+	MapInfo start = s->map;
 
 	while (n) {
 		if (o->op == OP_END)
 			n--;
 		o++;
 	}
-	game_init(s, 4242);
+	game_init(s, 4242, 0);
 	in.opts = 0;
 	for (; o->op != OP_END; o++, i++) {
 		Tank *k = &s->tanks[0];
@@ -156,6 +249,45 @@ uint32_t script_run(GameState *s, uint8_t n,
 			break;
 		case OP_BACK:
 			k->x = (uint16_t)(k->x - ((uint16_t)o->a << 8));
+			break;
+		case OP_AWAY:
+			k->y = (uint16_t)(k->y + ((uint16_t)o->a << 8));
+			break;
+		case OP_BASE:
+			base = find_base(s);
+			b[0] = (uint8_t)base;
+			crc = util_crc(crc, b, 1);
+			if (base >= 0)
+				place(k, s->map.bases[base].x, s->map.bases[base].y);
+			break;
+		case OP_NEARPILL:
+			pill = find_pill(s, o->a);
+			b[0] = (uint8_t)pill;
+			crc = util_crc(crc, b, 1);
+			if (pill >= 0)
+				place(k, (uint8_t)(s->map.pills[pill].x - o->a), s->map.pills[pill].y);
+			break;
+		case OP_PILLARM:
+			if (pill >= 0)
+				s->map.pills[pill].armour = o->a;
+			break;
+		case OP_BASESTOCK:
+			if (base >= 0) {
+				s->map.bases[base].armour = o->a;
+				s->map.bases[base].shells = o->b;
+				s->map.bases[base].mines = o->c;
+			}
+			break;
+		case OP_TYPE:
+			// Keeps the bases as they are now when b is set, else the
+			// map's.
+			if (!o->b)
+				s->map = start;
+			for (t = 0; t < sizeof(setup); t++)
+				((uint8_t *)&setup)[t] = 0;
+			setup.gameType = o->a;
+			setup.numPlayers = 1;
+			game_init(s, 4242, &setup);
 			break;
 		}
 		if (step)

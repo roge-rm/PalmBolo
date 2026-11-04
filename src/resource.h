@@ -9,6 +9,7 @@
 #define MainMenuAbout       1001
 #define MainMenuMaps        1003
 #define MainMenuQuit        1002
+#define MainMenuSelfTest    1004
 
 #define AboutAlert          1100
 #define RomIncompatibleAlert 1101

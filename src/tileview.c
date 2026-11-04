@@ -26,7 +26,9 @@ static UInt8 gShift = 5;        // world units to view pixels
 static RectangleType gOld[kMaxRects];
 static UInt16 gNumOld;
 static RectangleType gReadout;
-static UInt8 gShown[4];
+static UInt8 gShown[5];
+// Pills and bases as last drawn: x, y, owner, armour and inTank (pills).
+static UInt8 gPillLook[MAP_MAX_PILLS][5], gBaseLook[MAP_MAX_BASES][2];
 static UInt16 gShownDeaths = 0xFFFF;
 static IndexedColorType gYellow, gOrange;
 
@@ -279,6 +281,22 @@ static void SEC_UI CopyTile(UInt16 tile, Int32 tx, Int32 ty)
 		(Coord)(ty * gTs - gVy), winPaint);
 }
 
+static UInt16 SEC_UI PillTile(const MapPill *p)
+{
+	UInt8 kind = game_owner_kind(gGame, p->owner, gGame->tanks[0].player);
+
+	if (p->armour == 0)
+		return TILE_PILL_DEAD;
+	return kind == OWN_NEUTRAL ? TILE_PILL : TILE_PILL_OWN + kind - OWN_SELF;
+}
+
+static UInt16 SEC_UI BaseTile(const MapBase *b)
+{
+	UInt8 kind = game_owner_kind(gGame, b->owner, gGame->tanks[0].player);
+
+	return kind == OWN_NEUTRAL ? TILE_BASE : TILE_BASE_OWN + kind - OWN_SELF;
+}
+
 // Draws the part of the view inside r (view pixels) from the map.
 static void SEC_UI DrawRegion(const RectangleType *r)
 {
@@ -305,14 +323,24 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 		if (m->starts[i].x >= tx0 && m->starts[i].x <= tx1 &&
 		    m->starts[i].y >= ty0 && m->starts[i].y <= ty1)
 			CopyTile(TILE_START, m->starts[i].x, m->starts[i].y);
-	for (i = 0; i < m->numBases; i++)
-		if (m->bases[i].x >= tx0 && m->bases[i].x <= tx1 &&
-		    m->bases[i].y >= ty0 && m->bases[i].y <= ty1)
-			CopyTile(TILE_BASE, m->bases[i].x, m->bases[i].y);
-	for (i = 0; i < m->numPills; i++)
-		if (m->pills[i].x >= tx0 && m->pills[i].x <= tx1 &&
-		    m->pills[i].y >= ty0 && m->pills[i].y <= ty1)
-			CopyTile(TILE_PILL, m->pills[i].x, m->pills[i].y);
+	for (i = 0; i < m->numBases; i++) {
+		const MapBase *b = &m->bases[i];
+
+		if (b->active && b->x >= tx0 && b->x <= tx1 && b->y >= ty0 && b->y <= ty1)
+			CopyTile(BaseTile(b), b->x, b->y);
+	}
+	for (i = 0; i < m->numPills; i++) {
+		const MapPill *p = &m->pills[i];
+
+		if (!p->active || p->inTank || p->x < tx0 || p->x > tx1 || p->y < ty0 || p->y > ty1)
+			continue;
+		CopyTile(PillTile(p), p->x, p->y);
+		// Damage: a dark bar across the top, longer with less armour.
+		if (p->armour > 0 && p->armour < R_PILL_MAX_ARMOUR)
+			Fill((Coord)(p->x * gTs - gVx), (Coord)(p->y * gTs - gVy),
+				(Coord)(gTs * (R_PILL_MAX_ARMOUR - p->armour) / R_PILL_MAX_ARMOUR),
+				(Coord)(gTs / 4), gBlack);
+	}
 	WinResetClip();
 }
 
@@ -499,8 +527,8 @@ static void SEC_UI DrawSprites(void)
 static void SEC_UI DrawReadout(Boolean force)
 {
 	const Tank *k = &gGame->tanks[0];
-	Char buf[40], *p = buf;
-	UInt8 v[4];
+	Char buf[48], *p = buf;
+	UInt8 v[5];
 	UInt16 i;
 	FontID old;
 
@@ -508,12 +536,13 @@ static void SEC_UI DrawReadout(Boolean force)
 	v[1] = k->shells;
 	v[2] = k->mines;
 	v[3] = k->trees;
-	if (!force && MemCmp(v, gShown, 4) == 0 && gShownDeaths == k->deaths)
+	v[4] = k->numCarry;
+	if (!force && MemCmp(v, gShown, 5) == 0 && gShownDeaths == k->deaths)
 		return;
-	MemMove(gShown, v, 4);
+	MemMove(gShown, v, 5);
 	gShownDeaths = k->deaths;
-	for (i = 0; i < 4; i++) {
-		*p++ = "ASMT"[i];
+	for (i = 0; i < 5; i++) {
+		*p++ = "ASMTP"[i];
 		StrIToA(p, v[i]);
 		p += StrLen(p);
 		*p++ = ' ';
@@ -553,6 +582,57 @@ static void SEC_UI DrawChanges(void)
 		r.extent.y = gTs;
 		if (r.topLeft.x > -gTs && r.topLeft.x < gW && r.topLeft.y > -gTs && r.topLeft.y < gH)
 			DrawRegion(&r);
+	}
+}
+
+static void SEC_UI Erase(const RectangleType *r);
+
+static void SEC_UI DrawSquare(UInt8 x, UInt8 y)
+{
+	RectangleType r;
+
+	r.topLeft.x = (Coord)((Int32)x * gTs - gVx);
+	r.topLeft.y = (Coord)((Int32)y * gTs - gVy);
+	r.extent.x = gTs;
+	r.extent.y = gTs;
+	if (r.topLeft.x > -gTs && r.topLeft.x < gW && r.topLeft.y > -gTs && r.topLeft.y < gH)
+		Erase(&r);
+}
+
+// Redraws pills and bases that changed hands, took damage or moved since
+// last drawn. With all set, just notes how they are now.
+static void SEC_UI DrawItemChanges(Boolean all)
+{
+	const MapInfo *m = &gGame->map;
+	UInt16 i;
+
+	for (i = 0; i < m->numPills; i++) {
+		const MapPill *p = &m->pills[i];
+		UInt8 *o = gPillLook[i];
+
+		if (o[0] == p->x && o[1] == p->y && o[2] == p->owner && o[3] == p->armour &&
+		    o[4] == p->inTank)
+			continue;
+		if (!all) {
+			DrawSquare(o[0], o[1]);
+			DrawSquare(p->x, p->y);
+		}
+		o[0] = p->x;
+		o[1] = p->y;
+		o[2] = p->owner;
+		o[3] = p->armour;
+		o[4] = p->inTank;
+	}
+	for (i = 0; i < m->numBases; i++) {
+		const MapBase *b = &m->bases[i];
+		UInt8 look = b->armour > R_BASE_CAPTURE_ARMOUR;
+
+		if (gBaseLook[i][0] == b->owner && gBaseLook[i][1] == look)
+			continue;
+		if (!all)
+			DrawSquare(b->x, b->y);
+		gBaseLook[i][0] = b->owner;
+		gBaseLook[i][1] = look;
 	}
 }
 
@@ -626,6 +706,7 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 			Erase(&gOld[i]);
 		}
 		DrawChanges();
+		DrawItemChanges(false);
 		if (k->deaths != gShownDeaths) {
 			full = true;
 		} else {
@@ -644,6 +725,7 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 		if (k->deaths != gShownDeaths)
 			CentreOnTank();
 		ClampView();
+		DrawItemChanges(true);
 		DrawAll();
 		readout = true;
 	}

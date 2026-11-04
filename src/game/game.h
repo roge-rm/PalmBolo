@@ -14,7 +14,8 @@
 #include "rules.h"
 
 #define GAME_TICKS_PER_SECOND 50
-#define GAME_MAX_TANKS      1       // one for now, 16 with network play
+#define GAME_MAX_PLAYERS    16      // the player and owner tables
+#define GAME_MAX_TANKS      1       // tanks playing now, up to GAME_MAX_PLAYERS later
 #define GAME_MAX_SHELLS     24
 #define GAME_MAX_EXPL       32      // small explosions (drawn only)
 #define GAME_MAX_TKEXPL     8       // dying tank wrecks
@@ -46,6 +47,27 @@ typedef struct GameInput {
 
 enum { BOAT_OFF = 0, BOAT_IN = 1 };
 
+// Game types: what a tank starts with (WinBolo's gameTypeGetItems) and how
+// a start is chosen. Open: full shells, mines and trees. Tournament: shells
+// by the share of bases still neutral, no mines or trees. Strict
+// tournament: armour only.
+enum { GAME_OPEN = 0, GAME_TOURNAMENT = 1, GAME_STRICT = 2 };
+
+// Chosen by the host for a game.
+typedef struct GameSetup {
+	uint8_t gameType;
+	uint8_t hiddenMines;    // other players' mines aren't shown (drawing only)
+	uint8_t numPlayers;     // 1 to GAME_MAX_TANKS, player n drives tank n
+	uint8_t pad;
+	uint16_t allies[GAME_MAX_PLAYERS];  // bit n set: allied to player n
+} GameSetup;
+
+// A seat in the game (WinBolo's players and allience).
+typedef struct Player {
+	uint8_t inUse, pad;
+	uint16_t allies;        // bit n set: allied to player n
+} Player;
+
 typedef struct Tank {
 	uint16_t x, y;          // world units
 	uint16_t angle;         // 1/32 bradians, 0..8192
@@ -57,7 +79,8 @@ typedef struct Tank {
 	uint8_t destroyed, boat, lastRiverX, lastRiverY;
 	uint8_t reload, sightLen, showSight, opts;
 	uint8_t justFired, waterCount, residual, firstLeft;
-	uint8_t firstRight, obstructed, player, pad;
+	uint8_t firstRight, obstructed, player, numCarry;
+	uint8_t carry[MAP_MAX_PILLS];   // pills carried, newest first
 } Tank;
 
 typedef struct Shell {
@@ -66,7 +89,8 @@ typedef struct Shell {
 	int16_t stepX, stepY;   // 1/256 world units a tick
 	int16_t accX, accY;     // fractions not yet moved
 	uint8_t length;         // ticks left
-	uint8_t owner, onBoat, pad;
+	uint8_t owner;          // player, or GAME_NO_PLAYER for a pill's shell
+	uint8_t onBoat, pad;
 } Shell;
 
 typedef struct Explosion {
@@ -99,9 +123,12 @@ typedef struct GameState {
 	uint32_t tick;          // game ticks run so far
 	uint8_t numTanks, numShells, numExpl, numTkExpl;
 	uint8_t numMineExp, numFlood, explTimer, tkExplTimer;
-	uint8_t halfShell, halfMine, pad[2];
+	uint8_t halfShell, halfMine;
+	uint8_t gameType, hiddenMines;
 	uint8_t baseTime[MAP_MAX_BASES];        // ticks until a base gives again
 	uint8_t baseStopped[MAP_MAX_BASES];     // no tank was on it last tick
+	uint16_t baseTimer[GAME_MAX_PLAYERS];   // per player, ticks to the next restock
+	Player players[GAME_MAX_PLAYERS];
 	Tank tanks[GAME_MAX_TANKS];
 	Shell shells[GAME_MAX_SHELLS];          // [0] is the newest
 	Explosion expl[GAME_MAX_EXPL];          // [0] is the newest
@@ -112,10 +139,19 @@ typedef struct GameState {
 	MapInfo map;            // pills, bases and starts of the loaded map
 } GameState;
 
-// Sets up a new game on the loaded map, with one tank at a start. A seed
-// of 0 is replaced so the generator never sticks. The map info must be
-// filled in (map_parse) before this.
-void game_init(GameState *s, uint32_t seed);
+// Sets up a new game on the loaded map, with a tank for each player at a
+// start. A seed of 0 is replaced so the generator never sticks. setup may
+// be NULL for an open game with one player. The map info must be filled in
+// (map_parse) before this.
+void game_init(GameState *s, uint32_t seed, const GameSetup *setup);
+
+// Whether players a and b are the same or allied (WinBolo's
+// playersIsAllie). GAME_NO_PLAYER is nobody's ally.
+uint8_t game_allied(const GameState *s, uint8_t a, uint8_t b);
+
+// How a pill or base looks to player viewer.
+enum { OWN_NEUTRAL, OWN_SELF, OWN_ALLY, OWN_ENEMY };
+uint8_t game_owner_kind(const GameState *s, uint8_t owner, uint8_t viewer);
 
 // Advances one tick. in has one entry per tank.
 void game_tick(GameState *s, const GameInput *in);

@@ -7,7 +7,7 @@
 #define kLogName    "PalmBoloLog"
 #define kLogType    'Log '
 #define kLogCreator 'Rmrf'
-#define kLogLine    120
+#define kLogLine    160
 
 // Opens the database, creating it with the backup bit set if it is missing.
 static DmOpenRef SEC_UI LogOpen(void)

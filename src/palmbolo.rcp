@@ -27,6 +27,9 @@ BEGIN
   BEGIN
     MENUITEM "Map list" ID MainMenuMaps
     MENUITEM "About PalmBolo" ID MainMenuAbout
+#ifdef DEBUG
+    MENUITEM "Self-test" ID MainMenuSelfTest
+#endif
     MENUITEM "Quit" ID MainMenuQuit
   END
 END

@@ -64,7 +64,7 @@ int8_t g_base_at(const GameState *s, uint8_t x, uint8_t y)
 	uint8_t i;
 
 	for (i = 0; i < s->map.numBases; i++)
-		if (s->map.bases[i].x == x && s->map.bases[i].y == y)
+		if (s->map.bases[i].x == x && s->map.bases[i].y == y && s->map.bases[i].active)
 			return (int8_t)i;
 	return -1;
 }
@@ -73,10 +73,38 @@ int8_t g_pill_at(const GameState *s, uint8_t x, uint8_t y)
 {
 	uint8_t i;
 
-	for (i = 0; i < s->map.numPills; i++)
-		if (s->map.pills[i].x == x && s->map.pills[i].y == y)
+	for (i = 0; i < s->map.numPills; i++) {
+		const MapPill *p = &s->map.pills[i];
+
+		if (p->x == x && p->y == y && p->active && !p->inTank)
 			return (int8_t)i;
+	}
 	return -1;
+}
+
+int8_t g_live_pill_at(const GameState *s, uint8_t x, uint8_t y)
+{
+	int8_t p = g_pill_at(s, x, y);
+
+	return p >= 0 && s->map.pills[p].armour > 0 ? p : -1;
+}
+
+uint8_t game_allied(const GameState *s, uint8_t a, uint8_t b)
+{
+	if (a == b)
+		return 1;
+	if (a >= GAME_MAX_PLAYERS || b >= GAME_MAX_PLAYERS || !s->players[a].inUse)
+		return 0;
+	return (uint8_t)((s->players[a].allies >> b) & 1);
+}
+
+uint8_t game_owner_kind(const GameState *s, uint8_t owner, uint8_t viewer)
+{
+	if (owner >= GAME_MAX_PLAYERS)
+		return OWN_NEUTRAL;
+	if (owner == viewer)
+		return OWN_SELF;
+	return game_allied(s, owner, viewer) ? OWN_ALLY : OWN_ENEMY;
 }
 
 uint8_t g_is_land(const GameState *s, uint8_t x, uint8_t y)
@@ -337,12 +365,18 @@ static uint8_t crater_ok(const GameState *s, uint8_t x, uint8_t y)
 		g_base_at(s, x, y) < 0 && g_pill_at(s, x, y) < 0;
 }
 
+// A big wreck's square: a pill there is damaged, other squares crater.
 static void big_square(GameState *s, uint8_t x, uint8_t y)
 {
 	uint8_t k;
+	int8_t p = g_pill_at(s, x, y);
 
 	for (k = 0; k < DMG_KINDS; k++)
 		g_damage_remove(s, k, x, y);
+	if (p >= 0) {
+		pills_damage(s, (uint8_t)p, R_TANK_EXPLOSION_DAMAGE);
+		return;
+	}
 	if (crater_ok(s, x, y)) {
 		game_set_terrain(x, y, TERRAIN_CRATER);
 		g_flood(s, x, y);
@@ -370,9 +404,9 @@ static void tk_explosions_update(GameState *s)
 			g_explosion(s, e->x, e->y);
 			nx = (uint16_t)(e->x + dx + (dx > 0 ? R_TK_EXPLOSION_WIDTH : -R_TK_EXPLOSION_WIDTH));
 			ny = (uint16_t)(e->y + dy + (dy > 0 ? R_TK_EXPLOSION_HEIGHT : -R_TK_EXPLOSION_HEIGHT));
-			if (g_speed_at(s, (uint8_t)(e->x >> 8), (uint8_t)(ny >> 8), 0) > 0)
+			if (g_speed_at(s, (uint8_t)(e->x >> 8), (uint8_t)(ny >> 8), 0, e->creator) > 0)
 				e->y = (uint16_t)(e->y + dy);
-			if (g_speed_at(s, (uint8_t)(nx >> 8), (uint8_t)(e->y >> 8), 0) > 0)
+			if (g_speed_at(s, (uint8_t)(nx >> 8), (uint8_t)(e->y >> 8), 0, e->creator) > 0)
 				e->x = (uint16_t)(e->x + dx);
 			e->length--;
 			mx = (uint8_t)(e->x >> 8);
@@ -414,74 +448,72 @@ static void tk_explosions_update(GameState *s)
 	s->numTkExpl = n;
 }
 
-// basesRefueling and the server's refuel loop: a base gives a tank on it
-// armour, then shells, then mines, one helping at a time.
-static void bases_update(GameState *s)
+// mapClampToRules: map values past what the rules allow are cut back.
+static void clamp_map(MapInfo *m)
 {
-	uint8_t i, t;
+	uint8_t i;
 
-	for (i = 0; i < s->map.numBases; i++)
-		if (s->baseTime[i] > 0)
-			s->baseTime[i]--;
-	for (i = 0; i < s->map.numBases; i++) {
-		MapBase *b = &s->map.bases[i];
-		uint8_t on = 0;
+	for (i = 0; i < m->numPills; i++) {
+		MapPill *p = &m->pills[i];
 
-		for (t = 0; t < s->numTanks; t++) {
-			Tank *k = &s->tanks[t];
+		if (p->armour > R_PILL_MAX_ARMOUR)
+			p->armour = R_PILL_MAX_ARMOUR;
+		if (p->speed < R_PILL_ATTACK_MIN)
+			p->speed = R_PILL_ATTACK_MIN;
+		if (p->speed > R_PILL_ATTACK_NORMAL)
+			p->speed = R_PILL_ATTACK_NORMAL;
+		p->coolDown = p->speed != R_PILL_ATTACK_NORMAL ? R_PILL_COOLDOWN : 0;
+		p->reload = 0;
+		p->justSeen = 0;
+		p->inTank = 0;
+	}
+	for (i = 0; i < m->numBases; i++) {
+		MapBase *b = &m->bases[i];
 
-			if (k->destroyed || (k->x >> 8) != b->x || (k->y >> 8) != b->y)
-				continue;
-			on = 1;
-			if (s->baseStopped[i]) {
-				s->baseStopped[i] = 0;
-				s->baseTime[i] = R_BASE_REFUEL_ARMOUR;
-				continue;
-			}
-			if (s->baseTime[i] != 0 || b->owner != k->player)
-				continue;
-			if (k->armour < R_TANK_FULL_ARMOUR &&
-			    b->armour >= R_BASE_MIN_ARMOUR + R_BASE_ARMOUR_GIVE) {
-				uint8_t give = R_TANK_FULL_ARMOUR - k->armour;
-
-				if (give > R_BASE_ARMOUR_GIVE)
-					give = R_BASE_ARMOUR_GIVE;
-				k->armour = (uint8_t)(k->armour + give);
-				b->armour = (uint8_t)(b->armour - give);
-				s->baseTime[i] = R_BASE_REFUEL_ARMOUR;
-			} else if (k->shells < R_TANK_FULL_SHELLS && b->shells > R_BASE_MIN_SHELLS) {
-				k->shells++;
-				b->shells--;
-				s->halfShell ^= 1;
-				s->baseTime[i] = (uint8_t)(R_BASE_REFUEL_HALF + s->halfShell);
-			} else if (k->mines < R_TANK_FULL_MINES && b->mines > R_BASE_MIN_MINES) {
-				k->mines++;
-				b->mines--;
-				s->halfMine ^= 1;
-				s->baseTime[i] = (uint8_t)(R_BASE_REFUEL_HALF + s->halfMine);
-			}
-		}
-		if (!on)
-			s->baseStopped[i] = 1;
+		if (b->armour > R_BASE_FULL_ARMOUR)
+			b->armour = R_BASE_FULL_ARMOUR;
+		if (b->shells > R_BASE_FULL_SHELLS)
+			b->shells = R_BASE_FULL_SHELLS;
+		if (b->mines > R_BASE_FULL_MINES)
+			b->mines = R_BASE_FULL_MINES;
 	}
 }
 
-void game_init(GameState *s, uint32_t seed)
+void game_init(GameState *s, uint32_t seed, const GameSetup *setup)
 {
 	uint8_t *p = (uint8_t *)s;
 	uint16_t i;
+	uint8_t n = setup ? setup->numPlayers : 1;
 	MapInfo keep = s->map;
 
 	for (i = 0; i < sizeof(*s); i++)
 		p[i] = 0;
 	s->map = keep;
+	clamp_map(&s->map);
 	s->rng = seed ? seed : 1;
+	if (n < 1)
+		n = 1;
+	if (n > GAME_MAX_TANKS)
+		n = GAME_MAX_TANKS;
+	if (setup) {
+		s->gameType = setup->gameType;
+		s->hiddenMines = setup->hiddenMines;
+	}
 	for (i = 0; i < s->map.numBases; i++)
 		s->baseStopped[i] = 1;
+	// Restock timers are spread over the players in the game.
+	for (i = 0; i < GAME_MAX_PLAYERS; i++) {
+		if (i < n) {
+			s->players[i].inUse = 1;
+			s->players[i].allies = setup ? setup->allies[i] : 0;
+			s->baseTimer[i] = (uint16_t)((R_BASE_REGEN_TICKS * (i + 1)) / n);
+		}
+	}
 	gChangeCount = 0;
 	gChangeOver = 0;
-	s->numTanks = 1;
-	tank_new(s, 0, 0);
+	s->numTanks = n;
+	for (i = 0; i < n; i++)
+		tank_create(s, (uint8_t)i, (uint8_t)i);
 }
 
 // xorshift32
@@ -509,14 +541,15 @@ uint16_t game_random_below(GameState *s, uint16_t n)
 	return (uint16_t)(r % n);
 }
 
-// Order as WinBolo's server tick: tanks, bases, wrecks, shells, mines,
-// explosions, flooding.
+// Order as WinBolo's server tick: tanks, pills, bases and refuelling,
+// wrecks, shells, mines, explosions, flooding.
 void game_tick(GameState *s, const GameInput *in)
 {
 	uint8_t i;
 
 	for (i = 0; i < s->numTanks; i++)
 		tank_update(s, i, &in[i]);
+	pills_update(s);
 	bases_update(s);
 	tk_explosions_update(s);
 	shells_update(s);
@@ -570,6 +603,13 @@ uint32_t game_checksum(const GameState *s)
 	crc = c8(crc, s->tkExplTimer);
 	crc = c8(crc, s->halfShell);
 	crc = c8(crc, s->halfMine);
+	crc = c8(crc, s->gameType);
+	crc = c8(crc, s->hiddenMines);
+	for (i = 0; i < GAME_MAX_PLAYERS; i++) {
+		crc = c8(crc, s->players[i].inUse);
+		crc = c16(crc, s->players[i].allies);
+		crc = c16(crc, s->baseTimer[i]);
+	}
 	for (i = 0; i < s->numTanks; i++) {
 		const Tank *k = &s->tanks[i];
 
@@ -582,6 +622,7 @@ uint32_t game_checksum(const GameState *s)
 		crc = c16(crc, k->deathWait);
 		crc = c16(crc, k->deaths);
 		crc = util_crc(crc, &k->armour, 20);
+		crc = util_crc(crc, k->carry, k->numCarry);
 	}
 	crc = c8(crc, s->numShells);
 	for (i = 0; i < s->numShells; i++) {
@@ -622,10 +663,12 @@ uint32_t game_checksum(const GameState *s)
 	for (i = 0; i < s->map.numBases; i++) {
 		const MapBase *b = &s->map.bases[i];
 
-		crc = util_crc(crc, &b->x, 6);
+		crc = util_crc(crc, &b->x, 7);
 		crc = c8(crc, s->baseTime[i]);
 		crc = c8(crc, s->baseStopped[i]);
 	}
+	for (i = 0; i < s->map.numPills; i++)
+		crc = util_crc(crc, &s->map.pills[i].x, 10);
 	return ~crc;
 }
 

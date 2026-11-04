@@ -34,9 +34,15 @@
 #define R_TANK_NUDGE_PASSES     5
 #define R_TANK_BUMP_DECAY_SHIFT 2
 #define R_TANK_BOAT_EXIT_INSET  64
+#define R_TANK_BOAT_EXIT_SPEED  16      // whole world units a tick: a boat this fast runs aground
+#define R_TANK_SUBTRACT         128     // look-ahead in the pill's aim, world units
 #define R_TANK_SLIDE_STEP       32
 #define R_BIG_EXPLOSION         20      // shells + mines over this blow up big
 #define R_TANK_TURN_RAMP        6       // ticks of 1/8 turn rate after a press
+#define R_TANK_PILL_PICKUP_INSET 16     // reach past the centre for picking up a pill
+#define R_TREE_HIDE_DIST        768     // pills see a tank in forest nearer than this
+#define R_TANK_EXPLOSION_LENGTH 40      // steps of the wreck of a tank shot dead
+#define R_TANK_EXPLOSION_DAMAGE 5       // a big wreck's damage to a pill
 
 // Damage
 #define R_SHELL_DAMAGE          5
@@ -90,7 +96,26 @@
 #define R_TK_EXPLOSION_WIDTH    24
 #define R_TK_EXPLOSION_HEIGHT   32
 
-// Bases (the tank side of refuelling)
+// Pillboxes. A pill fires every speed ticks; it starts at the map's value
+// (100 at most), being hit halves it (6 at least) and it eases back by one
+// every cool down.
+#define R_PILL_MAX_ARMOUR       15
+#define R_PILL_ATTACK_NORMAL    100
+#define R_PILL_ATTACK_MIN       6
+#define R_PILL_COOLDOWN         32
+#define R_PILL_ANGRY_DIVISOR    2
+#define R_PILL_RANGE            2048    // world units, 8 squares
+#define R_PILL_SHELL_DAMAGE     1
+#define R_PILL_FIRE_LIFE        64      // 1 + shell_life * 8.5 - start_add ticks
+#define R_PILL_BASE_HIT_RANGE   9       // squares: pills this near a hit base get angry
+#define R_PILL_AIM_ITERATIONS   200
+
+// Bases
+#define R_BASE_FULL_ARMOUR      90
+#define R_BASE_FULL_SHELLS      90
+#define R_BASE_FULL_MINES       90
+#define R_BASE_REGEN_TICKS      1000    // per player in the game: every base +1 of each
+#define R_BASE_HIT_ARMOUR       4       // a shell only hits a base with more armour
 #define R_BASE_ARMOUR_GIVE      5
 #define R_BASE_SHELLS_GIVE      1
 #define R_BASE_MINES_GIVE       1
@@ -102,8 +127,12 @@
 #define R_BASE_CAPTURE_ARMOUR   9
 
 // Starts
+#define R_START_TANK_RANGE      1
 #define R_START_PILL_RANGE      9
+#define R_START_BASE_RANGE      9
+#define R_START_SPAWN_SEPARATION 2
 #define R_START_SCATTER_MAX     1000
+#define R_START_NEUTRAL_PCT     20      // tournament starts favour neutral bases above this
 
 // The mined border: squares at or outside these read as deep sea and mined.
 #define MAP_EDGE_LOW            20

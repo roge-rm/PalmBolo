@@ -18,6 +18,14 @@ for j in range(2049):
     rad = (360.0 / 256.0 * a) / 360.0 * (2.0 * 3.14159)
     cos.append(round_away(32 * math.cos(rad) * 256.0))
 
+# utilCalcAngle's atan in 1/32 bradians, times 16, for a ratio of the
+# smaller gap to the larger of i / 256, i = 0..256. 256 bradians to a turn
+# with WinBolo's 2 pi of 6.28318.
+atan = []
+for i in range(257):
+    a = math.atan(i / 256.0) / (2.0 * 3.14159) * 256.0 * 32.0 * 16.0
+    atan.append(int(a + 0.5))
+
 crc = []
 for n in range(256):
     c = n
@@ -31,6 +39,11 @@ out = ["// Made by tools/gentables.py. Do not edit.",
        "static const uint16_t kCos[2049] = {"]
 for i in range(0, len(cos), 12):
     out.append("\t" + ", ".join(str(v) for v in cos[i:i + 12]) + ",")
+out.append("};")
+out.append("")
+out.append("static const uint16_t kAtan[257] = {")
+for i in range(0, len(atan), 12):
+    out.append("\t" + ", ".join(str(v) for v in atan[i:i + 12]) + ",")
 out.append("};")
 out.append("")
 out.append("static const uint32_t kCrc[256] = {")

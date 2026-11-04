@@ -7,23 +7,17 @@
 #include "mapstore.h"
 #include "util.h"
 
-// shellsAddItem. The shell starts five steps ahead of the tank and 22 world
-// units further on each axis. Its life is 1 + shell_life * sightLen / 2 -
-// start_add ticks; WinBolo works out shell_life * len in floats and
-// truncates, which is 4 * sightLen exactly here.
+// shellsAddItem. The shell starts five steps ahead and lives life ticks.
 void shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
-	uint8_t sightLen, uint8_t owner, uint8_t onBoat)
+	uint8_t life, uint8_t owner, uint8_t onBoat)
 {
 	Shell *h;
-	int16_t dx, dy, life;
+	int16_t dx, dy;
 	uint8_t i;
 
 	util_distance(&dx, &dy, angle, R_SHELL_SPEED);
-	x = (uint16_t)(x + R_SHELL_START_ADD * dx + (dx >= 0 ? 22 : -22));
-	y = (uint16_t)(y + R_SHELL_START_ADD * dy + (dy >= 0 ? 22 : -22));
-	life = (int16_t)(1 + (R_SHELL_LIFE / 2) * sightLen - R_SHELL_START_ADD);
-	if (life < 0)
-		life = 0;
+	x = (uint16_t)(x + R_SHELL_START_ADD * dx);
+	y = (uint16_t)(y + R_SHELL_START_ADD * dy);
 	// Newest first; a full list loses its oldest shell.
 	i = s->numShells < GAME_MAX_SHELLS ? s->numShells : GAME_MAX_SHELLS - 1;
 	for (; i > 0; i--)
@@ -37,7 +31,7 @@ void shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
 	util_shell_step(&h->stepX, &h->stepY, angle);
 	h->accX = 0;
 	h->accY = 0;
-	h->length = (uint8_t)life;
+	h->length = life;
 	h->owner = owner;
 	h->onBoat = onBoat;
 }
@@ -75,19 +69,38 @@ static uint8_t check_road(GameState *s, uint8_t x, uint8_t y, uint16_t angle)
 	return g_is_land(s, (uint8_t)(x - 1), y) ? TERRAIN_ROAD : TERRAIN_RIVER;
 }
 
-// shellsCalcCollision for one player: pills stop shells (pill damage comes
-// with the pillboxes), a base stops a shell from a boat, and terrain a
-// shell can't pass takes the hit.
-static uint8_t collide(GameState *s, const Shell *h, uint16_t wx, uint16_t wy)
+// shellsCalcCollision: a live pill, then a tank of another player, then a
+// base, then terrain the shell can't pass. Returns 0 for no hit, 1 for a
+// hit and 2 for a tank hit (which sets off no mine). A base hit moves the
+// explosion to the middle of the base.
+static uint8_t collide(GameState *s, const Shell *h, uint16_t *pwx, uint16_t *pwy)
 {
+	uint16_t wx = *pwx, wy = *pwy;
 	uint8_t mx = (uint8_t)(wx >> 8), my = (uint8_t)(wy >> 8);
-	int8_t p = g_pill_at(s, mx, my);
-	uint8_t t, mine = 0, nt;
+	int8_t p = g_live_pill_at(s, mx, my), b;
+	uint8_t t, mine = 0, nt, i;
 
-	if (p >= 0 && s->map.pills[p].armour > 0)
+	if (p >= 0) {
+		pills_damage(s, (uint8_t)p, R_PILL_SHELL_DAMAGE);
 		return 1;
-	if (g_base_at(s, mx, my) >= 0)
-		return h->onBoat;
+	}
+	for (i = 0; i < s->numTanks; i++)
+		if (s->tanks[i].player != h->owner && tank_shell_hit(s, i, wx, wy, h->angle))
+			return 2;
+	b = g_base_at(s, mx, my);
+	if (b >= 0) {
+		uint8_t hit = bases_can_hit(s, (uint8_t)b, h->owner);
+
+		if (!h->onBoat && !hit)
+			return 0;
+		*pwx = (uint16_t)(((uint16_t)mx << 8) + 128U);
+		*pwy = (uint16_t)(((uint16_t)my << 8) + 128U);
+		if (hit) {
+			bases_damage(s, (uint8_t)b);
+			pills_base_hit(s, (uint8_t)b);
+		}
+		return 1;
+	}
 	if (passable(mapstore_get(mx, my), h->onBoat))
 		return 0;
 	t = game_terrain(mx, my);
@@ -135,6 +148,7 @@ void shells_update(GameState *s)
 	for (i = 0; i < s->numShells; i++) {
 		Shell *h = &s->shells[i];
 		uint16_t wx, wy;
+		uint8_t hit = 0;
 
 		if (h->length > 0) {
 			int16_t m;
@@ -148,7 +162,8 @@ void shells_update(GameState *s)
 			m = (int16_t)(h->accY >> 8);
 			h->accY = (int16_t)(h->accY - m * 256);
 			wy = (uint16_t)(h->y + m);
-			if (!collide(s, h, wx, wy)) {
+			hit = collide(s, h, &wx, &wy);
+			if (!hit) {
 				h->length--;
 				h->x = wx;
 				h->y = wy;
@@ -160,7 +175,8 @@ void shells_update(GameState *s)
 			wy = h->y;
 		}
 		g_explosion(s, wx, wy);
-		g_mine_exp(s, (uint8_t)(wx >> 8), (uint8_t)(wy >> 8));
+		if (hit != 2)
+			g_mine_exp(s, (uint8_t)(wx >> 8), (uint8_t)(wy >> 8));
 	}
 	s->numShells = n;
 }

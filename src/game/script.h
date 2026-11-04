@@ -6,7 +6,7 @@
 
 #include "game.h"
 
-#define SCRIPT_COUNT 9
+#define SCRIPT_COUNT 15
 
 // Runs script n on a fresh game. The map must be freshly loaded into the
 // store and s->map before each script, as scripts change the terrain. step, if not NULL, is called after each step with its

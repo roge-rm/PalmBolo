@@ -9,10 +9,13 @@
 #include <stdint.h>
 
 #define TILE_DEEP_SEA   16      // tile for terrain 255
-#define TILE_PILL       17
-#define TILE_BASE       18
+#define TILE_PILL       17      // neutral; the other sides follow
+#define TILE_BASE       18      // neutral
 #define TILE_START      19
-#define TILE_COUNT      20
+#define TILE_PILL_OWN   20      // own, allied, enemy, then dead
+#define TILE_PILL_DEAD  23
+#define TILE_BASE_OWN   24      // own, allied, enemy
+#define TILE_COUNT      27
 #define TILE_MINE_ADD   8       // a mine tile is its plain tile plus a mark
 
 typedef struct TileDef {

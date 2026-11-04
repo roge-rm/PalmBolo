@@ -46,6 +46,10 @@ static void ShowAbout(void)
 	gDirty = gFull = true;
 }
 
+#ifdef DEBUG
+static void SelfTest(void);
+#endif
+
 static Boolean HandleMenu(UInt16 id)
 {
 	switch (id) {
@@ -56,6 +60,12 @@ static Boolean HandleMenu(UInt16 id)
 		if (gForm == GameForm)
 			FrmGotoForm(MapListForm);
 		return true;
+#ifdef DEBUG
+	case MainMenuSelfTest:
+		SelfTest();
+		FrmGotoForm(MapListForm);
+		return true;
+#endif
 	case MainMenuQuit: {
 		EventType e;
 
@@ -80,7 +90,19 @@ void AppOpenMap(UInt16 index, const Char *name)
 	}
 	LOG(("map %s: pills %d bases %d starts %d", name, (Int16)gGame.map.numPills,
 		(Int16)gGame.map.numBases, (Int16)gGame.map.numStarts));
-	game_init(&gGame, TimGetSeconds());
+	game_init(&gGame, TimGetSeconds(), 0);
+#if defined(DEBUG) && defined(DEMO_START)
+	// For replays: the tank on land six squares west of the first base,
+	// facing it.
+	if (gGame.map.numBases > 0) {
+		Tank *k = &gGame.tanks[0];
+
+		k->x = (UInt16)(((UInt16)gGame.map.bases[0].x - 6) * 256 + 128);
+		k->y = (UInt16)((UInt16)gGame.map.bases[0].y * 256 + 128);
+		k->angle = 64 * ANGLE_ONE;
+		k->boat = BOAT_OFF;
+	}
+#endif
 	FrmGotoForm(GameForm);
 }
 
@@ -312,10 +334,18 @@ static void EventLoop(void)
 			if (gGame.tick % 50 == 0) {
 				const Tank *k = &gGame.tanks[0];
 
-				LOG(("tick %lu keys %x tank %u,%u ang %u spd %d A%u S%u M%u dead %u/%u boat %u",
+				UInt16 own = 0, pillShells = 0, i;
+
+				for (i = 0; i < gGame.map.numBases; i++)
+					own += gGame.map.bases[i].owner == k->player;
+				for (i = 0; i < gGame.numShells; i++)
+					pillShells += gGame.shells[i].owner == GAME_NO_PLAYER;
+				LOG(("tick %lu keys %x tank %u,%u ang %u spd %d A%u S%u M%u dead %u/%u boat %u "
+					"P%u B%u pillshells %u",
 					gGame.tick, (UInt16)in.keys, k->x, k->y, k->angle, k->speed,
 					(UInt16)k->armour, (UInt16)k->shells, (UInt16)k->mines,
-					(UInt16)k->destroyed, k->deaths, (UInt16)k->boat));
+					(UInt16)k->destroyed, k->deaths, (UInt16)k->boat,
+					(UInt16)k->numCarry, own, pillShells));
 			}
 #endif
 			acc -= tps;
@@ -353,7 +383,9 @@ static void AppStart(void)
 	LogClear();
 	LOG(("PalmBolo 0.1 debug start"));
 	LogDevice(&gDev);
+#ifdef SELFTEST_AT_START
 	SelfTest();
+#endif
 #endif
 	TimingInit(gDev.ticksPerSecond);
 	ScreenInit(&gDev);
