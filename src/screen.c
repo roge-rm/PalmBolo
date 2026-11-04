@@ -7,7 +7,7 @@ static Boolean gHiRes;          // drawing in the native (double density) system
 static Boolean gNewWin;         // OS 3.5 or later: colour and screen mode calls
 static UInt16 gDepth = 1;
 
-IndexedColorType ScreenIndex(UInt8 r, UInt8 g, UInt8 b)
+IndexedColorType SEC_UI ScreenIndex(UInt8 r, UInt8 g, UInt8 b)
 {
 	RGBColorType c;
 
@@ -21,7 +21,7 @@ IndexedColorType ScreenIndex(UInt8 r, UInt8 g, UInt8 b)
 	return WinRGBToIndex(&c);
 }
 
-void ScreenInit(const DeviceInfo *d)
+void SEC_UI ScreenInit(const DeviceInfo *d)
 {
 	UInt32 depth;
 	UInt16 i;
@@ -50,7 +50,7 @@ void ScreenInit(const DeviceInfo *d)
 	}
 }
 
-void ScreenExit(void)
+void SEC_UI ScreenExit(void)
 {
 	if (gDepthSet) {
 		UInt32 depth = gOldDepth;
@@ -60,9 +60,12 @@ void ScreenExit(void)
 	}
 }
 
-void HexStr(UInt32 v, Char *out)
+// File scope: a function-local const table in a segment other than the
+// first is reached through A5 and reads garbage.
+static const Char digits[] = "0123456789ABCDEF";
+
+void SEC_UI HexStr(UInt32 v, Char *out)
 {
-	static const Char digits[] = "0123456789ABCDEF";
 	Int16 i;
 
 	for (i = 7; i >= 0; i--) {
@@ -73,6 +76,6 @@ void HexStr(UInt32 v, Char *out)
 }
 
 
-Boolean ScreenHiRes(void) { return gHiRes; }
-Boolean ScreenNewWin(void) { return gNewWin; }
-UInt16 ScreenDepth(void) { return gDepth; }
+Boolean SEC_UI ScreenHiRes(void) { return gHiRes; }
+Boolean SEC_UI ScreenNewWin(void) { return gNewWin; }
+UInt16 SEC_UI ScreenDepth(void) { return gDepth; }

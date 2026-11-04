@@ -6,33 +6,42 @@
 // row with tile i at x = i * tileSize. To scroll, the pixels already on the
 // screen are moved with WinScrollRectangle and only the strip that was
 // uncovered is drawn from the sheet.
+//
+// The tank, shells, explosions and the gunsight are drawn over the tiles
+// each frame the game ticked, and erased next time by drawing the tiles
+// under them again. The view follows the tank.
 #include "palmbolo.h"
 #include "resource.h"
 #include "game/game.h"
 #include "game/mapstore.h"
 #include "game/tiles.h"
-
-#define kKeyNavLeft     0x01000000UL
-#define kKeyNavRight    0x02000000UL
-#define kKeyNavSelect   0x04000000UL
-
-// Scroll speed in pixels a second at 8-pixel tiles. Doubled at 16.
-#define kScrollSpeed    88
+#include "game/util.h"
 
 static const GameState *gGame;
 static WinHandle gSheet;
+static WinHandle gTankSheet, gTankMask;  // 16 headings, one tile each
+static UInt8 gShift = 5;        // world units to view pixels
+// Rectangles drawn over the tiles last frame, to erase next frame.
+#define kMaxRects 48
+static RectangleType gOld[kMaxRects];
+static UInt16 gNumOld;
+static RectangleType gReadout;
+static UInt8 gShown[4];
+static UInt16 gShownDeaths = 0xFFFF;
+static IndexedColorType gYellow, gOrange;
+
+static void SEC_UI BuildTankSheet(void);
+static void SEC_UI CentreOnTank(void);
 static Coord gTs = 8;           // tile size in pixels
 static Coord gW, gH;            // view size
 static Int32 gVx, gVy;          // world pixel at the top left of the view
 static UInt16 gTps = 100;
-static UInt32 gLastScroll;
-static UInt32 gAcc;             // scroll distance not yet a whole pixel, in 1/gTps pixels
 static Boolean gInputClosed;
 static Boolean gPins;
 static Boolean gHiRes;
 static UInt16 gOldCoord;
 
-static void Fill(Coord x, Coord y, Coord w, Coord h, IndexedColorType c)
+static void SEC_UI Fill(Coord x, Coord y, Coord w, Coord h, IndexedColorType c)
 {
 	RectangleType r;
 
@@ -56,7 +65,7 @@ static void Fill(Coord x, Coord y, Coord w, Coord h, IndexedColorType c)
 static IndexedColorType gBg[TILE_COUNT], gFg[TILE_COUNT];
 static IndexedColorType gWhite, gBlack, gRed;
 
-static void LookupColours(void)
+static void SEC_UI LookupColours(void)
 {
 	UInt16 t;
 	Boolean mono = !ScreenNewWin() || ScreenDepth() == 1;
@@ -65,8 +74,8 @@ static void LookupColours(void)
 	gBlack = ScreenIndex(0, 0, 0);
 	gRed = ScreenIndex(200, 0, 0);
 	for (t = 0; t < TILE_COUNT; t++) {
-		const TileDef *def = &kTiles[(t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST) ?
-			t - TILE_MINE_ADD : t];
+		const TileDef *def = tile_def((t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST) ?
+			t - TILE_MINE_ADD : t);
 
 		if (mono) {
 			gBg[t] = tile_mono(def->bg) ? gBlack : gWhite;
@@ -82,7 +91,7 @@ static void LookupColours(void)
 }
 
 // Draws tile t of the sheet from design def, with a mine mark if asked.
-static void DrawTile(UInt16 t, const TileDef *def, Boolean mine)
+static void SEC_UI DrawTile(UInt16 t, const TileDef *def, Boolean mine)
 {
 	Coord s = gTs / 8, x0 = t * gTs, px, py, run;
 	Boolean mono = !ScreenNewWin() || ScreenDepth() == 1;
@@ -104,7 +113,7 @@ static void DrawTile(UInt16 t, const TileDef *def, Boolean mine)
 	}
 }
 
-static void BuildSheet(void)
+static void SEC_UI BuildSheet(void)
 {
 	UInt16 err, t;
 	WinHandle old;
@@ -134,27 +143,27 @@ static void BuildSheet(void)
 	old = WinSetDrawWindow(gSheet);
 	for (t = 0; t < TILE_COUNT; t++) {
 		if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST)
-			DrawTile(t, &kTiles[t - TILE_MINE_ADD], true);
+			DrawTile(t, tile_def(t - TILE_MINE_ADD), true);
 		else
-			DrawTile(t, &kTiles[t], false);
+			DrawTile(t, tile_def(t), false);
 	}
 	WinSetDrawWindow(old);
 }
 
 // Native pixel drawing is on for as long as the view draws.
-static void NativeOn(void)
+static void SEC_UI NativeOn(void)
 {
 	if (gHiRes)
 		gOldCoord = WinSetCoordinateSystem(kCoordinatesNative);
 }
 
-static void NativeOff(void)
+static void SEC_UI NativeOff(void)
 {
 	if (gHiRes)
 		WinSetCoordinateSystem(gOldCoord);
 }
 
-static Boolean PinsAvailable(void)
+static Boolean SEC_UI PinsAvailable(void)
 {
 	UInt32 v;
 
@@ -163,7 +172,7 @@ static Boolean PinsAvailable(void)
 }
 
 // Opens or closes the input area. Returns true if it asked the system to.
-Boolean ViewSetInputArea(Boolean closed)
+Boolean SEC_UI ViewSetInputArea(Boolean closed)
 {
 	FormType *frm = FrmGetActiveForm();
 
@@ -184,7 +193,7 @@ Boolean ViewSetInputArea(Boolean closed)
 }
 
 // Takes the window size after the input area changed and keeps the centre.
-void ViewResized(void)
+void SEC_UI ViewResized(void)
 {
 	FormType *frm = FrmGetActiveForm();
 	RectangleType r;
@@ -204,7 +213,7 @@ void ViewResized(void)
 	gVy = cy - gH / 2;
 }
 
-static void ClampView(void)
+static void SEC_UI ClampView(void)
 {
 	Int32 maxX = (Int32)MAP_SIZE * gTs - gW, maxY = (Int32)MAP_SIZE * gTs - gH;
 
@@ -218,41 +227,47 @@ static void ClampView(void)
 		gVy = 0;
 }
 
-void ViewOpen(const DeviceInfo *d, const GameState *game)
+void SEC_UI ViewOpen(const DeviceInfo *d, const GameState *game)
 {
-	Int32 cx = 128 * 8, cy = 128 * 8;
-
 	gGame = game;
 	gPins = d->pins;
 	gHiRes = ScreenHiRes();
 	gTs = gHiRes ? 16 : 8;
 	gTps = d->ticksPerSecond ? d->ticksPerSecond : 100;
-	gLastScroll = TimGetTicks();
 	gW = gH = 0;
 	ViewSetInputArea(true);
 	ViewResized();
+	gShift = gTs == 16 ? 4 : 5;
 	NativeOn();
 	BuildSheet();
+	gYellow = ScreenIndex(250, 220, 40);
+	gOrange = ScreenIndex(230, 110, 20);
+	BuildTankSheet();
 	NativeOff();
-	if (game->map.numStarts) {
-		cx = (Int32)game->map.starts[0].x * 8 + 4;
-		cy = (Int32)game->map.starts[0].y * 8 + 4;
-	}
-	gVx = cx * (gTs / 8) - gW / 2;
-	gVy = cy * (gTs / 8) - gH / 2;
-	ClampView();
+	gNumOld = 0;
+	gShownDeaths = 0xFFFF;
+	gReadout.extent.x = gReadout.extent.y = 0;
+	CentreOnTank();
 }
 
-void ViewClose(void)
+void SEC_UI ViewClose(void)
 {
 	ViewSetInputArea(false);
 	if (gSheet) {
 		WinDeleteWindow(gSheet, false);
 		gSheet = NULL;
 	}
+	if (gTankSheet) {
+		WinDeleteWindow(gTankSheet, false);
+		gTankSheet = NULL;
+	}
+	if (gTankMask) {
+		WinDeleteWindow(gTankMask, false);
+		gTankMask = NULL;
+	}
 }
 
-static void CopyTile(UInt16 tile, Int32 tx, Int32 ty)
+static void SEC_UI CopyTile(UInt16 tile, Int32 tx, Int32 ty)
 {
 	RectangleType src;
 
@@ -265,7 +280,7 @@ static void CopyTile(UInt16 tile, Int32 tx, Int32 ty)
 }
 
 // Draws the part of the view inside r (view pixels) from the map.
-static void DrawRegion(const RectangleType *r)
+static void SEC_UI DrawRegion(const RectangleType *r)
 {
 	Int32 tx0 = (gVx + r->topLeft.x) / gTs, tx1 = (gVx + r->topLeft.x + r->extent.x - 1) / gTs;
 	Int32 ty0 = (gVy + r->topLeft.y) / gTs, ty1 = (gVy + r->topLeft.y + r->extent.y - 1) / gTs;
@@ -301,7 +316,7 @@ static void DrawRegion(const RectangleType *r)
 	WinResetClip();
 }
 
-static void DrawAll(void)
+static void SEC_UI DrawAll(void)
 {
 	RectangleType r;
 
@@ -313,7 +328,7 @@ static void DrawAll(void)
 
 // Moves the view by dx along one axis (horizontal) or dy, redrawing the
 // strip that was uncovered.
-static void ScrollAxis(Int32 d, Boolean horizontal)
+static void SEC_UI ScrollAxis(Int32 d, Boolean horizontal)
 {
 	RectangleType view, vacated;
 	Int32 old = horizontal ? gVx : gVy, now = old + d, max;
@@ -345,98 +360,309 @@ static void ScrollAxis(Int32 d, Boolean horizontal)
 	DrawRegion(&vacated);
 }
 
-static void Held(Int16 *dx, Int16 *dy)
+// Tank sprites: a body and a barrel, turned to each of the 16 headings
+// the tank is drawn at. The mask sheet is black where the tank is; drawn
+// with winMask it clears those pixels to index 0, then the sprite sheet is
+// added with winOverlay. Index 0 is white and black the last index in the
+// Palm palettes, which this relies on.
+static Boolean SEC_UI InTank(Int16 along, Int16 side, Boolean *barrel)
 {
-	UInt32 k = KeyCurrentState();
+	Int16 ts = gTs * 2;     // the arguments are in half pixels
 
-	*dx = *dy = 0;
-	if (k & (keyBitHard1 | kKeyNavLeft))
-		*dx -= 1;
-	if (k & (keyBitHard4 | kKeyNavRight))
-		*dx += 1;
-	if (k & (keyBitHard2 | keyBitPageUp))
-		*dy -= 1;
-	if (k & (keyBitHard3 | keyBitPageDown))
-		*dy += 1;
+	if (side < 0)
+		side = -side;
+	*barrel = along >= 0 && along <= ts / 2 && side <= (ts >= 32 ? 3 : 1);
+	if (*barrel)
+		return true;
+	return along >= -ts * 2 / 5 && along <= ts / 4 && side <= ts * 3 / 10;
 }
 
-#ifdef DEBUG
-static UInt32 gFrames, gFrameTicks, gFramePx, gFirstFrame, gLastFrame;
-
-// Logs the scroll frames since the last call, once the keys are let go.
-static void LogScroll(void)
+static void SEC_UI BuildTankSheet(void)
 {
-	UInt32 draw = gFrames ? gFrameTicks * 100000UL / gTps / gFrames : 0;
-	UInt32 span = gFrames ? (gLastFrame - gFirstFrame) * 100000UL / gTps / gFrames : 0;
+	UInt16 err, d;
+	WinHandle old;
+	Coord px, py;
+	IndexedColorType body = ScreenIndex(235, 235, 235), gun = ScreenIndex(0, 0, 0);
+	Boolean mono = !ScreenNewWin() || ScreenDepth() == 1, barrel;
+	UInt16 fmt = gHiRes ? nativeFormat : screenFormat;
 
-	if (!gFrames)
+	if (mono)
+		body = gun;
+	if (!gTankSheet)
+		gTankSheet = WinCreateOffscreenWindow(16 * gTs, gTs, fmt, &err);
+	if (!gTankMask)
+		gTankMask = WinCreateOffscreenWindow(16 * gTs, gTs, fmt, &err);
+	if (!gTankSheet || !gTankMask)
 		return;
-	LOG(("scroll %lu frames, %lu px, draw %lu ticks (%lu.%02lu ms a frame), one frame every %lu.%02lu ms",
-		gFrames, gFramePx, gFrameTicks, draw / 100, draw % 100, span / 100, span % 100));
-	gFrames = gFrameTicks = gFramePx = 0;
-}
-#endif
+	old = WinSetDrawWindow(gTankSheet);
+	Fill(0, 0, 16 * gTs, gTs, 0);
+	WinSetDrawWindow(gTankMask);
+	Fill(0, 0, 16 * gTs, gTs, 0);
+	for (d = 0; d < 16; d++) {
+		int16_t fx, fy;
 
-void ViewFrame(Boolean full)
-{
-	Int16 dx, dy;
-	UInt32 now = TimGetTicks();
-	Int32 px = 0;
-#ifdef DEBUG
-	UInt32 t0 = now;
-#endif
+		util_distance(&fx, &fy, (uint16_t)(d * 16 * ANGLE_ONE), 64);
+		for (py = 0; py < gTs; py++) {
+			for (px = 0; px < gTs; px++) {
+				Int16 dx = px * 2 + 1 - gTs, dy = py * 2 + 1 - gTs;
+				Int16 along = (Int16)((dx * fx + dy * fy) / 64);
+				Int16 side = (Int16)((dy * fx - dx * fy) / 64);
 
-	if (!full) {
-		Held(&dx, &dy);
-		if (!dx && !dy) {
-			gLastScroll = now;
-			gAcc = 0;
-#ifdef DEBUG
-			LogScroll();
-#endif
-			return;
+				if (!InTank(along, side, &barrel))
+					continue;
+				WinSetDrawWindow(gTankMask);
+				Fill(d * gTs + px, py, 1, 1, gun);
+				WinSetDrawWindow(gTankSheet);
+				Fill(d * gTs + px, py, 1, 1, barrel ? gun : body);
+			}
 		}
-		// Distance for the time since the last move; a shorter time waits.
-		gAcc += (now - gLastScroll) * kScrollSpeed * (gTs / 8);
-		gLastScroll = now;
-		px = (Int32)(gAcc / gTps);
-		gAcc %= gTps;
-		if (px == 0)
-			return;
-		if (px > gW / 2)
-			px = gW / 2;
 	}
+	WinSetDrawWindow(old);
+}
+
+
+static void SEC_UI Remember(Coord x, Coord y, Coord w, Coord h)
+{
+	if (gNumOld >= kMaxRects)
+		return;
+	gOld[gNumOld].topLeft.x = x;
+	gOld[gNumOld].topLeft.y = y;
+	gOld[gNumOld].extent.x = w;
+	gOld[gNumOld].extent.y = h;
+	gNumOld++;
+}
+
+static Coord SEC_UI WorldX(uint16_t wx)
+{
+	return (Coord)(((Int32)wx >> gShift) - gVx);
+}
+
+static Coord SEC_UI WorldY(uint16_t wy)
+{
+	return (Coord)(((Int32)wy >> gShift) - gVy);
+}
+
+static void SEC_UI DrawTank(const Tank *k)
+{
+	RectangleType src;
+	Coord x = WorldX(k->x) - gTs / 2, y = WorldY(k->y) - gTs / 2;
+
+	if (!gTankSheet || k->destroyed)
+		return;
+	src.topLeft.x = util_dir16(k->angle) * gTs;
+	src.topLeft.y = 0;
+	src.extent.x = gTs;
+	src.extent.y = gTs;
+	WinCopyRectangle(gTankMask, WinGetDrawWindow(), &src, x, y, winMask);
+	WinCopyRectangle(gTankSheet, WinGetDrawWindow(), &src, x, y, winOverlay);
+	Remember(x, y, gTs, gTs);
+}
+
+static void SEC_UI DrawSprites(void)
+{
+	const GameState *g = gGame;
+	const Tank *k = &g->tanks[0];
+	UInt16 i;
+	Coord x, y, r, dot = gTs / 8 + 1;
+
+	for (i = 0; i < g->numExpl; i++) {
+		r = (Coord)(gTs * g->expl[i].frame / 16);
+		if (r < 1)
+			r = 1;
+		x = WorldX(g->expl[i].x);
+		y = WorldY(g->expl[i].y);
+		Fill(x - r, y - r, r * 2, r * 2, (g->expl[i].frame & 2) ? gYellow : gOrange);
+		Remember(x - r, y - r, r * 2, r * 2);
+	}
+	DrawTank(k);
+	for (i = 0; i < g->numShells; i++) {
+		x = WorldX(g->shells[i].x) - dot / 2;
+		y = WorldY(g->shells[i].y) - dot / 2;
+		Fill(x, y, dot, dot, gBlack);
+		Remember(x, y, dot, dot);
+	}
+	if (!k->destroyed && k->showSight) {
+		uint16_t wx, wy;
+
+		game_gunsight(g, 0, &wx, &wy);
+		x = WorldX((uint16_t)(wx + 128));
+		y = WorldY((uint16_t)(wy + 128));
+		r = gTs / 2;
+		Fill(x - r, y, r * 2, 1, gRed);
+		Fill(x, y - r, 1, r * 2, gRed);
+		Remember(x - r, y - r, r * 2 + 1, r * 2 + 1);
+	}
+}
+
+// Armour, shells, mines and trees, top left. Redrawn when they change or
+// something was drawn over them.
+static void SEC_UI DrawReadout(Boolean force)
+{
+	const Tank *k = &gGame->tanks[0];
+	Char buf[40], *p = buf;
+	UInt8 v[4];
+	UInt16 i;
+	FontID old;
+
+	v[0] = k->armour;
+	v[1] = k->shells;
+	v[2] = k->mines;
+	v[3] = k->trees;
+	if (!force && MemCmp(v, gShown, 4) == 0 && gShownDeaths == k->deaths)
+		return;
+	MemMove(gShown, v, 4);
+	gShownDeaths = k->deaths;
+	for (i = 0; i < 4; i++) {
+		*p++ = "ASMT"[i];
+		StrIToA(p, v[i]);
+		p += StrLen(p);
+		*p++ = ' ';
+	}
+	*--p = 0;
+	old = FntSetFont(stdFont);
+	gReadout.topLeft.x = 1;
+	gReadout.topLeft.y = 1;
+	gReadout.extent.x = FntCharsWidth(buf, StrLen(buf)) + 2;
+	gReadout.extent.y = FntLineHeight();
+	WinEraseRectangle(&gReadout, 0);
+	WinDrawChars(buf, StrLen(buf), 2, 1);
+	FntSetFont(old);
+}
+
+static Boolean SEC_UI Overlaps(const RectangleType *a, const RectangleType *b)
+{
+	return a->topLeft.x < b->topLeft.x + b->extent.x && b->topLeft.x < a->topLeft.x + a->extent.x &&
+		a->topLeft.y < b->topLeft.y + b->extent.y && b->topLeft.y < a->topLeft.y + a->extent.y;
+}
+
+// Redraws the tiles of squares whose terrain changed.
+static void SEC_UI DrawChanges(void)
+{
+	uint8_t xy[64];
+	uint8_t n = game_take_changes(xy, 32), i;
+	RectangleType r;
+
+	if (n == 255) {
+		DrawAll();
+		return;
+	}
+	for (i = 0; i < n; i++) {
+		r.topLeft.x = (Coord)((Int32)xy[i * 2] * gTs - gVx);
+		r.topLeft.y = (Coord)((Int32)xy[i * 2 + 1] * gTs - gVy);
+		r.extent.x = gTs;
+		r.extent.y = gTs;
+		if (r.topLeft.x > -gTs && r.topLeft.x < gW && r.topLeft.y > -gTs && r.topLeft.y < gH)
+			DrawRegion(&r);
+	}
+}
+
+// Keeps the point halfway between the tank and its gunsight at least a
+// quarter of the view from each edge, so both stay in sight. Returns the
+// distance to scroll on each axis.
+static void SEC_UI Follow(Int32 *dx, Int32 *dy)
+{
+	const Tank *k = &gGame->tanks[0];
+	uint16_t sx, sy;
+	Int32 tx, ty, mx = gW / 4, my = gH / 4;
+
+	game_gunsight(gGame, 0, &sx, &sy);
+	tx = ((Int32)k->x + ((Int32)(int16_t)(uint16_t)(sx + 128 - k->x) >> 1)) >> gShift;
+	ty = ((Int32)k->y + ((Int32)(int16_t)(uint16_t)(sy + 128 - k->y) >> 1)) >> gShift;
+	*dx = *dy = 0;
+	if (tx - gVx < mx)
+		*dx = tx - gVx - mx;
+	else if (tx - gVx > gW - mx)
+		*dx = tx - gVx - (gW - mx);
+	if (ty - gVy < my)
+		*dy = ty - gVy - my;
+	else if (ty - gVy > gH - my)
+		*dy = ty - gVy - (gH - my);
+}
+
+static void SEC_UI CentreOnTank(void)
+{
+	gVx = ((Int32)gGame->tanks[0].x >> gShift) - gW / 2;
+	gVy = ((Int32)gGame->tanks[0].y >> gShift) - gH / 2;
+	ClampView();
+}
+
+// Draws the tiles back over r, clipped to the view.
+static void SEC_UI Erase(const RectangleType *r)
+{
+	RectangleType c = *r;
+
+	if (c.topLeft.x < 0) {
+		c.extent.x += c.topLeft.x;
+		c.topLeft.x = 0;
+	}
+	if (c.topLeft.y < 0) {
+		c.extent.y += c.topLeft.y;
+		c.topLeft.y = 0;
+	}
+	if (c.topLeft.x + c.extent.x > gW)
+		c.extent.x = gW - c.topLeft.x;
+	if (c.topLeft.y + c.extent.y > gH)
+		c.extent.y = gH - c.topLeft.y;
+	DrawRegion(&c);
+}
+
+void SEC_UI ViewFrame(Boolean full, Boolean ticked)
+{
+	Int32 dx, dy;
+	UInt16 i;
+	Boolean readout = full;
+	const Tank *k = &gGame->tanks[0];
+#ifdef DEBUG
+	UInt32 t0 = TimGetTicks();
+#endif
+
+	if (!full && !ticked)
+		return;
 	NativeOn();
+	if (!full) {
+		for (i = 0; i < gNumOld; i++) {
+			if (Overlaps(&gOld[i], &gReadout))
+				readout = true;
+			Erase(&gOld[i]);
+		}
+		DrawChanges();
+		if (k->deaths != gShownDeaths) {
+			full = true;
+		} else {
+			Follow(&dx, &dy);
+			if (dx || dy) {
+				Erase(&gReadout);
+				if (dx)
+					ScrollAxis(dx, true);
+				if (dy)
+					ScrollAxis(dy, false);
+				readout = true;
+			}
+		}
+	}
 	if (full) {
+		if (k->deaths != gShownDeaths)
+			CentreOnTank();
 		ClampView();
 		DrawAll();
-	} else {
-		if (dx)
-			ScrollAxis(dx * px, true);
-		if (dy)
-			ScrollAxis(dy * px, false);
+		readout = true;
 	}
+	gNumOld = 0;
+	DrawSprites();
+	DrawReadout(readout);
 	NativeOff();
 #ifdef DEBUG
 	if (full)
 		LOG(("full redraw %lu ticks (%d x %d, tile %d)", TimGetTicks() - t0,
 			(Int16)gW, (Int16)gH, (Int16)gTs));
-	else {
-		if (!gFrames)
-			gFirstFrame = t0;
-		gLastFrame = t0;
-		gFrames++;
-		gFrameTicks += TimGetTicks() - t0;
-		gFramePx += px;
-		TimingDraw(t0, TimGetTicks());
-	}
+	TimingDraw(t0, TimGetTicks());
 #endif
 }
 
 #ifdef DEBUG
 // Draws the whole view count times and logs the average, since one redraw
 // is shorter than a system tick.
-void ViewTimeFull(UInt16 count)
+void SEC_UI ViewTimeFull(UInt16 count)
 {
 	UInt16 i;
 	UInt32 t0, t1;

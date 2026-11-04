@@ -13,19 +13,19 @@ static UInt32 gTickSum, gTickCount, gTickAvg;
 static UInt32 gDrawSum, gDrawCount, gDrawAvg;
 static UInt32 gLastLog;
 
-void TimingInit(UInt16 tps)
+void SEC_UI TimingInit(UInt16 tps)
 {
 	gTps = tps ? tps : 100;
 	gLastLog = TimGetSeconds();
 }
 
 // Ticks in the window to 1/100 ms.
-static UInt32 Avg(UInt32 sum, UInt32 count)
+static UInt32 SEC_UI Avg(UInt32 sum, UInt32 count)
 {
 	return (sum * 100000UL / gTps) / count;
 }
 
-void TimingTicks(UInt32 start, UInt32 end, UInt16 count)
+void SEC_UI TimingTicks(UInt32 start, UInt32 end, UInt16 count)
 {
 	gTickSum += end - start;
 	gTickCount += count;
@@ -35,7 +35,7 @@ void TimingTicks(UInt32 start, UInt32 end, UInt16 count)
 	}
 }
 
-void TimingDraw(UInt32 start, UInt32 end)
+void SEC_UI TimingDraw(UInt32 start, UInt32 end)
 {
 	gDrawSum += end - start;
 	if (++gDrawCount >= kDrawWindow) {
@@ -44,10 +44,10 @@ void TimingDraw(UInt32 start, UInt32 end)
 	}
 }
 
-UInt32 TimingTickX100(void) { return gTickAvg; }
-UInt32 TimingDrawX100(void) { return gDrawAvg; }
+UInt32 SEC_UI TimingTickX100(void) { return gTickAvg; }
+UInt32 SEC_UI TimingDrawX100(void) { return gDrawAvg; }
 
-void TimingMaybeLog(void)
+void SEC_UI TimingMaybeLog(void)
 {
 	UInt32 now = TimGetSeconds();
 

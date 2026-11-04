@@ -1,6 +1,8 @@
 #include "palmbolo.h"
 #include "resource.h"
 #include "game/game.h"
+#include "game/script.h"
+#include "game/util.h"
 
 static DeviceInfo gDev;
 static GameState gGame;
@@ -13,6 +15,8 @@ static UInt16 gForm;        // the form on screen, 0 before the first
 static Char gNames[kMaxMaps][kMapNameLen];
 static Char *gNamePtrs[kMaxMaps];
 static UInt16 gNumMaps;
+static UInt8 gFire;         // ticks of fire left from a 5-way centre press
+static Int8 gSight;         // gunsight steps asked for by taps, sent next tick
 #ifdef DEBUG
 static Boolean gTimedFull;
 #endif
@@ -21,6 +25,7 @@ static Boolean gTimedFull;
 // other applications.
 #define vchrNavChange   0x0503   // 5-way on palmOne devices
 #define navBitSelect    0x0010
+#define vchrTxCenter    0x013D   // the TX sends this with keyCode vchrRockerCenter
 
 static Boolean IsGameKey(WChar chr)
 {
@@ -75,6 +80,7 @@ void AppOpenMap(UInt16 index, const Char *name)
 	}
 	LOG(("map %s: pills %d bases %d starts %d", name, (Int16)gGame.map.numPills,
 		(Int16)gGame.map.numBases, (Int16)gGame.map.numStarts));
+	game_init(&gGame, TimGetSeconds());
 	FrmGotoForm(GameForm);
 }
 
@@ -141,14 +147,24 @@ static Boolean HandleEvent(EventType *e)
 		if (!(e->data.keyDown.modifiers & autoRepeatKeyMask))
 			LOG(("key chr %x code %x mods %x", (UInt16)c, e->data.keyDown.keyCode,
 				e->data.keyDown.modifiers));
-		// The 5-way centre goes back to the map list.
-		if (gForm == GameForm && (c == vchrRockerCenter ||
-		    (c == vchrNavChange && (e->data.keyDown.keyCode & navBitSelect)))) {
-			FrmGotoForm(MapListForm);
+		// The 5-way centre fires. It only comes as key events, so each press
+		// or repeat fires for a few ticks.
+		if (gForm == GameForm && (c == vchrRockerCenter || c == vchrTxCenter ||
+		    e->data.keyDown.keyCode == vchrRockerCenter ||
+		    (c == vchrNavChange && (e->data.keyDown.keyCode & navBitSelect))))
+			gFire = 8;
+		if (IsGameKey(c) || c == vchrTxCenter)
 			return true;
-		}
-		if (IsGameKey(c))
-			return true;
+	}
+	// A tap on the map moves the gunsight: above the middle further, below
+	// nearer.
+	if (gForm == GameForm && !gMenuOpen && e->eType == penDownEvent &&
+	    e->screenY >= 0) {
+		Coord w, h;
+
+		WinGetDisplayExtent(&w, &h);
+		gSight = e->screenY < h / 2 ? 1 : -1;
+		return true;
 	}
 	// A tap or a chosen item closes the menu, and the screen is repainted.
 	if (gMenuOpen && (e->eType == penDownEvent || e->eType == menuEvent)) {
@@ -191,19 +207,72 @@ static Boolean HandleEvent(EventType *e)
 	return FrmDispatchEvent(e);
 }
 
-// Held hardware buttons as game inputs.
-static uint16_t ReadInputs(void)
+// Held hardware buttons as game inputs. Turn with the 5-way or the
+// outer buttons, speed up and slow down with up and down, fire with the
+// centre or the second button, lay a mine with the third. A tap above the
+// middle of the screen moves the gunsight further, below it nearer.
+#define kKeyNavLeft     0x01000000UL
+#define kKeyNavRight    0x02000000UL
+#define kKeyNavSelect   0x04000000UL
+
+static GameInput ReadInputs(void)
 {
-	return (uint16_t)(KeyCurrentState() & 0xFFFF);
+	UInt32 k = KeyCurrentState();
+	GameInput in;
+
+	in.keys = 0;
+	in.opts = OPT_AUTOSLOW;
+	if (k & (keyBitHard1 | kKeyNavLeft))
+		in.keys |= IN_LEFT;
+	if (k & (keyBitHard4 | kKeyNavRight))
+		in.keys |= IN_RIGHT;
+	if (k & keyBitPageUp)
+		in.keys |= IN_FASTER;
+	if (k & keyBitPageDown)
+		in.keys |= IN_SLOWER;
+	if ((k & (keyBitHard2 | kKeyNavSelect)) || gFire) {
+		in.keys |= IN_FIRE;
+		if (gFire)
+			gFire--;
+	}
+	if (k & keyBitHard3)
+		in.keys |= IN_MINE;
+	if (gSight > 0)
+		in.keys |= IN_SIGHT_FAR;
+	else if (gSight < 0)
+		in.keys |= IN_SIGHT_NEAR;
+	gSight = 0;
+	return in;
 }
 
 #ifdef DEBUG
+// Checks the const tables read back right from both code segments, then
+// runs the scripted games on Everard Island and logs their checksums for
+// comparing with the host test.
 static void SelfTest(void)
 {
-	Char hex[9];
+	Char hex[9], name[] = "Everard Island";
+	UInt32 v, t0, t1;
+	UInt8 n;
 
-	HexStr(game_selftest(), hex);
-	LOG(("selftest seed 12345 ticks 1000 checksum %s", hex));
+	v = util_table_check();
+	HexStr(v, hex);
+	LOG(("const table code 1 %s %s", hex, v == UTIL_TABLE_CHECK ? "ok" : "WRONG"));
+	v = DetectTableCheck();
+	HexStr(v, hex);
+	LOG(("const table detect %s %s", hex, v == DETECT_TABLE_CHECK ? "ok" : "WRONG"));
+	for (n = 0; n < SCRIPT_COUNT; n++) {
+		if (MapLoad(0, name, &gGame) != MAP_OK) {
+			LOG(("script %d: map load failed", (Int16)n));
+			return;
+		}
+		t0 = TimGetTicks();
+		v = script_run(&gGame, n, NULL, NULL);
+		t1 = TimGetTicks();
+		HexStr(v, hex);
+		LOG(("script %d %s checksum %s ticks %lu in %lu sys ticks", (Int16)n,
+			script_name(n), hex, gGame.tick, t1 - t0));
+	}
 }
 #endif
 
@@ -235,8 +304,20 @@ static void EventLoop(void)
 		last = now;
 		n = 0;
 		t0 = now;
-		while (acc >= tps && n < kMaxCatchUp) {
-			game_tick(&gGame, ReadInputs());
+		while (acc >= tps && n < kMaxCatchUp && gForm == GameForm && gFormOpen) {
+			GameInput in = ReadInputs();
+
+			game_tick(&gGame, &in);
+#ifdef DEBUG
+			if (gGame.tick % 50 == 0) {
+				const Tank *k = &gGame.tanks[0];
+
+				LOG(("tick %lu keys %x tank %u,%u ang %u spd %d A%u S%u M%u dead %u/%u boat %u",
+					gGame.tick, (UInt16)in.keys, k->x, k->y, k->angle, k->speed,
+					(UInt16)k->armour, (UInt16)k->shells, (UInt16)k->mines,
+					(UInt16)k->destroyed, k->deaths, (UInt16)k->boat));
+			}
+#endif
 			acc -= tps;
 			n++;
 		}
@@ -253,7 +334,7 @@ static void EventLoop(void)
 			Boolean full = gFull;
 
 			gFull = gDirty = false;
-			ViewFrame(full);
+			ViewFrame(full, n != 0);
 #ifdef DEBUG
 			if (full && !gTimedFull) {
 				gTimedFull = true;
@@ -276,7 +357,6 @@ static void AppStart(void)
 #endif
 	TimingInit(gDev.ticksPerSecond);
 	ScreenInit(&gDev);
-	game_init(&gGame, 12345);
 	gQuit = gFormOpen = false;
 	gDirty = gFull = true;
 	FrmGotoForm(MapListForm);

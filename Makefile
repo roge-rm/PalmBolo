@@ -22,7 +22,7 @@ CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES)
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
 SRCS     = main screen detect dlog timing mapload mapstore_palm tileview
-GAMESRCS = game map tiles
+GAMESRCS = game tank shells script util map tiles
 OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS)))
 
 all: build/$(PRC)
@@ -42,7 +42,10 @@ $(BUILD)/palmbolo-sections.s $(BUILD)/palmbolo-sections.ld: src/palmbolo.def | $
 $(BUILD)/palmbolo-sections.o: $(BUILD)/palmbolo-sections.s
 	$(CC) -c $< -o $@
 
+# segcheck fails the build on references that link but go wrong on the
+# device (extern const tables, calls across code segments).
 $(BUILD)/palmbolo: $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld
+	python3 tools/segcheck.py $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld -o $@
 
 $(BUILD)/palmbolo.ro: src/palmbolo.rcp src/resource.h res/icon.bmp res/smallicon.bmp res/everard.map | $(BUILD)
@@ -55,7 +58,7 @@ build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
 host-test: build/hosttest
 	build/hosttest
 
-HOSTSRC  = src/game/game.c src/game/map.c src/game/tiles.c host/mapstore_host.c
+HOSTSRC  = src/game/game.c src/game/tank.c src/game/shells.c src/game/script.c src/game/util.c src/game/map.c src/game/tiles.c host/mapstore_host.c
 
 build/hosttest: host/hosttest.c $(HOSTSRC) src/game/*.h | $(BUILD)
 	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) -o $@

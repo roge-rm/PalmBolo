@@ -20,7 +20,8 @@ typedef struct TileDef {
 	uint8_t pat[8];             // bit 7 is the left pixel
 } TileDef;
 
-extern TileDef kTiles[TILE_COUNT];
+// The design of tile i.
+const TileDef *tile_def(uint8_t i);
 
 // Tile index for a terrain value (0-15 and 255 only).
 uint8_t tile_for_terrain(uint8_t terrain);

@@ -1,0 +1,29 @@
+# PalmBolo milestone 3 on the TX. Times are ms after launch and settle.
+# The debug build runs its self-test first (about 30 s), then the map
+# list shows.
+# Opens Everard Island, drives off the boat, turns, fires, lays a mine and
+# drives on towards the water.
+0 snapshot "start.png"
+33000 snapshot "list.png"
+33500 pen-down 100 48
+33600 pen-up
+35500 snapshot "everard.png"
+35600 key-down up
+39600 snapshot "driving.png"
+39700 key-down hard4
+40300 key-up hard4
+42500 snapshot "turned.png"
+42600 key-down center
+43100 snapshot "firing.png"
+44100 key-up center
+44200 key-down hard3
+44400 key-up hard3
+44400 snapshot "mine.png"
+44600 snapshot "mine2.png"
+44700 key-down hard1
+45300 key-up hard1
+50000 snapshot "drive-on.png"
+50100 key-up up
+50200 key-down center
+51200 key-up center
+52000 snapshot "end.png"

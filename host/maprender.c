@@ -107,7 +107,7 @@ static int gW, gH, gTs, gX0, gY0;
 // Draws tile index t (with a mine mark when mine) at map square (tx, ty).
 static void draw_tile(int tx, int ty, int t, int mine)
 {
-	const TileDef *d = &kTiles[t];
+	const TileDef *d = tile_def(t);
 	int s = gTs / 8, px, py, i;
 
 	for (py = 0; py < gTs; py++) {

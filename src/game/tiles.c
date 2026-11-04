@@ -1,7 +1,8 @@
 #include "tiles.h"
 
-// Not const: const tables read back as zeros in the multi-segment Palm build.
-TileDef kTiles[TILE_COUNT] = {
+// Static to this file: other files reach it through tile_def (see
+// tools/segcheck.py for why a const table can't be extern).
+static const TileDef kTiles[TILE_COUNT] = {
 	// 0 building
 	{ {150, 150, 150}, {40, 40, 40}, {0xFF, 0x88, 0x88, 0xFF, 0x22, 0x22, 0x22, 0xFF} },
 	// 1 river
@@ -34,6 +35,11 @@ TileDef kTiles[TILE_COUNT] = {
 	// 19 start
 	{ {250, 220, 40}, {0, 0, 0}, {0x18, 0x18, 0x18, 0xFF, 0xFF, 0x18, 0x18, 0x18} }
 };
+
+const TileDef *tile_def(uint8_t i)
+{
+	return &kTiles[i < TILE_COUNT ? i : TILE_DEEP_SEA];
+}
 
 uint8_t tile_for_terrain(uint8_t terrain)
 {

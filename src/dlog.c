@@ -10,7 +10,7 @@
 #define kLogLine    120
 
 // Opens the database, creating it with the backup bit set if it is missing.
-static DmOpenRef LogOpen(void)
+static DmOpenRef SEC_UI LogOpen(void)
 {
 	DmOpenRef db = DmOpenDatabaseByTypeCreator(kLogType, kLogCreator, dmModeReadWrite);
 	LocalID id;
@@ -31,7 +31,7 @@ static DmOpenRef LogOpen(void)
 	return db;
 }
 
-void LogF(const Char *fmt, ...)
+void SEC_UI LogF(const Char *fmt, ...)
 {
 	Char line[kLogLine];
 	DmOpenRef db;
@@ -61,7 +61,7 @@ void LogF(const Char *fmt, ...)
 	DmCloseDatabase(db);
 }
 
-void LogClear(void)
+void SEC_UI LogClear(void)
 {
 	DmOpenRef db = LogOpen();
 
@@ -72,7 +72,7 @@ void LogClear(void)
 	DmCloseDatabase(db);
 }
 
-void LogDevice(const DeviceInfo *d)
+void SEC_UI LogDevice(const DeviceInfo *d)
 {
 	LogF("rom %lx cpu %lx winver %lu tps %u", d->rom, d->cpu, d->winVersion,
 		(UInt16)d->ticksPerSecond);

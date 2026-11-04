@@ -8,6 +8,8 @@
 #include <string.h>
 #include "../src/game/game.h"
 #include "../src/game/mapstore.h"
+#include "../src/game/script.h"
+#include "../src/game/util.h"
 
 static int gFails;
 
@@ -71,8 +73,8 @@ static void parse_path(const char *path)
 	err = parse_buf(&info, data, len);
 	if (err == MAP_OK) {
 		gParsed++;
-		printf("ok   %-40s pills %2d bases %2d starts %2d\n", path, info.numPills,
-			info.numBases, info.numStarts);
+		printf("ok   %-40s pills %2d>%2d bases %2d>%2d starts %2d>%2d\n", path,
+			data[9], info.numPills, data[10], info.numBases, data[11], info.numStarts);
 		CHECK(info.numPills <= MAP_MAX_PILLS && info.numBases <= MAP_MAX_BASES &&
 			info.numStarts <= MAP_MAX_STARTS, "counts within limits");
 	} else {
@@ -138,10 +140,73 @@ static void fuzz(const uint8_t *data, uint32_t len)
 		rejected, accepted);
 }
 
+static const char *kTerrainName[16] = {
+	"building", "river", "swamp", "crater", "road", "forest", "rubble", "grass",
+	"halfbuilding", "boat", "mswamp", "mcrater", "mroad", "mforest", "mrubble", "mgrass"
+};
+
+static const char *terrain_name(uint8_t t)
+{
+	return t < 16 ? kTerrainName[t] : "deepsea";
+}
+
+// Facts after each script step.
+static void fact(const GameState *s, uint8_t n, uint8_t i, void *ctx)
+{
+	const Tank *k = &s->tanks[0];
+	uint8_t mx = k->x >> 8, my = k->y >> 8;
+
+	(void)ctx;
+	printf("  %d.%-2d t%-5u sq %3u,%3u+%3u,%3u %-12s spd %2d.%02d ang %6.3f arm %2u sh %2u mi %2u "
+		"boat %u dead %u/%u wait %3u shells %u expl %u@%u,%u mexp %u flood %u\n",
+		n, i, (unsigned)s->tick, mx, my, k->x & 255, k->y & 255,
+		terrain_name(game_terrain(mx, my)), k->speed / 4, (k->speed % 4) * 25,
+		k->angle / 32.0, k->armour, k->shells, k->mines, k->boat, k->destroyed,
+		k->deaths, k->deathWait, s->numShells, s->numExpl,
+		s->numExpl ? s->expl[0].x : 0, s->numExpl ? s->expl[0].y : 0, s->numMineExp, s->numFlood);
+}
+
+static int count_terrain(uint8_t t)
+{
+	int x, y, n = 0;
+
+	for (y = 0; y < 256; y++)
+		for (x = 0; x < 256; x++)
+			n += mapstore_get(x, y) == t;
+	return n;
+}
+
+static void scripts(const uint8_t *ev, uint32_t len)
+{
+	static GameState g;
+	uint8_t n;
+
+	printf("sizeof(GameState) %u, Tank %u, Shell %u\n", (unsigned)sizeof(GameState),
+		(unsigned)sizeof(Tank), (unsigned)sizeof(Shell));
+	for (n = 0; n < SCRIPT_COUNT; n++) {
+		uint32_t c;
+		int craters, rubble, half, boats, mines;
+
+		CHECK(parse_buf(&g.map, ev, len) == MAP_OK, "script map");
+		printf("script %d %s\n", n, script_name(n));
+		c = script_run(&g, n, fact, NULL);
+		craters = count_terrain(TERRAIN_CRATER);
+		rubble = count_terrain(TERRAIN_RUBBLE);
+		half = count_terrain(TERRAIN_HALFBUILDING);
+		boats = count_terrain(TERRAIN_BOAT);
+		mines = 0;
+		for (int t = TERRAIN_MINE_FIRST; t <= TERRAIN_MINE_LAST; t++)
+			mines += count_terrain(t);
+		printf("script %d %-8s checksum %08lx  craters %d rubble %d halfbuildings %d boats %d mines %d\n",
+			n, script_name(n), (unsigned long)c, craters, rubble, half, boats, mines);
+		// Same script twice gives the same answer.
+		CHECK(parse_buf(&g.map, ev, len) == MAP_OK, "script map");
+		CHECK(script_run(&g, n, NULL, NULL) == c, "script determinism");
+	}
+}
+
 int main(int argc, char **argv)
 {
-	uint32_t sum = game_selftest();
-	GameState a, b;
 	int i;
 	uint32_t len;
 	uint8_t *ev;
@@ -149,17 +214,9 @@ int main(int argc, char **argv)
 
 	CHECK(mapstore_open(TERRAIN_DEEP_SEA) == 0, "mapstore_open");
 
-	// Same seed and inputs give the same state.
-	game_init(&a, 777);
-	game_init(&b, 777);
-	for (i = 0; i < 500; i++) {
-		game_tick(&a, (uint16_t)i);
-		game_tick(&b, (uint16_t)i);
-	}
-	CHECK(game_checksum(&a) == game_checksum(&b), "determinism");
-	game_tick(&b, 1);
-	CHECK(game_checksum(&a) != game_checksum(&b), "checksum ignores state");
-	printf("selftest checksum %08lx\n", (unsigned long)sum);
+	printf("table check %08lx (UTIL_TABLE_CHECK %08lx)\n",
+		(unsigned long)util_table_check(), (unsigned long)UTIL_TABLE_CHECK);
+	CHECK(util_table_check() == UTIL_TABLE_CHECK, "table check");
 
 	// Everard Island, the map built into the app.
 	ev = read_file("res/everard.map", &len);
@@ -174,6 +231,7 @@ int main(int argc, char **argv)
 		ev[0] = 'X';
 		CHECK(parse_buf(&info, ev, len) == MAP_ERR_HEADER, "bad header");
 		ev[0] = 'B';
+		scripts(ev, len);
 		fuzz(ev, len);
 		free(ev);
 	}

@@ -95,7 +95,8 @@ typedef struct MapMemory {
 void map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32_t len);
 
 // Reads a .map file into info and the map store. The store is cleared to
-// deep sea first. Terrain under bases becomes road, and under pills any
+// deep sea first. As in WinBolo the map is then centred and pills, bases
+// and starts in the mined border are dropped. Terrain under bases becomes road, and under pills any
 // water or building becomes road and any mine is removed. Returns MAP_OK or
 // an error code, and never reads or writes outside the arrays. On an error
 // the contents are unspecified (info is zeroed).

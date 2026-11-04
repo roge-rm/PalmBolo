@@ -1,2 +1,2 @@
 application { "PalmBolo" Rmrf }
-multiple code { "detect" }
+multiple code { "detect" "ui" }

@@ -7,7 +7,7 @@
 
 #define kEverardName "Everard Island"
 
-UInt16 MapListBuild(Char names[][kMapNameLen])
+UInt16 SEC_UI MapListBuild(Char names[][kMapNameLen])
 {
 	UInt16 n = 0, card;
 	LocalID id;
@@ -36,7 +36,7 @@ typedef struct DbReader {
 	UInt32 pos, size;
 } DbReader;
 
-static void DbRelease(DbReader *r)
+static void SEC_UI DbRelease(DbReader *r)
 {
 	if (r->h) {
 		MemHandleUnlock(r->h);
@@ -44,7 +44,7 @@ static void DbRelease(DbReader *r)
 	}
 }
 
-static uint32_t DbFill(void *ctx, uint8_t *dst, uint32_t max)
+static uint32_t SEC_UI DbFill(void *ctx, uint8_t *dst, uint32_t max)
 {
 	DbReader *r = (DbReader *)ctx;
 	uint32_t n = 0, k;
@@ -72,7 +72,7 @@ static uint32_t DbFill(void *ctx, uint8_t *dst, uint32_t max)
 	return n;
 }
 
-Int16 MapLoad(UInt16 index, const Char *name, GameState *game)
+Int16 SEC_UI MapLoad(UInt16 index, const Char *name, GameState *game)
 {
 	static MapSource ms;    // kept out of the stack
 	int err;

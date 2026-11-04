@@ -7,11 +7,15 @@
 
 struct GameState;
 
-// Goes in front of a function to put it in the second code segment. Each
-// segment must stay under 32 KB.
+// Go in front of a function to put it in another code segment. Each
+// segment must stay under 32 KB. The game rules, main.c and the map store
+// are in the first; drawing, map loading, the log and the timers are in
+// "ui". A function's prototype must carry the same attribute, or a call
+// from another segment jumps to the wrong place (tools/segcheck.py checks).
 #ifndef SEC_DETECT
 #define SEC_DETECT __attribute__((section("detect")))
 #endif
+#define SEC_UI __attribute__((section("ui")))
 
 #define kMinRomVersion  sysMakeROMVersion(3, 0, 0, sysROMStageRelease, 0)
 #define kRom35          sysMakeROMVersion(3, 5, 0, sysROMStageRelease, 0)
@@ -38,26 +42,26 @@ typedef struct DeviceInfo {
 void SEC_DETECT DeviceDetect(DeviceInfo *d);
 
 // Upper-case hex of v, padded to 8 digits. out needs 9 bytes.
-void HexStr(UInt32 v, Char *out);
+void SEC_UI HexStr(UInt32 v, Char *out);
 
 #ifdef DEBUG
 #include <stdarg.h>
 #define kLogMaxRecords  500
 
 // Appends a line "seconds ticks text" to PalmBoloLog. Supports %s %d %ld %lu %lx.
-void LogF(const Char *fmt, ...);
-void LogClear(void);
+void SEC_UI LogF(const Char *fmt, ...);
+void SEC_UI LogClear(void);
 // Logs every detected value.
-void LogDevice(const DeviceInfo *d);
+void SEC_UI LogDevice(const DeviceInfo *d);
 
 // Tick and draw timer. Times are in 1/100 ms.
-void TimingInit(UInt16 ticksPerSecond);
-void TimingTicks(UInt32 startTicks, UInt32 endTicks, UInt16 count);
-void TimingDraw(UInt32 startTicks, UInt32 endTicks);
-UInt32 TimingTickX100(void);
-UInt32 TimingDrawX100(void);
+void SEC_UI TimingInit(UInt16 ticksPerSecond);
+void SEC_UI TimingTicks(UInt32 startTicks, UInt32 endTicks, UInt16 count);
+void SEC_UI TimingDraw(UInt32 startTicks, UInt32 endTicks);
+UInt32 SEC_UI TimingTickX100(void);
+UInt32 SEC_UI TimingDrawX100(void);
 // Logs the averages about every 5 seconds.
-void TimingMaybeLog(void);
+void SEC_UI TimingMaybeLog(void);
 #define LOG(args) LogF args
 #else
 #define LOG(args) ((void)0)
@@ -69,13 +73,13 @@ void TimingMaybeLog(void);
 
 // Screen. ScreenInit picks the depth and coordinate system, ScreenExit
 // restores them.
-void ScreenInit(const DeviceInfo *d);
-void ScreenExit(void);
-Boolean ScreenHiRes(void);      // drawing in native (double density) pixels
-Boolean ScreenNewWin(void);     // OS 3.5 or later
-UInt16 ScreenDepth(void);
+void SEC_UI ScreenInit(const DeviceInfo *d);
+void SEC_UI ScreenExit(void);
+Boolean SEC_UI ScreenHiRes(void);      // drawing in native (double density) pixels
+Boolean SEC_UI ScreenNewWin(void);     // OS 3.5 or later
+UInt16 SEC_UI ScreenDepth(void);
 // Palette index closest to a colour. Before OS 3.5: 0 white, 1 black.
-IndexedColorType ScreenIndex(UInt8 r, UInt8 g, UInt8 b);
+IndexedColorType SEC_UI ScreenIndex(UInt8 r, UInt8 g, UInt8 b);
 
 // Maps. Index 0 of the list is Everard Island, built into the app, then
 // the databases of type Map, creator Rmrf.
@@ -85,22 +89,28 @@ IndexedColorType ScreenIndex(UInt8 r, UInt8 g, UInt8 b);
 #define kMapNameLen     32
 #define kMaxMaps        24
 // Fills names with the map names and returns how many (at most kMaxMaps).
-UInt16 MapListBuild(Char names[][kMapNameLen]);
+UInt16 SEC_UI MapListBuild(Char names[][kMapNameLen]);
 // Loads map number index of the list (name is its name) into the game.
 // Returns a map error code (MAP_OK is 0), or -1 when it can't be opened.
-Int16 MapLoad(UInt16 index, const Char *name, struct GameState *game);
+Int16 SEC_UI MapLoad(UInt16 index, const Char *name, struct GameState *game);
 
 // Tile view. ViewOpen sizes the view to the window and centres it on the
-// first start, ViewClose gives back the input area. ViewFrame scrolls by
-// the held keys and draws what changed, or everything when full.
-void ViewOpen(const DeviceInfo *d, const struct GameState *game);
-void ViewClose(void);
-void ViewResized(void);
-void ViewFrame(Boolean full);
-Boolean ViewSetInputArea(Boolean closed);
+// tank, ViewClose gives back the input area. ViewFrame follows the tank and
+// draws what changed when the game ticked, or everything when full.
+void SEC_UI ViewOpen(const DeviceInfo *d, const struct GameState *game);
+void SEC_UI ViewClose(void);
+void SEC_UI ViewResized(void);
+void SEC_UI ViewFrame(Boolean full, Boolean ticked);
+Boolean SEC_UI ViewSetInputArea(Boolean closed);
 #ifdef DEBUG
 // Draws the whole view count times and logs the average time.
-void ViewTimeFull(UInt16 count);
+void SEC_UI ViewTimeFull(UInt16 count);
+#endif
+
+#ifdef DEBUG
+// Checksum of a const table read from the detect segment.
+UInt32 SEC_DETECT DetectTableCheck(void);
+#define DETECT_TABLE_CHECK 0x6C70CAF3UL
 #endif
 
 // Called by the map list when a map is chosen.
