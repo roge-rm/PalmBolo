@@ -227,4 +227,32 @@ uint8_t game_terrain(uint8_t x, uint8_t y);
 // Sets a square's terrain and notes it for game_take_changes.
 void game_set_terrain(uint8_t x, uint8_t y, uint8_t t);
 
+// Sounds the rules made, where WinBolo calls soundDist. They are kept
+// outside the game state for the screen to play, and nothing in the rules
+// reads them back. x, y is the map square.
+enum {
+	SND_SHOOT,          // a tank or pill fired; player is the tank's, or GAME_NO_PLAYER
+	SND_SHOT_TREE,      // a tree shot or flattened by a wreck
+	SND_SHOT_BUILDING,  // a wall, pill, base or boat hit, or a road shot into river
+	SND_HIT_TANK,       // a shell hit a tank; player is the tank hit
+	SND_BUBBLES,        // a wading tank lost stock; player is the tank's
+	SND_TANK_SINK,      // a tank drowned; player is the tank's
+	SND_BIG_EXPLOSION,  // a big wreck went off
+	SND_MINE_EXPLOSION, // a mine or a small wreck went off
+	SND_LAY_MINE,       // a tank or builder laid a mine
+	SND_FARM_TREE,      // the builder cut a tree
+	SND_MAN_BUILDING,   // the builder built or repaired
+	SND_MAN_DYING,      // the builder was killed
+	SND_BASE_CAPTURE,   // a base changed hands (WinBolo has no sound for it)
+	SND_KINDS
+};
+#define GAME_MAX_SOUNDS 16
+typedef struct GameSound {
+	uint8_t kind, x, y, player;
+} GameSound;
+
+// Copies the sounds made since the last call into out (up to max) and
+// returns how many. Sounds past GAME_MAX_SOUNDS before a call are dropped.
+uint8_t game_take_sounds(GameSound *out, uint8_t max);
+
 #endif

@@ -27,7 +27,9 @@ enum {
 	OP_SET,     // terrain a at the tank's square moved b, c
 	OP_CARRY,   // the found pill goes into the tank, owned by it
 	OP_PILLOWN, // the found pill's owner becomes a
-	OP_MOVE     // move the tank b, c squares (signed)
+	OP_MOVE,    // move the tank b, c squares (signed)
+	OP_WRECK    // a tank wreck, big if a, at the tank's square moved b, c,
+	            // heading the tank's way for n steps
 };
 
 typedef struct Op {
@@ -140,14 +142,31 @@ static const Op kScripts[] = {
 	{ OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 3, 0, 0 }, { OP_KEYS, IN_MINE, 0, 0, 0, 1 },
 	{ OP_MOVE, 0, 2, 0, 0, 0 }, { OP_FACE, 12, 0, 0, 0, 0 },
 	{ OP_KEYS, IN_SIGHT_NEAR, 0, 0, 0, 10 }, { OP_KEYS, IN_FIRE, 0, 0, 0, 1 },
-	{ OP_KEYS, 0, 0, 0, 0, 30 }, { OP_KEYS, 0, 0, 0, 0, 40 }, { OP_END, 0, 0, 0, 0, 0 }
+	{ OP_KEYS, 0, 0, 0, 0, 30 }, { OP_KEYS, 0, 0, 0, 0, 40 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 25 a small wreck ends on a boat and craters it, the crater floods; a
+	// big wreck beside a boat leaves it
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_RIVER, 2, 0, 0 }, { OP_SET, TERRAIN_BOAT, 2, 0, 0, 0 },
+	{ OP_WRECK, 0, 2, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 4 }, { OP_KEYS, 0, 0, 0, 0, 100 },
+	{ OP_SET, TERRAIN_BOAT, 2, 0, 0, 0 }, { OP_WRECK, 1, 1, 0, 0, 0 },
+	{ OP_KEYS, 0, 0, 0, 0, 4 }, { OP_KEYS, 0, 0, 0, 0, 100 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 26 a mine kills a tank with no stock, the wreck is big anyway
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 6, 0, 0 }, { OP_KEYS, IN_MINE, 0, 0, 0, 1 },
+	{ OP_BACK, 1, 0, 0, 0, 0 }, { OP_STOCK, 1, 0, 0, 0, 0 }, { OP_KEYS, F, 0, 0, 0, 80 },
+	{ OP_KEYS, 0, 0, 0, 0, 60 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 27 a wreck heading east onto its own player's armoured base stops
+	// short of it
+	{ OP_BASE, 0, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 1 }, { OP_BASESTOCK, 90, 0, 0, 0, 0 },
+	{ OP_SET, TERRAIN_GRASS, 0xFF, 0, 0, 0 }, { OP_SET, TERRAIN_GRASS, 0xFE, 0, 0, 0 },
+	{ OP_WRECK, 0, 0xFE, 0, 0, 12 },
+	{ OP_KEYS, 0, 0, 0, 0, 4 }, { OP_KEYS, 0, 0, 0, 0, 40 }, { OP_END, 0, 0, 0, 0, 0 }
 };
 #undef F
 
 static const char kNames[] =
 	"drive\0speeds\0boat\0wading\0deep sea\0shoot\0range\0mines\0refuel\0"
 	"capture\0base fuel\0pill shot\0pill down\0restock\0types\0trees\0road\0wall\0"
-	"boat wall\0put pill\0fix pill\0lgm mine\0lgm shot\0regrow\0flood\0";
+	"boat wall\0put pill\0fix pill\0lgm mine\0lgm shot\0regrow\0flood\0boat wreck\0"
+	"mine wreck\0base wreck\0";
 
 const char *script_name(uint8_t n)
 {
@@ -302,6 +321,11 @@ uint32_t script_run(GameState *s, uint8_t n,
 		case OP_SET:
 			game_set_terrain((uint8_t)((k->x >> 8) + (int8_t)o->b),
 				(uint8_t)((k->y >> 8) + (int8_t)o->c), o->a);
+			break;
+		case OP_WRECK:
+			g_tank_explosion(s, (uint16_t)(k->x + (int16_t)((int8_t)o->b * 256)),
+				(uint16_t)(k->y + (int16_t)((int8_t)o->c * 256)), k->angle,
+				(uint8_t)o->n, o->a, k->player);
 			break;
 		case OP_MOVE:
 			k->x = (uint16_t)(k->x + (int16_t)((int8_t)o->b * 256));

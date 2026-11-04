@@ -14,6 +14,33 @@ static uint8_t gChange[CHANGE_MAX * 2];
 static uint8_t gChangeCount, gChangeOver;
 static uint8_t gViewer;     // the player on this screen, for hidden mines
 
+// Sounds made since the screen last asked, outside the game state.
+static GameSound gSound[GAME_MAX_SOUNDS];
+static uint8_t gSoundCount;
+
+void g_sound(uint8_t kind, uint8_t x, uint8_t y, uint8_t player)
+{
+	GameSound *o;
+
+	if (gSoundCount >= GAME_MAX_SOUNDS)
+		return;
+	o = &gSound[gSoundCount++];
+	o->kind = kind;
+	o->x = x;
+	o->y = y;
+	o->player = player;
+}
+
+uint8_t game_take_sounds(GameSound *out, uint8_t max)
+{
+	uint8_t i, n = gSoundCount < max ? gSoundCount : max;
+
+	for (i = 0; i < n; i++)
+		out[i] = gSound[i];
+	gSoundCount = 0;
+	return n;
+}
+
 uint8_t game_terrain(uint8_t x, uint8_t y)
 {
 	if (x > MAP_EDGE_LOW && x < MAP_EDGE_HIGH && y > MAP_EDGE_LOW && y < MAP_EDGE_HIGH)
@@ -384,6 +411,7 @@ static void mine_fill(GameState *s, uint8_t x, uint8_t y)
 	if (!g_is_mine(x, y))
 		return;
 	game_set_terrain(x, y, TERRAIN_CRATER);
+	g_sound(SND_MINE_EXPLOSION, x, y, GAME_NO_PLAYER);
 	lgm_blast(s, (uint16_t)(((uint16_t)x << 8) + 128U), (uint16_t)(((uint16_t)y << 8) + 128U));
 	for (i = 0; i < s->numTanks; i++)
 		tank_mine_damage(s, i, x, y);
@@ -493,31 +521,42 @@ static void tk_explosions_update(GameState *s)
 			g_explosion(s, e->x, e->y);
 			nx = (uint16_t)(e->x + dx + (dx > 0 ? R_TK_EXPLOSION_WIDTH : -R_TK_EXPLOSION_WIDTH));
 			ny = (uint16_t)(e->y + dy + (dy > 0 ? R_TK_EXPLOSION_HEIGHT : -R_TK_EXPLOSION_HEIGHT));
-			if (g_speed_at(s, (uint8_t)(e->x >> 8), (uint8_t)(ny >> 8), 0, e->creator) > 0)
+			// WinBolo quirk: the wreck moves as neutral, so it stops at
+			// any owned base with armour, its own player's too.
+			if (g_speed_at(s, (uint8_t)(e->x >> 8), (uint8_t)(ny >> 8), 0, GAME_NO_PLAYER) > 0)
 				e->y = (uint16_t)(e->y + dy);
-			if (g_speed_at(s, (uint8_t)(nx >> 8), (uint8_t)(e->y >> 8), 0, e->creator) > 0)
+			if (g_speed_at(s, (uint8_t)(nx >> 8), (uint8_t)(e->y >> 8), 0, GAME_NO_PLAYER) > 0)
 				e->x = (uint16_t)(e->x + dx);
 			e->length--;
 			mx = (uint8_t)(e->x >> 8);
 			my = (uint8_t)(e->y >> 8);
 			t = game_terrain(mx, my);
-			if (t == TERRAIN_DEEP_SEA)
+			if (t == TERRAIN_DEEP_SEA) {
 				keep = 0;
-			else if (t == TERRAIN_FOREST)
+				g_sound(SND_TANK_SINK, mx, my, e->creator);
+			} else if (t == TERRAIN_FOREST) {
 				game_set_terrain(mx, my, TERRAIN_GRASS);
-			else if (t == TERRAIN_BOAT)
+				g_sound(SND_SHOT_TREE, mx, my, GAME_NO_PLAYER);
+			} else if (t == TERRAIN_BOAT) {
 				game_set_terrain(mx, my, TERRAIN_RIVER);
+				g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
+			}
 		} else {
 			mx = (uint8_t)(e->x >> 8);
 			my = (uint8_t)(e->y >> 8);
 			keep = 0;
 			if (!e->big) {
+				// WinBolo's small wreck only spares river and deep sea, so
+				// a boat under it is cratered; the big one spares boats too.
+				t = mapstore_get(mx, my);
 				g_explosion(s, e->x, e->y);
-				if (crater_ok(s, mx, my)) {
+				if (t != TERRAIN_RIVER && t != TERRAIN_DEEP_SEA &&
+				    g_base_at(s, mx, my) < 0 && g_pill_at(s, mx, my) < 0) {
 					game_set_terrain(mx, my, TERRAIN_CRATER);
 					g_flood(s, mx, my);
 				}
 				lgm_blast(s, e->x, e->y);
+				g_sound(SND_MINE_EXPLOSION, mx, my, GAME_NO_PLAYER);
 			} else {
 				int16_t dx, dy;
 				uint8_t ax, ay;
@@ -534,6 +573,7 @@ static void tk_explosions_update(GameState *s)
 				blast_square(s, mx, ay);
 				blast_square(s, mx, my);
 				big_square(s, mx, my);
+				g_sound(SND_BIG_EXPLOSION, mx, my, GAME_NO_PLAYER);
 			}
 		}
 		if (keep)
@@ -605,6 +645,7 @@ void game_init(GameState *s, uint32_t seed, const GameSetup *setup)
 	}
 	gChangeCount = 0;
 	gChangeOver = 0;
+	gSoundCount = 0;
 	mapstore_clear_flags();
 	s->numTanks = n;
 	for (i = 0; i < n; i++) {

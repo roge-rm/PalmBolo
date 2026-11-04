@@ -95,23 +95,53 @@ UInt16 SEC_UI MapListBuild(Char names[][kMapNameLen]);
 Int16 SEC_UI MapLoad(UInt16 index, const Char *name, struct GameState *game);
 
 // Tile view. ViewOpen sizes the view to the window and centres it on the
-// tank, ViewClose gives back the input area. ViewFrame follows the tank and
-// draws what changed when the game ticked, or everything when full.
-void SEC_UI ViewOpen(const DeviceInfo *d, const struct GameState *game);
+// tank, or shows an alert and returns false if it can't draw (no memory for
+// the art, a 16-bit screen). ViewClose gives back the input area.
+// ViewFrame follows the tank and draws what changed when the game ticked,
+// or everything when full.
+Boolean SEC_UI ViewOpen(const DeviceInfo *d, const struct GameState *game);
 void SEC_UI ViewClose(void);
 void SEC_UI ViewResized(void);
 void SEC_UI ViewFrame(Boolean full, Boolean ticked);
 Boolean SEC_UI ViewSetInputArea(Boolean closed);
 // The builder action shown chosen in the button row (0 tree to 4 mine).
 void SEC_UI ViewSetAction(UInt8 action);
+// Draws an icon cell of the art (a whole cell, no mask) at x, y.
+void SEC_UI ViewIcon(UInt16 cell, Coord x, Coord y);
 // A tap at x, y (standard coordinates): the button number 0-6 when it is
-// on the button row (0-4 the actions, 5 gunsight nearer, 6 further), else
-// -1 with the map square in mx, my.
+// on the button row (0-4 the actions, 5 gunsight nearer, 6 further),
+// kTapPanel on the status panel (or on the overview when it covers the
+// view), else -1 with the map square in mx, my.
+#define kTapPanel 7
 Int16 SEC_UI ViewTap(Coord x, Coord y, UInt8 *mx, UInt8 *my);
 #ifdef DEBUG
 // Draws the whole view count times and logs the average time.
 void SEC_UI ViewTimeFull(UInt16 count);
 #endif
+
+// Status panel and overview map (panel.c). The view calls these.
+// PanelLayout takes the window width and returns the panel's height.
+// PanelDraw takes the top of the panel and the view in world pixels.
+Coord SEC_UI PanelLayout(Coord w);
+void SEC_UI PanelOpen(const DeviceInfo *d, const struct GameState *game);
+void SEC_UI PanelClose(void);
+void SEC_UI PanelSquare(UInt8 x, UInt8 y);
+void SEC_UI PanelItem(UInt8 x, UInt8 y);
+void SEC_UI PanelRebuild(void);
+Boolean SEC_UI PanelCovers(void);
+// The colour of the panel and the button bar.
+IndexedColorType SEC_UI PanelBg(void);
+Boolean SEC_UI PanelToggle(void);
+void SEC_UI PanelDraw(Boolean force, Coord py, Int32 vx, Int32 vy, Coord vw, Coord vh, Coord ts);
+
+// Sound (sound.c). SoundOpen reads the system game volume when the game
+// shows; SoundFrame plays the sounds the rules made since the last frame
+// and moves a playing sound on, for the player viewer.
+void SEC_UI SoundOpen(UInt16 ticksPerSecond);
+void SEC_UI SoundSetOn(Boolean on);
+Boolean SEC_UI SoundIsOn(void);
+void SEC_UI SoundFrame(const struct GameState *g, UInt8 viewer);
+void SEC_UI SoundStop(void);
 
 #ifdef DEBUG
 // Checksum of a const table read from the detect segment.

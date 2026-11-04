@@ -1,0 +1,25 @@
+# Milestone 6 art check on a TX: opens Everard, drives, turns, fires and
+# lays a mine, with snapshots along the way.
+# Debug build made with EXTRA="-DDEMO_START -DAUTOQUIT_SECONDS=35". Times
+# are ms after launch and settle.
+0 snapshot "start.png"
+2500 snapshot "list.png"
+3000 pen-down 100 48
+3100 pen-up
+5000 snapshot "everard.png"
+5100 key-down up
+8100 snapshot "driving.png"
+9200 key-down hard4
+9800 key-up hard4
+11000 snapshot "turned.png"
+12100 key-down center
+12400 snapshot "firing.png"
+13100 key-up center
+13700 key-down hard3
+13900 key-up hard3
+14000 snapshot "mine.png"
+14200 key-down hard1
+14800 key-up hard1
+17500 snapshot "drive-on.png"
+17600 key-up up
+18500 snapshot "end.png"

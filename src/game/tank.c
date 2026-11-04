@@ -213,7 +213,9 @@ void SEC_TANK tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my)
 	if (amount > k->armour)
 		amount = (uint8_t)(amount - amount / R_MINE_FATAL_DIVISOR);
 	if (damage(k, amount)) {
-		g_tank_explosion(s, k->x, k->y, k->angle, (uint8_t)(k->speed >> 2), big_wreck(k), k->player);
+		// WinBolo quirk: the mine path passes its kill codes (2 or 3) as
+		// the wreck type and only 0 counts as small, so it's always big.
+		g_tank_explosion(s, k->x, k->y, k->angle, (uint8_t)(k->speed >> 2), 1, k->player);
 		k->deathWait = R_TANK_DEATH_TICKS;
 		pills_drop(s, t);
 	}
@@ -649,6 +651,7 @@ static void SEC_TANK boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy
 		// Driving a boat into another sinks the other one.
 		game_set_terrain(mx, my, TERRAIN_RIVER);
 		g_explosion(s, k->x, k->y);
+		g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
 	}
 	if (slow && !g_is_land(s, mx, my)) {
 		// Keep a slow boat off the bank.
@@ -688,6 +691,7 @@ static void SEC_TANK boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy
 		k->boat = BOAT_OFF;
 		k->speed = 0;
 		g_explosion(s, k->x, k->y);
+		g_sound(SND_MINE_EXPLOSION, mx, my, GAME_NO_PLAYER);
 	}
 }
 
@@ -763,11 +767,19 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 	b = g_base_at(s, mx, my);
 	if (terr == TERRAIN_RIVER && b < 0 && k->speed <= R_SPEED_RIVER * 4) {
 		if (++k->waterCount >= R_TANK_WATER_TICKS) {
+			uint8_t lost = 0;
+
 			k->waterCount = 0;
-			if (k->shells >= R_WATER_LOSS_SHELLS)
+			if (k->shells >= R_WATER_LOSS_SHELLS) {
 				k->shells = (uint8_t)(k->shells - R_WATER_LOSS_SHELLS);
-			if (k->mines >= R_WATER_LOSS_MINES)
+				lost = 1;
+			}
+			if (k->mines >= R_WATER_LOSS_MINES) {
 				k->mines = (uint8_t)(k->mines - R_WATER_LOSS_MINES);
+				lost = 1;
+			}
+			if (lost)
+				g_sound(SND_BUBBLES, mx, my, k->player);
 		}
 	}
 	if (b >= 0)
@@ -791,6 +803,7 @@ static void SEC_TANK lay_mine(GameState *s, Tank *k)
 	k->mines--;
 	game_set_terrain(mx, my, (uint8_t)(t + TERRAIN_MINE_ADD));
 	g_mine_laid(s, mx, my, k->player, 0);
+	g_sound(SND_LAY_MINE, mx, my, GAME_NO_PLAYER);
 }
 
 // tankUpdate, with the gunsight and mine keys the client handles first and
@@ -840,6 +853,7 @@ void SEC_TANK tank_update(GameState *s, uint8_t t, const GameInput *in)
 	}
 	if (!k->boat && game_terrain((uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8)) == TERRAIN_DEEP_SEA) {
 		// Drowned: no wreck, just the wait.
+		g_sound(SND_TANK_SINK, (uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8), k->player);
 		k->armour = 0;
 		k->destroyed = 1;
 		k->speed = 0;

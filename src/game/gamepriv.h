@@ -30,6 +30,9 @@ void g_mines_near(GameState *s, uint8_t t, uint8_t mx, uint8_t my, uint8_t dir);
 // A mine laid by player at x, y: shown to the viewer if allied, and known
 // to the rules if known is set.
 void g_mine_laid(GameState *s, uint8_t x, uint8_t y, uint8_t player, uint8_t known);
+// Notes a sound for game_take_sounds. player is GAME_NO_PLAYER unless the
+// kind says otherwise.
+void g_sound(uint8_t kind, uint8_t x, uint8_t y, uint8_t player);
 void g_tank_explosion(GameState *s, uint16_t wx, uint16_t wy, uint16_t angle,
 	uint8_t length, uint8_t big, uint8_t creator);
 

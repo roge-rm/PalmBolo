@@ -23,6 +23,43 @@ static UInt8 gBuild, gBuildX, gBuildY;  // builder order to send next tick
 static Boolean gTimedFull;
 #endif
 
+// The app's own settings, kept in its preferences.
+#define kAppCreator     'Rmrf'
+#define kPrefsId        0
+#define kPrefsVersion   1
+typedef struct AppPrefs {
+	UInt8 sound;    // 1 on, 0 off
+	UInt8 pad[3];
+} AppPrefs;
+static AppPrefs gPrefs;
+
+static void LoadPrefs(void)
+{
+	UInt16 size = sizeof(gPrefs);
+	Int16 v;
+
+	gPrefs.sound = 1;
+	v = PrefGetAppPreferences(kAppCreator, kPrefsId, &gPrefs, &size, true);
+	if (v == noPreferenceFound || size != sizeof(gPrefs)) {
+		MemSet(&gPrefs, sizeof(gPrefs), 0);
+		gPrefs.sound = 1;
+	}
+	SoundSetOn(gPrefs.sound != 0);
+}
+
+static void SavePrefs(void)
+{
+	PrefSetAppPreferences(kAppCreator, kPrefsId, kPrefsVersion, &gPrefs, sizeof(gPrefs), true);
+}
+
+static void SetSound(Boolean on)
+{
+	gPrefs.sound = on ? 1 : 0;
+	SoundSetOn(on);
+	SavePrefs();
+	LOG(("sound option %s", on ? "on" : "off"));
+}
+
 // Hardware buttons the game uses. They are consumed so they don't launch
 // other applications.
 #define vchrNavChange   0x0503   // 5-way on palmOne devices
@@ -61,6 +98,12 @@ static Boolean HandleMenu(UInt16 id)
 	case MainMenuMaps:
 		if (gForm == GameForm)
 			FrmGotoForm(MapListForm);
+		return true;
+	case MainMenuSoundOn:
+		SetSound(true);
+		return true;
+	case MainMenuSoundOff:
+		SetSound(false);
 		return true;
 #ifdef DEBUG
 	case MainMenuSelfTest:
@@ -159,12 +202,17 @@ static Boolean GameHandler(EventType *e)
 	switch (e->eType) {
 	case frmOpenEvent:
 		FrmDrawForm(FrmGetActiveForm());
-		ViewOpen(&gDev, &gGame);
+		if (!ViewOpen(&gDev, &gGame)) {
+			FrmGotoForm(MapListForm);
+			return true;
+		}
+		SoundOpen(gDev.ticksPerSecond);
 		gFormOpen = true;
 		gDirty = gFull = true;
 		return true;
 	case frmCloseEvent:
 		gFormOpen = false;
+		SoundStop();
 		ViewClose();
 		return false;
 	default:
@@ -206,6 +254,9 @@ static Boolean HandleEvent(EventType *e)
 			gBuildX = mx;
 			gBuildY = my;
 			LOG(("build %u at %u,%u", (UInt16)gBuild, (UInt16)mx, (UInt16)my));
+		} else if (b == kTapPanel) {
+			if (PanelToggle())
+				gDirty = gFull = true;
 		} else if (b <= LGM_MINE) {
 			gAction = (UInt8)b;
 			ViewSetAction(gAction);
@@ -390,6 +441,8 @@ static void EventLoop(void)
 		}
 		if (n == kMaxCatchUp)
 			acc = 0;
+		if (gForm == GameForm && gFormOpen)
+			SoundFrame(&gGame, 0);
 		if (n) {
 			t1 = TimGetTicks();
 			TimingTicks(t0, t1, n);
@@ -425,6 +478,7 @@ static void AppStart(void)
 #endif
 #endif
 	TimingInit(gDev.ticksPerSecond);
+	LoadPrefs();
 	ScreenInit(&gDev);
 	gQuit = gFormOpen = false;
 	gDirty = gFull = true;
@@ -433,6 +487,7 @@ static void AppStart(void)
 
 static void AppStop(void)
 {
+	SoundStop();
 	ViewClose();
 	FrmCloseAllForms();
 	ScreenExit();

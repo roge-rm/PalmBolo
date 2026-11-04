@@ -336,6 +336,7 @@ void SEC_PILLS bases_capture(GameState *s, uint8_t b, uint8_t player)
 		mb->mines = 0;
 	}
 	mb->owner = player;
+	g_sound(SND_BASE_CAPTURE, mb->x, mb->y, player);
 }
 
 static void SEC_PILLS restock(uint8_t *v, uint8_t full)

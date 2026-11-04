@@ -448,6 +448,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 		if (terrain == TERRAIN_FOREST && !isBase && !isPill) {
 			game_set_terrain(bmx, bmy, isMine ? TERRAIN_MINE_GRASS : TERRAIN_GRASS);
 			m->numTrees = R_LGM_GATHER_TREES;
+			g_sound(SND_FARM_TREE, bmx, bmy, GAME_NO_PLAYER);
 		}
 		break;
 	case LGM_ROAD:
@@ -456,6 +457,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 			game_set_terrain(bmx, bmy, isMine ? TERRAIN_MINE_ROAD : TERRAIN_ROAD);
 			m->numTrees = 0;
 			forget_damage(s, terrain, bmx, bmy);
+			g_sound(SND_MAN_BUILDING, bmx, bmy, GAME_NO_PLAYER);
 		}
 		break;
 	case LGM_BUILDING:
@@ -468,6 +470,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 				g_mine_exp(s, bmx, bmy);
 			m->numTrees = 0;
 			forget_damage(s, terrain, bmx, bmy);
+			g_sound(SND_MAN_BUILDING, bmx, bmy, GAME_NO_PLAYER);
 		}
 		break;
 	case LGM_BOAT:
@@ -486,6 +489,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 				game_set_terrain(bmx, bmy, (uint8_t)(terrain + TERRAIN_MINE_ADD));
 				g_mine_laid(s, bmx, bmy, player_of(s, t), 1);
 				m->numMines = 0;
+				g_sound(SND_LAY_MINE, bmx, bmy, GAME_NO_PLAYER);
 			}
 		}
 		break;
@@ -507,6 +511,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 					p->armour = (uint8_t)(a > R_PILL_MAX_ARMOUR ? R_PILL_MAX_ARMOUR : a);
 				}
 				m->numTrees = (uint8_t)(m->numTrees - used);
+				g_sound(SND_MAN_BUILDING, bmx, bmy, GAME_NO_PLAYER);
 			}
 		} else if (!isPill && !isBase && !g_mine_known(s, bmx, bmy) &&
 		    terrain != TERRAIN_BUILDING && terrain != TERRAIN_HALFBUILDING &&
@@ -519,6 +524,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 				g_mine_exp(s, bmx, bmy);
 				g_flood(s, bmx, bmy);
 				lgm_blast(s, (uint16_t)(((uint16_t)bmx << 8) + c), (uint16_t)(((uint16_t)bmy << 8) + c));
+				g_sound(SND_MINE_EXPLOSION, bmx, bmy, GAME_NO_PLAYER);
 				game_set_terrain(bmx, bmy, TERRAIN_CRATER);
 			} else {
 				// pillsSetPill: full armour, its old speed kept within the
@@ -539,6 +545,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 				p->inTank = 0;
 				p->justSeen = 0;
 				m->pill = LGM_NO_PILL;
+				g_sound(SND_MAN_BUILDING, bmx, bmy, GAME_NO_PLAYER);
 			}
 		}
 		forget_damage(s, terrain, bmx, bmy);
@@ -796,6 +803,7 @@ static void SEC_BUILDER kill(GameState *s, uint8_t t)
 	const Tank *k = &s->tanks[t];
 	uint8_t i, live = 0, x = 16, y = 16;
 
+	g_sound(SND_MAN_DYING, (uint8_t)(m->x >> 8), (uint8_t)(m->y >> 8), GAME_NO_PLAYER);
 	m->isDead = 1;
 	m->frame = LGM_HELICOPTER_FRAME;
 	m->numTrees = 0;

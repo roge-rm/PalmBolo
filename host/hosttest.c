@@ -183,12 +183,25 @@ static int count_forest(void)
 static int gForests[2], gManDied;
 
 // Facts after each script step.
+// Terrain one and two squares east of the tank after each step of the
+// boat wreck script.
+static uint8_t gWreck[9][2];
+// Sound events seen in a script, by kind (at most GAME_MAX_SOUNDS a step).
+static int gSounds[SND_KINDS];
+
 static void fact(const GameState *s, uint8_t n, uint8_t i, void *ctx)
 {
 	const Tank *k = &s->tanks[0];
 	uint8_t mx = k->x >> 8, my = k->y >> 8;
 
 	(void)ctx;
+	{
+		GameSound snd[GAME_MAX_SOUNDS];
+		uint8_t j, c = game_take_sounds(snd, GAME_MAX_SOUNDS);
+
+		for (j = 0; j < c; j++)
+			gSounds[snd[j].kind]++;
+	}
 	printf("  %d.%-2d t%-5u sq %3u,%3u+%3u,%3u %-12s spd %2d.%02d ang %6.3f arm %2u sh %2u mi %2u "
 		"boat %u dead %u/%u wait %3u shells %u expl %u@%u,%u mexp %u flood %u",
 		n, i, (unsigned)s->tick, mx, my, k->x & 255, k->y & 255,
@@ -229,6 +242,12 @@ static void fact(const GameState *s, uint8_t n, uint8_t i, void *ctx)
 			if (m->isDead)
 				gManDied = 1;
 		}
+		if (n == 25 && i < 9) {
+			gWreck[i][0] = game_terrain(mx + 1, my);
+			gWreck[i][1] = game_terrain(mx + 2, my);
+			printf("\n        wreck east 1 %s, 2 %s", terrain_name(gWreck[i][0]),
+				terrain_name(gWreck[i][1]));
+		}
 		printf("\n");
 	}
 }
@@ -253,6 +272,13 @@ static void after_script(const GameState *s, uint8_t n)
 	int b = gLastBase;
 
 	switch (n) {
+	case 25:
+		CHECK(gWreck[2][1] == TERRAIN_BOAT && gWreck[3][1] == TERRAIN_CRATER,
+			"boat wreck: small wreck craters the boat");
+		CHECK(gWreck[4][1] == TERRAIN_RIVER, "boat wreck: crater floods");
+		CHECK(gWreck[7][0] == TERRAIN_CRATER && gWreck[7][1] == TERRAIN_BOAT,
+			"boat wreck: big wreck spares the boat");
+		break;
 	case 9:
 		CHECK(b >= 0 && s->map.bases[b].owner == 0, "capture: base is the player's");
 		break;
@@ -318,6 +344,15 @@ static void after_script(const GameState *s, uint8_t n)
 	case 24:
 		CHECK(game_terrain((uint8_t)((k->x >> 8) - 2), (uint8_t)(k->y >> 8)) == TERRAIN_RIVER,
 			"flood: the crater by the river filled");
+		break;
+	case 26:
+		CHECK(k->destroyed, "mine wreck: the mine killed the tank");
+		break;
+	case 27:
+		// The wreck moves as neutral, so it stops west of its own base and
+		// craters there.
+		CHECK(game_terrain((uint8_t)((k->x >> 8) - 1), (uint8_t)(k->y >> 8)) == TERRAIN_CRATER,
+			"base wreck: stopped short of its own base");
 		break;
 	}
 }
@@ -440,6 +475,50 @@ static void winbolo_numbers(const uint8_t *ev, uint32_t len)
 	}
 }
 
+// Sounds the scripts must make.
+static void sound_checks(uint8_t n)
+{
+	switch (n) {
+	case 3:
+		CHECK(gSounds[SND_BUBBLES] > 0, "sound: bubbles wading");
+		break;
+	case 4:
+		CHECK(gSounds[SND_TANK_SINK] == 1, "sound: tank sinks");
+		break;
+	case 5:
+		CHECK(gSounds[SND_SHOOT] > 0 && gSounds[SND_SHOT_BUILDING] > 0,
+			"sound: shooting a building");
+		break;
+	case 7:
+		CHECK(gSounds[SND_LAY_MINE] > 0 && gSounds[SND_MINE_EXPLOSION] > 0, "sound: mines");
+		break;
+	case 9:
+		CHECK(gSounds[SND_BASE_CAPTURE] == 1, "sound: base captured");
+		break;
+	case 11:
+		CHECK(gSounds[SND_HIT_TANK] > 0 && gSounds[SND_SHOT_TREE] > 0,
+			"sound: tank hit by a pill, trees shot");
+		break;
+	case 15:
+		CHECK(gSounds[SND_FARM_TREE] > 0, "sound: tree cut");
+		break;
+	case 16:
+		CHECK(gSounds[SND_MAN_BUILDING] > 0, "sound: road built");
+		break;
+	case 22:
+		CHECK(gSounds[SND_MAN_DYING] == 1, "sound: builder dies");
+		break;
+	case 25:
+		CHECK(gSounds[SND_MINE_EXPLOSION] == 1 && gSounds[SND_BIG_EXPLOSION] == 1,
+			"sound: small and big wrecks");
+		break;
+	case 26:
+		// WinBolo quirk: a mine kill is always a big wreck.
+		CHECK(gSounds[SND_BIG_EXPLOSION] == 1, "sound: mine kill leaves a big wreck");
+		break;
+	}
+}
+
 static void scripts(const uint8_t *ev, uint32_t len)
 {
 	static GameState g;
@@ -455,7 +534,22 @@ static void scripts(const uint8_t *ev, uint32_t len)
 		printf("script %d %s\n", n, script_name(n));
 		gLastBase = -1;
 		gManDied = 0;
+		memset(gSounds, 0, sizeof(gSounds));
 		c = script_run(&g, n, fact, NULL);
+		{
+			static const char *names[SND_KINDS] = {
+				"shoot", "tree", "building", "hittank", "bubbles", "sink", "big",
+				"mine", "laymine", "farm", "build", "mandie", "capture"
+			};
+			int j;
+
+			printf("script %d sounds:", n);
+			for (j = 0; j < SND_KINDS; j++)
+				if (gSounds[j])
+					printf(" %s %d", names[j], gSounds[j]);
+			printf("\n");
+		}
+		sound_checks(n);
 		after_script(&g, n);
 		craters = count_terrain(TERRAIN_CRATER);
 		rubble = count_terrain(TERRAIN_RUBBLE);

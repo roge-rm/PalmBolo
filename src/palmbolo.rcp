@@ -21,6 +21,9 @@ END
 
 DATA "Mapd" ID EverardMapRes "../res/everard.map"
 
+// The art's bitmap families, made from res/art by tools/art2palm.py.
+#include "art.rcp"
+
 MENU ID MainMenu
 BEGIN
   PULLDOWN "Game"
@@ -31,6 +34,11 @@ BEGIN
     MENUITEM "Self-test" ID MainMenuSelfTest
 #endif
     MENUITEM "Quit" ID MainMenuQuit
+  END
+  PULLDOWN "Options"
+  BEGIN
+    MENUITEM "Sound on" ID MainMenuSoundOn
+    MENUITEM "Sound off" ID MainMenuSoundOff
   END
 END
 
@@ -55,5 +63,13 @@ ERROR
 BEGIN
   TITLE "Map"
   MESSAGE "^1: ^2^3"
+  BUTTONS "OK"
+END
+
+ALERT ID ViewAlert
+ERROR
+BEGIN
+  TITLE "PalmBolo"
+  MESSAGE "^1^2^3"
   BUTTONS "OK"
 END

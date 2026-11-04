@@ -1,13 +1,16 @@
-// Draws a .map file to a PNG with the placeholder tiles.
+// Draws a .map file to a PNG with the colour art, as the game shows it
+// before anyone owns anything: pills and bases neutral, no mines shown.
 // Usage: maprender FILE.map OUT.png [TILE_PIXELS [X Y W H]]
-// TILE_PIXELS is a multiple of 8 (default 8). X Y W H pick a part of the map
-// in tiles (default all 256 x 256).
+// TILE_PIXELS is 8 or 16 (default 8). X Y W H pick a part of the map in
+// tiles (default all 256 x 256). The art is read from ART_DIR (build/art),
+// made by tools/art2palm.py.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../src/game/map.h"
 #include "../src/game/mapstore.h"
-#include "../src/game/tiles.h"
+#include "tilepick.h"
+#include "art.h"
 
 static uint32_t crc_table[256];
 
@@ -101,36 +104,58 @@ static void write_png(const char *path, const uint8_t *rgb, int w, int h)
 	free(z);
 }
 
-static uint8_t *gImg;
-static int gW, gH, gTs, gX0, gY0;
+static uint8_t *gImg, *gArt;
+static int gW, gH, gTs, gX0, gY0, gArtW;
 
-// Draws tile index t (with a mine mark when mine) at map square (tx, ty).
-static void draw_tile(int tx, int ty, int t, int mine)
+// Loads ART_DIR/terrainN.rgb: width and height (16-bit little-endian), RGB.
+static void load_art(void)
 {
-	const TileDef *d = tile_def(t);
-	int s = gTs / 8, px, py, i;
+	char path[256];
+	uint8_t hdr[4];
+	FILE *f;
+	size_t n;
+
+	snprintf(path, sizeof path, "%s/terrain%d.rgb", ART_DIR, gTs);
+	f = fopen(path, "rb");
+	if (!f || fread(hdr, 1, 4, f) != 4) {
+		perror(path);
+		exit(1);
+	}
+	gArtW = hdr[0] | hdr[1] << 8;
+	n = (size_t)gArtW * (hdr[2] | hdr[3] << 8) * 3;
+	gArt = malloc(n);
+	if (fread(gArt, 1, n, f) != n) {
+		fprintf(stderr, "%s: short file\n", path);
+		exit(1);
+	}
+	fclose(f);
+}
+
+// Draws art cell c at map square (tx, ty).
+static void draw_tile(int tx, int ty, int c)
+{
+	int px, py, sx = (c % ART_COLS) * gTs, sy = (c / ART_COLS) * gTs;
 
 	for (py = 0; py < gTs; py++) {
 		for (px = 0; px < gTs; px++) {
-			int pat = (d->pat[py / s] >> (7 - px / s)) & 1;
-			const uint8_t *c = pat ? d->fg : d->bg;
-			uint8_t col[3];
-			int m = mine ? tile_mine_mark(px / s, py / s) : 0;
 			int ox = (tx - gX0) * gTs + px, oy = (ty - gY0) * gTs + py;
 
-			if (m == 1) {
-				col[0] = col[1] = col[2] = 255;
-			} else if (m == 2) {
-				col[0] = 200; col[1] = col[2] = 0;
-			} else {
-				memcpy(col, c, 3);
-			}
 			if (ox < 0 || oy < 0 || ox >= gW || oy >= gH)
 				continue;
-			for (i = 0; i < 3; i++)
-				gImg[((size_t)oy * gW + ox) * 3 + i] = col[i];
+			memcpy(gImg + ((size_t)oy * gW + ox) * 3,
+				gArt + ((size_t)(sy + py) * gArtW + sx + px) * 3, 3);
 		}
 	}
+}
+
+static int is_base(const MapInfo *m, int x, int y)
+{
+	int i;
+
+	for (i = 0; i < m->numBases; i++)
+		if (m->bases[i].x == (x & 255) && m->bases[i].y == (y & 255))
+			return 1;
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -148,10 +173,11 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	gTs = argc > 3 ? atoi(argv[3]) : 8;
-	if (gTs < 8 || gTs % 8) {
-		fprintf(stderr, "tile pixels must be a multiple of 8\n");
+	if (gTs != 8 && gTs != 16) {
+		fprintf(stderr, "tile pixels must be 8 or 16\n");
 		return 2;
 	}
+	load_art();
 	if (argc > 7) {
 		gX0 = atoi(argv[4]); gY0 = atoi(argv[5]);
 		w = atoi(argv[6]); h = atoi(argv[7]);
@@ -179,19 +205,31 @@ int main(int argc, char **argv)
 	gH = h * gTs;
 	gImg = malloc((size_t)gW * gH * 3);
 	for (y = gY0; y < gY0 + h && y < 256; y++) {
-		for (x = gX0; x < gX0 + w && x < 256; x++) {
-			uint8_t t = mapstore_get(x, y);
-			int mine = t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST;
+		const uint8_t *up = mapstore_row((uint8_t)(y - 1)), *row = mapstore_row((uint8_t)y);
+		const uint8_t *down = mapstore_row((uint8_t)(y + 1));
 
-			draw_tile(x, y, tile_for_terrain(mine ? t - TERRAIN_MINE_ADD : t), mine);
+		for (x = gX0; x < gX0 + w && x < 256; x++) {
+			uint8_t t = row[x], n[8];
+
+			if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST)
+				t = (uint8_t)(t - TERRAIN_MINE_ADD);
+			tile_neighbours(up, row, down, (uint8_t)x, n);
+			if (tile_bases_matter(t)) {
+				int k, dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1}, dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+
+				for (k = 0; k < 8; k++)
+					if (is_base(&info, x + dx[k], y + dy[k]))
+						n[k] = TERRAIN_ROAD;
+			}
+			draw_tile(x, y, tile_pick(t, n));
 		}
 	}
-	for (i = 0; i < info.numPills; i++)
-		draw_tile(info.pills[i].x, info.pills[i].y, TILE_PILL, 0);
-	for (i = 0; i < info.numBases; i++)
-		draw_tile(info.bases[i].x, info.bases[i].y, TILE_BASE, 0);
 	for (i = 0; i < info.numStarts; i++)
-		draw_tile(info.starts[i].x, info.starts[i].y, TILE_START, 0);
+		draw_tile(info.starts[i].x, info.starts[i].y, AT_START);
+	for (i = 0; i < info.numBases; i++)
+		draw_tile(info.bases[i].x, info.bases[i].y, AT_BASE_NEUTRAL);
+	for (i = 0; i < info.numPills; i++)
+		draw_tile(info.pills[i].x, info.pills[i].y, AT_PILL_ENEMY_0);
 	crc_init();
 	write_png(argv[2], gImg, gW, gH);
 	printf("%s: pills %d bases %d starts %d first start %d,%d\n", argv[1],

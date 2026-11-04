@@ -15,6 +15,7 @@ void SEC_SHELLS shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
 	int16_t dx, dy;
 	uint8_t i;
 
+	g_sound(SND_SHOOT, (uint8_t)(x >> 8), (uint8_t)(y >> 8), owner);
 	util_distance(&dx, &dy, angle, R_SHELL_SPEED);
 	x = (uint16_t)(x + R_SHELL_START_ADD * dx);
 	y = (uint16_t)(y + R_SHELL_START_ADD * dy);
@@ -85,11 +86,15 @@ static uint8_t SEC_SHELLS collide(GameState *s, const Shell *h, uint16_t *pwx, u
 		*pwx = (uint16_t)(((uint16_t)mx << 8) + 128U);
 		*pwy = (uint16_t)(((uint16_t)my << 8) + 128U);
 		pills_damage(s, (uint8_t)p, R_PILL_SHELL_DAMAGE);
+		g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
 		return 1;
 	}
-	for (i = 0; i < s->numTanks; i++)
-		if (s->tanks[i].player != h->owner && tank_shell_hit(s, i, wx, wy, h->angle))
+	for (i = 0; i < s->numTanks; i++) {
+		if (s->tanks[i].player != h->owner && tank_shell_hit(s, i, wx, wy, h->angle)) {
+			g_sound(SND_HIT_TANK, mx, my, s->tanks[i].player);
 			return 2;
+		}
+	}
 	b = g_base_at(s, mx, my);
 	if (b >= 0) {
 		uint8_t hit = bases_can_hit(s, (uint8_t)b, h->owner);
@@ -102,6 +107,7 @@ static uint8_t SEC_SHELLS collide(GameState *s, const Shell *h, uint16_t *pwx, u
 			bases_damage(s, (uint8_t)b);
 			pills_base_hit(s, (uint8_t)b);
 		}
+		g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
 		return 1;
 	}
 	if (passable(mapstore_get(mx, my), h->onBoat))
@@ -117,12 +123,15 @@ static uint8_t SEC_SHELLS collide(GameState *s, const Shell *h, uint16_t *pwx, u
 	case TERRAIN_BUILDING:
 	case TERRAIN_HALFBUILDING:
 		game_set_terrain(mx, my, g_damage(s, DMG_BUILDING, mx, my));
+		g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
 		break;
 	case TERRAIN_FOREST:
 		game_set_terrain(mx, my, mine ? TERRAIN_MINE_GRASS : TERRAIN_GRASS);
+		g_sound(SND_SHOT_TREE, mx, my, GAME_NO_PLAYER);
 		break;
 	case TERRAIN_BOAT:
 		game_set_terrain(mx, my, TERRAIN_RIVER);
+		g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
 		break;
 	case TERRAIN_GRASS:
 	case TERRAIN_SWAMP:
@@ -136,8 +145,12 @@ static uint8_t SEC_SHELLS collide(GameState *s, const Shell *h, uint16_t *pwx, u
 			g_flood(s, mx, my);
 		break;
 	case TERRAIN_ROAD:
-		if (!mine)
-			game_set_terrain(mx, my, check_road(s, mx, my, h->angle));
+		if (!mine) {
+			nt = check_road(s, mx, my, h->angle);
+			game_set_terrain(mx, my, nt);
+			if (nt == TERRAIN_RIVER)
+				g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
+		}
 		break;
 	}
 	return 1;

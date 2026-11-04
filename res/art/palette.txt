@@ -1,0 +1,80 @@
+# Materials of the art sheets. The PNGs in this folder are indexed: each
+# pixel's palette index is a row here, and the PNG palette holds the colour
+# column so the sheets look right in an image editor.
+#
+# Columns: index, name, colour (R G B, for 8-bit screens; Palm's 8-bit
+# palette is the web-safe cube plus a few greys, so multiples of 0x33 come
+# out exact), grey on 16-grey screens (0 white to 15 black), grey on 4-grey
+# screens (0 to 3), and 1-bit: 0 white, 1 black, c checker, d a black dot
+# every other pixel on every other row, D the same in white on black.
+#
+# Colour follows WinBolo: dark ground, teal water, brown buildings. Grey and
+# 1-bit screens use a light ground instead, which reads better on Palm LCDs.
+#
+# idx name          R   G   B   g16 g4 mono
+0   clear          255   0 255   0  0  0
+1   outline          0   0   0  15  3  1
+2   white          255 255 255   0  0  0
+3   grass            0  51   0   0  0  0
+4   grass_f          0 102  51   5  1  1
+5   grass_f2        51 153  51   3  1  0
+6   forest           0 102   0   8  2  c
+7   forest_hi       51 153  51   4  1  0
+8   forest_sh        0  17   0  13  3  1
+9   swamp            0  51  51   1  0  0
+10  swamp_water      0 102 102   5  1  c
+11  swamp_reed     102 153  51  10  2  1
+12  dirt           102  51   0   3  1  d
+13  dirt_hi        153 102  51   1  0  0
+14  hole            51   0   0  11  3  1
+15  road            34  34  34  11  2  1
+16  road_line      204 204 204   0  0  0
+17  kerb           119 119 119  15  3  1
+18  rail           170 170 170   3  1  0
+19  rail_post       85  85  85  12  3  1
+20  bld_roof       153 102  51   6  1  1
+21  bld_roof2      204 153 102   4  1  0
+22  bld_hi         255 204 153   0  0  0
+23  bld_sh         102  51   0  10  2  1
+24  bld_line        51   0   0  15  3  1
+25  river            0 153 153   4  1  d
+26  river_hi        51 204 204   1  0  0
+27  river_dark       0 102 102   9  2  1
+28  deep             0  51 153   8  2  c
+29  deep_hi          0 102 204   5  1  0
+30  boat           153 102  51   6  2  0
+31  boat_hi        204 153 102   3  1  0
+32  concrete       153 153 153   4  1  0
+33  concrete_hi    204 204 204   1  0  0
+34  concrete_sh    102 102 102   9  2  1
+35  own              0 204   0   0  0  0
+36  own_sh           0 102   0   5  1  1
+37  ally             0 153 255   6  1  c
+38  ally_sh          0 102 204   9  2  1
+39  enemy          255   0   0  13  3  1
+40  enemy_sh       153   0   0  15  3  1
+41  tread           51  51  51  12  3  1
+42  tread_hi       153 153 153   7  2  0
+43  tank_own       238 238 238   0  0  0
+44  tank_own_sh    170 170 170   7  2  1
+45  tank_ally        0 153 255   5  1  c
+46  tank_ally_sh     0 102 204  10  3  1
+47  tank_enemy     255   0   0  13  3  1
+48  tank_enemy_sh  153   0   0   4  1  0
+49  barrel         187 187 187   3  1  0
+50  man_skin       255 204 153   1  0  0
+51  man_suit       255 153   0   9  2  1
+52  para_a         255 255 255   0  0  0
+53  para_b         255  51  51   8  2  1
+54  shell          255 255 153   0  0  0
+55  expl_w         255 255 204   0  0  0
+56  expl_y         255 204   0   2  0  0
+57  expl_o         255 102   0   6  1  c
+58  expl_r         204   0   0  10  2  1
+59  smoke          102 102 102   8  2  c
+60  smoke_d         51  51  51  12  3  1
+61  mine_body       51  51  51  12  3  1
+62  mine_hi        255 204   0   2  0  0
+63  start          255 204   0   2  0  0
+64  sel           255 204   0   3  1  d
+65  icon_own       0 204   0  10  3  1
