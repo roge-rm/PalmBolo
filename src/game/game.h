@@ -6,6 +6,7 @@
 #define GAME_H
 
 #include <stdint.h>
+#include "map.h"
 
 #define GAME_TICKS_PER_SECOND 50
 
@@ -14,6 +15,7 @@ typedef struct GameState {
 	uint32_t tick;      // game ticks run so far
 	uint32_t inputSum;  // running sum of all inputs, to prove they are used
 	int16_t x, y;       // stub position moved by the inputs
+	MapInfo map;        // pills, bases and starts of the loaded map
 } GameState;
 
 // Sets up a new game. A seed of 0 is replaced so the generator never sticks.

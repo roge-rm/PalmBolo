@@ -9,9 +9,19 @@ static Boolean gFormOpen;
 static Boolean gDirty;
 static Boolean gMenuOpen;   // no drawing while a menu is showing
 static Boolean gFull;       // next draw repaints everything
+static UInt16 gForm;        // the form on screen, 0 before the first
+static Char gNames[kMaxMaps][kMapNameLen];
+static Char *gNamePtrs[kMaxMaps];
+static UInt16 gNumMaps;
+#ifdef DEBUG
+static Boolean gTimedFull;
+#endif
 
 // Hardware buttons the game uses. They are consumed so they don't launch
 // other applications.
+#define vchrNavChange   0x0503   // 5-way on palmOne devices
+#define navBitSelect    0x0010
+
 static Boolean IsGameKey(WChar chr)
 {
 	switch (chr) {
@@ -19,6 +29,7 @@ static Boolean IsGameKey(WChar chr)
 	case vchrPageUp: case vchrPageDown:
 	case vchrRockerUp: case vchrRockerDown: case vchrRockerLeft:
 	case vchrRockerRight: case vchrRockerCenter:
+	case vchrNavChange:
 		return true;
 	}
 	return false;
@@ -36,6 +47,10 @@ static Boolean HandleMenu(UInt16 id)
 	case MainMenuAbout:
 		ShowAbout();
 		return true;
+	case MainMenuMaps:
+		if (gForm == GameForm)
+			FrmGotoForm(MapListForm);
+		return true;
 	case MainMenuQuit: {
 		EventType e;
 
@@ -48,14 +63,93 @@ static Boolean HandleMenu(UInt16 id)
 	return false;
 }
 
+void AppOpenMap(UInt16 index, const Char *name)
+{
+	Int16 err = MapLoad(index, name, &gGame);
+
+	if (err != MAP_OK) {
+		LOG(("map %s: error %d", name, err));
+		FrmCustomAlert(MapErrorAlert, name,
+			err < 0 ? "Can't open it." : map_error_text(err), "");
+		return;
+	}
+	LOG(("map %s: pills %d bases %d starts %d", name, (Int16)gGame.map.numPills,
+		(Int16)gGame.map.numBases, (Int16)gGame.map.numStarts));
+	FrmGotoForm(GameForm);
+}
+
+static Boolean MapListHandler(EventType *e)
+{
+	FormType *frm = FrmGetActiveForm();
+
+	switch (e->eType) {
+	case frmOpenEvent: {
+		ListType *lst = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, MapList));
+		UInt16 i;
+
+		gNumMaps = MapListBuild(gNames);
+		for (i = 0; i < gNumMaps; i++)
+			gNamePtrs[i] = gNames[i];
+		LstSetListChoices(lst, gNamePtrs, gNumMaps);
+		LstSetSelection(lst, 0);
+		FrmDrawForm(frm);
+		gFormOpen = true;
+		return true;
+	}
+	case lstSelectEvent:
+		if (e->data.lstSelect.selection < gNumMaps)
+			AppOpenMap(e->data.lstSelect.selection,
+				gNames[e->data.lstSelect.selection]);
+		return true;
+	case frmCloseEvent:
+		gFormOpen = false;
+		return false;
+	default:
+		break;
+	}
+	return false;
+}
+
+static Boolean GameHandler(EventType *e)
+{
+	switch (e->eType) {
+	case frmOpenEvent:
+		FrmDrawForm(FrmGetActiveForm());
+		ViewOpen(&gDev, &gGame);
+		gFormOpen = true;
+		gDirty = gFull = true;
+		return true;
+	case frmCloseEvent:
+		gFormOpen = false;
+		ViewClose();
+		return false;
+	default:
+		break;
+	}
+	return false;
+}
+
 // Returns true when the event was dealt with.
 static Boolean HandleEvent(EventType *e)
 {
 	UInt16 err;
 	FormType *frm;
 
-	if (e->eType == keyDownEvent && IsGameKey(e->data.keyDown.chr))
-		return true;
+	if (e->eType == keyDownEvent) {
+		WChar c = e->data.keyDown.chr;
+
+		if (!(e->data.keyDown.modifiers & autoRepeatKeyMask))
+			LOG(("key chr %x code %x mods %x", (UInt16)c, e->data.keyDown.keyCode,
+				e->data.keyDown.modifiers));
+		// The 5-way centre goes back to the map list.
+		if (gForm == GameForm && (c == vchrRockerCenter ||
+		    (c == vchrNavChange && (e->data.keyDown.keyCode & navBitSelect)))) {
+			FrmGotoForm(MapListForm);
+			return true;
+		}
+		if (IsGameKey(c))
+			return true;
+	}
 	// A tap or a chosen item closes the menu, and the screen is repainted.
 	if (gMenuOpen && (e->eType == penDownEvent || e->eType == menuEvent)) {
 		gMenuOpen = false;
@@ -71,14 +165,17 @@ static Boolean HandleEvent(EventType *e)
 		gQuit = true;
 		return true;
 	case frmLoadEvent:
-		frm = FrmInitForm(e->data.frmLoad.formID);
+		gForm = e->data.frmLoad.formID;
+		frm = FrmInitForm(gForm);
 		FrmSetActiveForm(frm);
+		FrmSetEventHandler(frm, gForm == GameForm ? GameHandler : MapListHandler);
 		return true;
-	case frmOpenEvent:
-		FrmDrawForm(FrmGetActiveForm());
-		gFormOpen = true;
-		gDirty = gFull = true;
-		return true;
+	case winDisplayChangedEvent:
+		if (gForm == GameForm) {
+			ViewResized();
+			gDirty = gFull = true;
+		}
+		return false;
 	case menuOpenEvent:
 		gMenuOpen = true;
 		break;
@@ -148,22 +245,21 @@ static void EventLoop(void)
 		if (n) {
 			t1 = TimGetTicks();
 			TimingTicks(t0, t1, n);
-			gDirty = true;
 		}
 
 		// A menu or alert is on top, so leave the screen alone.
-		if (gDirty && gFormOpen && !gQuit && !gMenuOpen &&
+		if (gForm == GameForm && gFormOpen && !gQuit && !gMenuOpen &&
 		    WinGetActiveWindow() == FrmGetWindowHandle(FrmGetActiveForm())) {
 			Boolean full = gFull;
 
-			gDirty = false;
-			t0 = TimGetTicks();
-			ScreenDraw(&gDev, gGame.tick, game_checksum(&gGame), full);
-			gFull = false;
-			t1 = TimGetTicks();
-			TimingDraw(t0, t1);
-			if (full)
-				LOG(("full draw %lu ticks", t1 - t0));
+			gFull = gDirty = false;
+			ViewFrame(full);
+#ifdef DEBUG
+			if (full && !gTimedFull) {
+				gTimedFull = true;
+				ViewTimeFull(8);
+			}
+#endif
 		}
 		TimingMaybeLog();
 	}
@@ -183,11 +279,12 @@ static void AppStart(void)
 	game_init(&gGame, 12345);
 	gQuit = gFormOpen = false;
 	gDirty = gFull = true;
-	FrmGotoForm(MainForm);
+	FrmGotoForm(MapListForm);
 }
 
 static void AppStop(void)
 {
+	ViewClose();
 	FrmCloseAllForms();
 	ScreenExit();
 	LOG(("stop tick %lu", gGame.tick));

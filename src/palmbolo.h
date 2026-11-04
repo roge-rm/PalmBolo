@@ -5,6 +5,8 @@
 
 #include <PalmOS.h>
 
+struct GameState;
+
 // Goes in front of a function to put it in the second code segment. Each
 // segment must stay under 32 KB.
 #ifndef SEC_DETECT
@@ -69,7 +71,39 @@ void TimingMaybeLog(void);
 // restores them.
 void ScreenInit(const DeviceInfo *d);
 void ScreenExit(void);
-// Draws the test screen: everything when full, else only what changed.
-void ScreenDraw(const DeviceInfo *d, UInt32 tick, UInt32 checksum, Boolean full);
+Boolean ScreenHiRes(void);      // drawing in native (double density) pixels
+Boolean ScreenNewWin(void);     // OS 3.5 or later
+UInt16 ScreenDepth(void);
+// Palette index closest to a colour. Before OS 3.5: 0 white, 1 black.
+IndexedColorType ScreenIndex(UInt8 r, UInt8 g, UInt8 b);
+
+// Maps. Index 0 of the list is Everard Island, built into the app, then
+// the databases of type Map, creator Rmrf.
+#define kMapType        'Map '
+#define kMapCreator     'Rmrf'
+#define kMapResType     'Mapd'
+#define kMapNameLen     32
+#define kMaxMaps        24
+// Fills names with the map names and returns how many (at most kMaxMaps).
+UInt16 MapListBuild(Char names[][kMapNameLen]);
+// Loads map number index of the list (name is its name) into the game.
+// Returns a map error code (MAP_OK is 0), or -1 when it can't be opened.
+Int16 MapLoad(UInt16 index, const Char *name, struct GameState *game);
+
+// Tile view. ViewOpen sizes the view to the window and centres it on the
+// first start, ViewClose gives back the input area. ViewFrame scrolls by
+// the held keys and draws what changed, or everything when full.
+void ViewOpen(const DeviceInfo *d, const struct GameState *game);
+void ViewClose(void);
+void ViewResized(void);
+void ViewFrame(Boolean full);
+Boolean ViewSetInputArea(Boolean closed);
+#ifdef DEBUG
+// Draws the whole view count times and logs the average time.
+void ViewTimeFull(UInt16 count);
+#endif
+
+// Called by the map list when a map is chosen.
+void AppOpenMap(UInt16 index, const Char *name);
 
 #endif

@@ -2,6 +2,7 @@
 #   make             release PRC
 #   make DEBUG=1     adds the debug log, timers and self-test (build-debug/)
 #   make host-test   builds and runs the game rules test on the host
+#   make build/maprender   host tool: maprender FILE.map OUT.png [TILE_PX [X Y W H]]
 # EXTRA="-DAUTOQUIT_SECONDS=9" makes a debug build quit by itself.
 
 SDK      = ../palm-os-sdk/sdk-5r3
@@ -20,18 +21,19 @@ INCLUDES = $(addprefix -I,$(shell find $(SDK)/include -type d))
 CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES)
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
-SRCS     = main screen detect dlog timing
-OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) game))
+SRCS     = main screen detect dlog timing mapload mapstore_palm tileview
+GAMESRCS = game map tiles
+OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS)))
 
 all: build/$(PRC)
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: src/%.c src/palmbolo.h src/resource.h src/game/game.h | $(BUILD)
+$(BUILD)/%.o: src/%.c src/palmbolo.h src/resource.h src/game/*.h | $(BUILD)
 	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/game.o: src/game/game.c src/game/game.h | $(BUILD)
+$(addprefix $(BUILD)/,$(addsuffix .o,$(GAMESRCS))): $(BUILD)/%.o: src/game/%.c src/game/*.h | $(BUILD)
 	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/palmbolo-sections.s $(BUILD)/palmbolo-sections.ld: src/palmbolo.def | $(BUILD)
@@ -43,7 +45,7 @@ $(BUILD)/palmbolo-sections.o: $(BUILD)/palmbolo-sections.s
 $(BUILD)/palmbolo: $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld
 	$(CC) $(LDFLAGS) $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld -o $@
 
-$(BUILD)/palmbolo.ro: src/palmbolo.rcp src/resource.h res/icon.bmp res/smallicon.bmp | $(BUILD)
+$(BUILD)/palmbolo.ro: src/palmbolo.rcp src/resource.h res/icon.bmp res/smallicon.bmp res/everard.map | $(BUILD)
 	pilrc -q -ro -I src src/palmbolo.rcp $@
 
 # The PRC is always written to build/PalmBolo.prc, so build one flavour at a time.
@@ -53,8 +55,13 @@ build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
 host-test: build/hosttest
 	build/hosttest
 
-build/hosttest: host/hosttest.c src/game/game.c src/game/game.h | $(BUILD)
-	gcc -Wall -Wextra -O2 host/hosttest.c src/game/game.c -o $@
+HOSTSRC  = src/game/game.c src/game/map.c src/game/tiles.c host/mapstore_host.c
+
+build/hosttest: host/hosttest.c $(HOSTSRC) src/game/*.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) -o $@
+
+build/maprender: host/maprender.c $(HOSTSRC) src/game/*.h | $(BUILD)
+	gcc -Wall -Wextra -O2 host/maprender.c $(HOSTSRC) -o $@
 
 clean:
 	rm -rf build

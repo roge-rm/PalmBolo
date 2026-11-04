@@ -2,11 +2,15 @@
 
 void game_init(GameState *s, uint32_t seed)
 {
+	uint16_t i;
+
 	s->rng = seed ? seed : 1;
 	s->tick = 0;
 	s->inputSum = 0;
 	s->x = 0;
 	s->y = 0;
+	for (i = 0; i < sizeof(s->map); i++)
+		((uint8_t *)&s->map)[i] = 0;
 }
 
 // xorshift32

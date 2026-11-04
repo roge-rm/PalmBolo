@@ -4,17 +4,28 @@ VERSION ID 1 "0.1"
 ICON "../res/icon.bmp"
 SMALLICON "../res/smallicon.bmp"
 
-FORM ID MainForm AT (0 0 160 160)
+FORM ID MapListForm AT (0 0 160 160)
+USABLE
+MENUID MainMenu
+BEGIN
+  TITLE "PalmBolo maps"
+  LIST "" ID MapList AT (2 18 156 140) VISIBLEITEMS 12
+END
+
+FORM ID GameForm AT (0 0 160 160)
 NOFRAME
 USABLE
 MENUID MainMenu
 BEGIN
 END
 
+DATA "Mapd" ID EverardMapRes "../res/everard.map"
+
 MENU ID MainMenu
 BEGIN
   PULLDOWN "Game"
   BEGIN
+    MENUITEM "Map list" ID MainMenuMaps
     MENUITEM "About PalmBolo" ID MainMenuAbout
     MENUITEM "Quit" ID MainMenuQuit
   END
@@ -33,5 +44,13 @@ ERROR
 BEGIN
   TITLE "System Incompatible"
   MESSAGE "PalmBolo needs Palm OS 3.0 or later."
+  BUTTONS "OK"
+END
+
+ALERT ID MapErrorAlert
+ERROR
+BEGIN
+  TITLE "Map"
+  MESSAGE "^1: ^2^3"
   BUTTONS "OK"
 END

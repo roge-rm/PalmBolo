@@ -1,0 +1,33 @@
+# PalmBolo milestone 2 on the TX. Times are ms after launch and settle.
+# Opens Everard Island (first item), scrolls right then down, goes back to
+# the list, opens the third item (Big island, three records) and scrolls with
+# the 5-way down, then opens Islando and scrolls left and up.
+0 snapshot "list.png"
+500 pen-down 100 48
+600 pen-up
+2500 snapshot "everard-before.png"
+2600 key-down hard4
+4100 key-up hard4
+4300 snapshot "everard-after-right.png"
+4400 key-down hard3
+5900 key-up hard3
+6100 snapshot "everard-after-down.png"
+6200 key-down center
+6300 key-up center
+7500 snapshot "list2.png"
+7700 pen-down 100 92
+7800 pen-up
+9500 snapshot "map2-before.png"
+9600 key-down down
+11100 key-up down
+11300 snapshot "map2-after.png"
+11400 key-down center
+11500 key-up center
+12700 pen-down 100 70
+12800 pen-up
+14500 snapshot "map3-before.png"
+14600 key-down hard1
+15600 key-up hard1
+15700 key-down hard2
+16700 key-up hard2
+16900 snapshot "map3-after.png"
