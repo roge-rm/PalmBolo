@@ -8,12 +8,12 @@
 #include "mapstore.h"
 #include "util.h"
 
-static uint16_t SEC_RULES abs_diff(uint16_t a, uint16_t b)
+static uint16_t SEC_PILLS abs_diff(uint16_t a, uint16_t b)
 {
 	return a > b ? (uint16_t)(a - b) : (uint16_t)(b - a);
 }
 
-static uint8_t SEC_RULES is_forest(const GameState *s, uint8_t x, uint8_t y)
+static uint8_t SEC_PILLS is_forest(const GameState *s, uint8_t x, uint8_t y)
 {
 	uint8_t t = game_terrain(x, y);
 
@@ -23,7 +23,7 @@ static uint8_t SEC_RULES is_forest(const GameState *s, uint8_t x, uint8_t y)
 
 // utilIsTankInTrees: the tank's square and the three beside it towards the
 // quarter of the square it is in are all forest.
-static uint8_t SEC_RULES in_trees(const GameState *s, uint16_t wx, uint16_t wy)
+static uint8_t SEC_PILLS in_trees(const GameState *s, uint16_t wx, uint16_t wy)
 {
 	uint8_t mx = (uint8_t)(wx >> 8), my = (uint8_t)(wy >> 8);
 	uint8_t nx = (uint8_t)((wx & 0xFF) >= 128 ? mx + 1 : mx - 1);
@@ -34,7 +34,7 @@ static uint8_t SEC_RULES in_trees(const GameState *s, uint16_t wx, uint16_t wy)
 }
 
 // mapGetSpeed and the boat rules for the aim's guess at where the tank goes.
-static uint8_t SEC_RULES aim_can_move(const GameState *s, uint8_t x, uint8_t y, const Tank *k, uint8_t speed)
+static uint8_t SEC_PILLS aim_can_move(const GameState *s, uint8_t x, uint8_t y, const Tank *k, uint8_t speed)
 {
 	if (g_speed_at(s, x, y, k->boat, k->player) == 0)
 		return 0;
@@ -46,7 +46,7 @@ static uint8_t SEC_RULES aim_can_move(const GameState *s, uint8_t x, uint8_t y, 
 // hit radius, up to 200 steps. WinBolo hands the solver the tank's 16-way
 // direction (0..15) where it reads an angle in bradians, so the tank is
 // walked almost due north; that is kept as it is.
-static uint16_t SEC_RULES aim(const GameState *s, uint16_t px, uint16_t py, const Tank *k)
+static uint16_t SEC_PILLS aim(const GameState *s, uint16_t px, uint16_t py, const Tank *k)
 {
 	uint8_t speed = (uint8_t)(k->speed >> 2), count = 1, found = 0;
 	uint16_t tx = k->x, ty = k->y, est, sx, sy, r = 0;
@@ -88,7 +88,7 @@ static uint16_t SEC_RULES aim(const GameState *s, uint16_t px, uint16_t py, cons
 }
 
 // Being hit or seeing a base hit: fire faster for a while.
-static void SEC_RULES anger(MapPill *p)
+static void SEC_PILLS anger(MapPill *p)
 {
 	p->coolDown = R_PILL_COOLDOWN;
 	if (p->speed > R_PILL_ATTACK_MIN) {
@@ -99,7 +99,7 @@ static void SEC_RULES anger(MapPill *p)
 }
 
 // pillsUpdate.
-void SEC_RULES pills_update(GameState *s)
+void SEC_PILLS pills_update(GameState *s)
 {
 	uint8_t i, t;
 
@@ -156,7 +156,7 @@ void SEC_RULES pills_update(GameState *s)
 }
 
 // pillsDamagePos.
-void SEC_RULES pills_damage(GameState *s, uint8_t i, uint8_t amount)
+void SEC_PILLS pills_damage(GameState *s, uint8_t i, uint8_t amount)
 {
 	MapPill *p = &s->map.pills[i];
 
@@ -166,7 +166,7 @@ void SEC_RULES pills_damage(GameState *s, uint8_t i, uint8_t amount)
 }
 
 // pillsBaseHit: pills of the base's side near it get angry.
-void SEC_RULES pills_base_hit(GameState *s, uint8_t b)
+void SEC_PILLS pills_base_hit(GameState *s, uint8_t b)
 {
 	const MapBase *mb = &s->map.bases[b];
 	uint8_t i;
@@ -184,7 +184,7 @@ void SEC_RULES pills_base_hit(GameState *s, uint8_t b)
 
 // tankCheckPillCapture: a dead pill under the tank's middle, or 16 world
 // units out from it on either axis, goes in the tank.
-void SEC_RULES pills_pickup(GameState *s, uint8_t t)
+void SEC_PILLS pills_pickup(GameState *s, uint8_t t)
 {
 	Tank *k = &s->tanks[t];
 	int8_t ox, oy;
@@ -211,7 +211,7 @@ void SEC_RULES pills_pickup(GameState *s, uint8_t t)
 }
 
 // pillsDropCanLand.
-static uint8_t SEC_RULES can_land(const GameState *s, uint8_t x, uint8_t y)
+static uint8_t SEC_PILLS can_land(const GameState *s, uint8_t x, uint8_t y)
 {
 	uint8_t t;
 
@@ -223,14 +223,12 @@ static uint8_t SEC_RULES can_land(const GameState *s, uint8_t x, uint8_t y)
 	return t != TERRAIN_BUILDING && t != TERRAIN_HALFBUILDING && t != TERRAIN_BOAT;
 }
 
-// tankDropPills: a dead tank's pills land dead on the nearest free squares,
-// searched in a square spiral from its own (pillsDropSpiral*), newest pill
-// first.
-void SEC_RULES pills_drop(GameState *s, uint8_t t)
+// pillsDropSpiral: puts a pill down dead on the nearest free square to
+// cx, cy, searched in a square spiral out to the mined border.
+uint8_t SEC_PILLS pills_drop_one(GameState *s, uint8_t pill, uint8_t cx, uint8_t cy, uint8_t owner)
 {
-	Tank *k = &s->tanks[t];
-	uint8_t cx = (uint8_t)(k->x >> 8), cy = (uint8_t)(k->y >> 8);
 	int16_t x = cx, y = cy, maxRing, m;
+	MapPill *p;
 
 	maxRing = (int16_t)(cx - (MAP_EDGE_LOW + 1));
 	m = (int16_t)((MAP_EDGE_HIGH - 1) - cx);
@@ -242,45 +240,54 @@ void SEC_RULES pills_drop(GameState *s, uint8_t t)
 	m = (int16_t)((MAP_EDGE_HIGH - 1) - cy);
 	if (m > maxRing)
 		maxRing = m;
-	while (k->numCarry > 0) {
-		int16_t dx, dy, ring;
-		MapPill *p;
-		uint8_t j;
+	for (;;) {
+		int16_t dx = (int16_t)(x - cx), dy = (int16_t)(y - cy), ring;
 
-		for (;;) {
-			dx = (int16_t)(x - cx);
-			dy = (int16_t)(y - cy);
-			ring = (int16_t)((dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy) ?
-				(dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy));
-			if (ring > maxRing)
-				return;
-			if (can_land(s, (uint8_t)x, (uint8_t)y))
-				break;
-			if (ring == 0)
+		ring = (int16_t)((dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy) ?
+			(dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy));
+		if (ring > maxRing)
+			return 0;
+		if (can_land(s, (uint8_t)x, (uint8_t)y))
+			break;
+		if (ring == 0)
+			y--;
+		else if (dy == -ring && dx < 0) {
+			x++;
+			if (x == cx)
 				y--;
-			else if (dy == -ring && dx < 0) {
-				x++;
-				if (x == cx)
-					y--;
-			} else if (dx == -ring)
-				y--;
-			else if (dy == ring)
-				x--;
-			else if (dx == ring)
-				y++;
-			else
-				x++;
-		}
-		p = &s->map.pills[k->carry[0]];
-		p->x = (uint8_t)x;
-		p->y = (uint8_t)y;
-		p->armour = 0;
-		p->owner = k->player;
-		p->speed = R_PILL_ATTACK_NORMAL;
-		p->reload = R_PILL_ATTACK_NORMAL;
-		p->coolDown = 0;
-		p->justSeen = 0;
-		p->inTank = 0;
+		} else if (dx == -ring)
+			y--;
+		else if (dy == ring)
+			x--;
+		else if (dx == ring)
+			y++;
+		else
+			x++;
+	}
+	p = &s->map.pills[pill];
+	p->x = (uint8_t)x;
+	p->y = (uint8_t)y;
+	p->armour = 0;
+	p->owner = owner;
+	p->speed = R_PILL_ATTACK_NORMAL;
+	p->reload = R_PILL_ATTACK_NORMAL;
+	p->coolDown = 0;
+	p->justSeen = 0;
+	p->inTank = 0;
+	return 1;
+}
+
+// tankDropPills: a dead tank's pills land dead on the nearest free squares
+// to it, newest pill first. Each search starts again from the middle,
+// which finds the same squares as carrying on would.
+void SEC_PILLS pills_drop(GameState *s, uint8_t t)
+{
+	Tank *k = &s->tanks[t];
+	uint8_t cx = (uint8_t)(k->x >> 8), cy = (uint8_t)(k->y >> 8), j;
+
+	while (k->numCarry > 0) {
+		if (!pills_drop_one(s, k->carry[0], cx, cy, k->player))
+			return;
 		for (j = 0; j + 1 < k->numCarry; j++)
 			k->carry[j] = k->carry[j + 1];
 		k->numCarry--;
@@ -288,7 +295,7 @@ void SEC_RULES pills_drop(GameState *s, uint8_t t)
 }
 
 // basesCantDrive: a base held by someone else with armour left is solid.
-uint8_t SEC_RULES bases_cant_drive(const GameState *s, uint8_t b, uint8_t player)
+uint8_t SEC_PILLS bases_cant_drive(const GameState *s, uint8_t b, uint8_t player)
 {
 	const MapBase *mb = &s->map.bases[b];
 
@@ -297,7 +304,7 @@ uint8_t SEC_RULES bases_cant_drive(const GameState *s, uint8_t b, uint8_t player
 }
 
 // basesCanHit: shells from a player hit bases of other sides with armour.
-uint8_t SEC_RULES bases_can_hit(const GameState *s, uint8_t b, uint8_t hitBy)
+uint8_t SEC_PILLS bases_can_hit(const GameState *s, uint8_t b, uint8_t hitBy)
 {
 	const MapBase *mb = &s->map.bases[b];
 
@@ -305,7 +312,7 @@ uint8_t SEC_RULES bases_can_hit(const GameState *s, uint8_t b, uint8_t hitBy)
 		!game_allied(s, mb->owner, hitBy) && mb->armour > R_BASE_HIT_ARMOUR;
 }
 
-void SEC_RULES bases_damage(GameState *s, uint8_t b)
+void SEC_PILLS bases_damage(GameState *s, uint8_t b)
 {
 	MapBase *mb = &s->map.bases[b];
 
@@ -315,7 +322,7 @@ void SEC_RULES bases_damage(GameState *s, uint8_t b)
 // The capture half of tankMoveUnified with basesSetOwner: a neutral or
 // worn-out base of another side becomes the player's, and one taken from
 // a player is emptied.
-void SEC_RULES bases_capture(GameState *s, uint8_t b, uint8_t player)
+void SEC_PILLS bases_capture(GameState *s, uint8_t b, uint8_t player)
 {
 	MapBase *mb = &s->map.bases[b];
 
@@ -331,7 +338,7 @@ void SEC_RULES bases_capture(GameState *s, uint8_t b, uint8_t player)
 	mb->owner = player;
 }
 
-static void SEC_RULES restock(uint8_t *v, uint8_t full)
+static void SEC_PILLS restock(uint8_t *v, uint8_t full)
 {
 	if (*v < full)
 		(*v)++;
@@ -341,7 +348,7 @@ static void SEC_RULES restock(uint8_t *v, uint8_t full)
 // restock timer; when one runs out every base gains one of each. Then a
 // base gives a tank of its side on it armour, then shells, then mines, one
 // helping at a time.
-void SEC_RULES bases_update(GameState *s)
+void SEC_PILLS bases_update(GameState *s)
 {
 	uint8_t i, t;
 

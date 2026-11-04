@@ -17,6 +17,8 @@ static Char *gNamePtrs[kMaxMaps];
 static UInt16 gNumMaps;
 static UInt8 gFire;         // ticks of fire left from a 5-way centre press
 static Int8 gSight;         // gunsight steps asked for by taps, sent next tick
+static UInt8 gAction;       // builder action chosen, LGM_TREE to LGM_MINE
+static UInt8 gBuild, gBuildX, gBuildY;  // builder order to send next tick
 #ifdef DEBUG
 static Boolean gTimedFull;
 #endif
@@ -91,6 +93,7 @@ void AppOpenMap(UInt16 index, const Char *name)
 	LOG(("map %s: pills %d bases %d starts %d", name, (Int16)gGame.map.numPills,
 		(Int16)gGame.map.numBases, (Int16)gGame.map.numStarts));
 	game_init(&gGame, TimGetSeconds(), 0);
+	gBuild = BUILD_NONE;
 #if defined(DEBUG) && defined(DEMO_START)
 	// For replays: the tank on land six squares west of the first base,
 	// facing it.
@@ -101,6 +104,19 @@ void AppOpenMap(UInt16 index, const Char *name)
 		k->y = (UInt16)((UInt16)gGame.map.bases[0].y * 256 + 128);
 		k->angle = 64 * ANGLE_ONE;
 		k->boat = BOAT_OFF;
+	}
+#endif
+#if defined(DEBUG) && defined(DEMO_BUILDER)
+	// For the builder replay on Everard Island: the tank on the road at
+	// 160,116 facing east with no trees, forest two squares south east.
+	{
+		Tank *k = &gGame.tanks[0];
+
+		k->x = 160U * 256U + 128U;
+		k->y = 116U * 256U + 128U;
+		k->angle = 64 * ANGLE_ONE;
+		k->boat = BOAT_OFF;
+		k->trees = 0;
 	}
 #endif
 	FrmGotoForm(GameForm);
@@ -178,14 +194,24 @@ static Boolean HandleEvent(EventType *e)
 		if (IsGameKey(c) || c == vchrTxCenter)
 			return true;
 	}
-	// A tap on the map moves the gunsight: above the middle further, below
-	// nearer.
+	// A tap on the map sends the builder there with the chosen action. The
+	// button row along the bottom chooses the action or moves the gunsight.
 	if (gForm == GameForm && !gMenuOpen && e->eType == penDownEvent &&
 	    e->screenY >= 0) {
-		Coord w, h;
+		UInt8 mx, my;
+		Int16 b = ViewTap(e->screenX, e->screenY, &mx, &my);
 
-		WinGetDisplayExtent(&w, &h);
-		gSight = e->screenY < h / 2 ? 1 : -1;
+		if (b < 0) {
+			gBuild = (UInt8)(gAction + 1);
+			gBuildX = mx;
+			gBuildY = my;
+			LOG(("build %u at %u,%u", (UInt16)gBuild, (UInt16)mx, (UInt16)my));
+		} else if (b <= LGM_MINE) {
+			gAction = (UInt8)b;
+			ViewSetAction(gAction);
+		} else {
+			gSight = b == LGM_MINE + 1 ? -1 : 1;
+		}
 		return true;
 	}
 	// A tap or a chosen item closes the menu, and the screen is repainted.
@@ -231,8 +257,8 @@ static Boolean HandleEvent(EventType *e)
 
 // Held hardware buttons as game inputs. Turn with the 5-way or the
 // outer buttons, speed up and slow down with up and down, fire with the
-// centre or the second button, lay a mine with the third. A tap above the
-// middle of the screen moves the gunsight further, below it nearer.
+// centre or the second button, lay a mine with the third. Taps give the
+// gunsight steps and builder orders.
 #define kKeyNavLeft     0x01000000UL
 #define kKeyNavRight    0x02000000UL
 #define kKeyNavSelect   0x04000000UL
@@ -264,6 +290,10 @@ static GameInput ReadInputs(void)
 	else if (gSight < 0)
 		in.keys |= IN_SIGHT_NEAR;
 	gSight = 0;
+	in.build = gBuild;
+	in.buildX = gBuildX;
+	in.buildY = gBuildY;
+	gBuild = BUILD_NONE;
 	return in;
 }
 
@@ -346,6 +376,13 @@ static void EventLoop(void)
 					(UInt16)k->armour, (UInt16)k->shells, (UInt16)k->mines,
 					(UInt16)k->destroyed, k->deaths, (UInt16)k->boat,
 					(UInt16)k->numCarry, own, pillShells));
+				{
+					const Builder *m = &gGame.men[0];
+
+					LOG(("trees %u man %u,%u state %u action %u in %u dead %u",
+						(UInt16)k->trees, m->x, m->y, (UInt16)m->state, (UInt16)m->action,
+						(UInt16)m->inTank, (UInt16)m->isDead));
+				}
 			}
 #endif
 			acc -= tps;

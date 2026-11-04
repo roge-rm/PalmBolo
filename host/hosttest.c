@@ -170,6 +170,18 @@ static void pills_hit_for_test(GameState *g)
 	pills_damage(g, 0, R_PILL_SHELL_DAMAGE);
 }
 
+static int count_forest(void)
+{
+	int x, y, n = 0;
+
+	for (y = 0; y < 256; y++)
+		for (x = 0; x < 256; x++)
+			n += mapstore_get(x, y) == TERRAIN_FOREST || mapstore_get(x, y) == TERRAIN_MINE_FOREST;
+	return n;
+}
+
+static int gForests[2], gManDied;
+
 // Facts after each script step.
 static void fact(const GameState *s, uint8_t n, uint8_t i, void *ctx)
 {
@@ -195,6 +207,28 @@ static void fact(const GameState *s, uint8_t n, uint8_t i, void *ctx)
 		if (b >= 0)
 			printf(" base%d own %u %u/%u/%u", b, s->map.bases[b].owner, s->map.bases[b].armour,
 				s->map.bases[b].shells, s->map.bases[b].mines);
+		if (n >= 15) {
+			const Builder *m = &s->men[0];
+			uint8_t tx = m->destX >> 8, ty = m->destY >> 8;
+			int pi = g_pill_at(s, tx, ty);
+
+			printf("\n        man st %u at %u,%u+%u,%u in %u dead %u act %u carries %u/%u/%u next %u"
+				" | trees %u | target %u,%u %s",
+				m->state, m->x >> 8, m->y >> 8, m->x & 255, m->y & 255, m->inTank, m->isDead,
+				m->action, m->numTrees, m->numMines, m->pill, m->nextAction, k->trees, tx, ty,
+				terrain_name(game_terrain(tx, ty)));
+			if (pi >= 0)
+				printf(" pill%d arm %u own %u", pi, s->map.pills[pi].armour, s->map.pills[pi].owner);
+			if (n == 23) {
+				int f = count_forest();
+
+				printf(" | forests %d grow %u,%u score %d time %d", f,
+					s->treeX, s->treeY, s->treeScore, s->treeTime);
+				gForests[i == 0 ? 0 : 1] = f;
+			}
+			if (m->isDead)
+				gManDied = 1;
+		}
 		printf("\n");
 	}
 }
@@ -213,6 +247,9 @@ static int count_terrain(uint8_t t)
 static void after_script(const GameState *s, uint8_t n)
 {
 	const Tank *k = &s->tanks[0];
+	const Builder *m = &s->men[0];
+	uint8_t mx = m->destX >> 8, my = m->destY >> 8;
+	int pi = g_pill_at(s, mx, my);
 	int b = gLastBase;
 
 	switch (n) {
@@ -241,6 +278,47 @@ static void after_script(const GameState *s, uint8_t n)
 		CHECK(k->armour == 40 && k->shells == 32 * 10 / 11 && k->mines == 0 && k->trees == 0,
 			"types: tournament shells by neutral bases");
 		break;
+	// The builder, with WinBolo's numbers: 4 trees from a forest, a road or
+	// wall costs 2, a wall repair 1, a boat 20, a new pill 4, a pill repair
+	// up to 4 with what isn't needed given back, a mine 1.
+	case 15:
+		CHECK(k->trees == 4 && game_terrain(mx, my) == TERRAIN_GRASS && m->inTank,
+			"trees: 4 gathered, forest to grass");
+		break;
+	case 16:
+		CHECK(k->trees == 8 && game_terrain(mx, my) == TERRAIN_ROAD && m->inTank,
+			"road: costs 2, a second refused");
+		break;
+	case 17:
+		CHECK(k->trees == 7 && game_terrain(mx, my) == TERRAIN_BUILDING && m->inTank,
+			"wall: costs 2, repair 1, own square refused");
+		break;
+	case 18:
+		CHECK(k->trees == 10 && game_terrain(mx, my) == TERRAIN_BOAT && m->inTank,
+			"boat: a wall on a river costs 20");
+		break;
+	case 19:
+		CHECK(k->trees == 6 && k->numCarry == 0 && pi >= 0 && s->map.pills[pi].armour == 15 &&
+			s->map.pills[pi].owner == 0 && !s->map.pills[pi].inTank, "put pill: costs 4, full armour");
+		break;
+	case 20:
+		// Armour 5 needs 3 trees of the 4 taken.
+		CHECK(k->trees == 7 && pi >= 0 && s->map.pills[pi].armour == 15, "fix pill: 3 trees used");
+		break;
+	case 21:
+		CHECK(k->mines == 39 && k->trees == 40 && game_terrain(mx, my) == TERRAIN_MINE_GRASS,
+			"lgm mine: costs 1, a road on it refused");
+		break;
+	case 22:
+		CHECK(m->inTank && !m->isDead && gManDied, "lgm shot: killed and replaced");
+		break;
+	case 23:
+		CHECK(gForests[1] > gForests[0], "regrow: trees grew");
+		break;
+	case 24:
+		CHECK(game_terrain((uint8_t)((k->x >> 8) - 2), (uint8_t)(k->y >> 8)) == TERRAIN_RIVER,
+			"flood: the crater by the river filled");
+		break;
 	}
 }
 
@@ -249,7 +327,7 @@ static void after_script(const GameState *s, uint8_t n)
 static void winbolo_numbers(const uint8_t *ev, uint32_t len)
 {
 	static GameState g;
-	GameInput in = { 0, 0 };
+	GameInput in = { 0, 0, 0, 0, 0 };
 	GameSetup st;
 	MapPill *p;
 	int t, shots = 0, first = -1, second = -1, i;
@@ -376,6 +454,7 @@ static void scripts(const uint8_t *ev, uint32_t len)
 		CHECK(parse_buf(&g.map, ev, len) == MAP_OK, "script map");
 		printf("script %d %s\n", n, script_name(n));
 		gLastBase = -1;
+		gManDied = 0;
 		c = script_run(&g, n, fact, NULL);
 		after_script(&g, n);
 		craters = count_terrain(TERRAIN_CRATER);
@@ -391,6 +470,46 @@ static void scripts(const uint8_t *ev, uint32_t len)
 		CHECK(parse_buf(&g.map, ev, len) == MAP_OK, "script map");
 		CHECK(script_run(&g, n, NULL, NULL) == c, "script determinism");
 	}
+}
+
+// Hidden mines: the player is shown their own mines and those they drive
+// up to; the rules know a mine once a tank has seen it, so a builder will
+// walk onto one nobody has seen.
+static void hidden_mines(const uint8_t *ev, uint32_t len)
+{
+	static GameState g;
+	GameSetup setup;
+	GameInput in = { 0, 0, 0, 0, 0 };
+	Tank *k = &g.tanks[0];
+	uint8_t x, y;
+
+	memset(&setup, 0, sizeof(setup));
+	setup.numPlayers = 1;
+	setup.hiddenMines = 1;
+	CHECK(parse_buf(&g.map, ev, len) == MAP_OK, "hidden map");
+	game_set_viewer(0);
+	game_init(&g, 4242, &setup);
+	// The road at 160,116 runs east; face east on it.
+	k->x = 160 * 256 + 128;
+	k->y = 116 * 256 + 128;
+	k->angle = 64 * ANGLE_ONE;
+	k->boat = BOAT_OFF;
+	x = 160;
+	y = 116;
+	in.keys = IN_MINE;
+	game_tick(&g, &in);
+	CHECK(g_is_mine(x, y) && game_mine_shown(&g, x, y), "hidden: own mine shown");
+	game_set_terrain(166, 116, TERRAIN_MINE_ROAD);
+	CHECK(!game_mine_shown(&g, 166, 116) && !g_mine_known(&g, 166, 116),
+		"hidden: other mine not shown or known");
+	// Drive east until the tank sees it.
+	in.keys = IN_FASTER;
+	while (!game_mine_shown(&g, 166, 116) && g.tick < 400)
+		game_tick(&g, &in);
+	printf("hidden: mine at 166,116 seen at tick %u, tank at %u,%u\n", (unsigned)g.tick,
+		k->x >> 8, k->y >> 8);
+	CHECK(game_mine_shown(&g, 166, 116) && g_mine_known(&g, 166, 116) && (k->x >> 8) >= 162,
+		"hidden: mine ahead seen");
 }
 
 int main(int argc, char **argv)
@@ -421,6 +540,7 @@ int main(int argc, char **argv)
 		ev[0] = 'B';
 		scripts(ev, len);
 		winbolo_numbers(ev, len);
+		hidden_mines(ev, len);
 		fuzz(ev, len);
 		free(ev);
 	}

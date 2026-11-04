@@ -126,6 +126,58 @@
 #define R_BASE_REFUEL_HALF      7       // shells and mines: 7.5 ticks, given as 7 then 8
 #define R_BASE_CAPTURE_ARMOUR   9
 
+// The builder. Walking speeds are in whole world units a tick by the
+// terrain he is on (mapGetManSpeed); 0 is a square he can't walk onto.
+#define R_MAN_SPEED_ROAD        16
+#define R_MAN_SPEED_GRASS       16
+#define R_MAN_SPEED_FOREST      8
+#define R_MAN_SPEED_RIVER       0
+#define R_MAN_SPEED_SWAMP       4
+#define R_MAN_SPEED_CRATER      4
+#define R_MAN_SPEED_RUBBLE      4
+#define R_MAN_SPEED_BOAT        16
+#define R_MAN_SPEED_DEEP_SEA    0
+#define R_MAN_SPEED_BASE        16      // a base he may drive on, or near the tank on a boat
+#define R_MAN_SPEED_SOLID       0       // building, half building, live pill
+#define R_MAN_SPEED_ON_TOP      6       // walking off a wall he landed on
+#define R_LGM_BUILD_TICKS       20      // working at the square
+#define R_LGM_COST_ROAD         2       // trees
+#define R_LGM_COST_BUILDING     2
+#define R_LGM_COST_REPAIR_BUILDING 1
+#define R_LGM_COST_PILL_REPAIR  1       // per load of 4 armour
+#define R_LGM_COST_BOAT         20
+#define R_LGM_COST_PILL_NEW     4
+#define R_LGM_COST_MINE         1       // mines
+#define R_LGM_PILL_REPAIR_LOAD  4       // most loads taken to a repair
+#define R_LGM_GATHER_TREES      4
+#define R_LGM_HELICOPTER_SPEED  3       // world units a tick of the replacement man
+#define R_LGM_ARRIVE            16      // this near his goal, each axis, is there
+#define R_LGM_RETURN            128     // the same, back at the tank
+#define R_LGM_BOAT_LEAVE        144     // near a tank on a boat he walks anywhere
+#define R_LGM_BOAT_RETURN       160
+#define R_LGM_START_OFFSET      16      // he steps out this far towards his goal
+#define R_LGM_BLAST_RANGE       128     // an explosion this near kills him
+#define R_PILL_REPAIR_AMOUNT    4       // armour a tree gives a pill
+
+// Tree growth (treegrow.c): each tick one square is scored by its
+// neighbours, the best so far grows a tree after R_TREE_GROW_TICKS unless a
+// better one turns up.
+#define R_TREE_GROW_TICKS       3000
+#define R_TREE_GROW_INITIAL_TICKS 30000
+#define R_TREE_GROW_INITIAL_SCORE (-10000)
+#define R_TREE_FOREST           100
+#define R_TREE_GRASS            25
+#define R_TREE_RIVER            2
+#define R_TREE_BOAT             1
+#define R_TREE_DEEP_SEA         0
+#define R_TREE_SWAMP            2
+#define R_TREE_RUBBLE           (-2)
+#define R_TREE_BUILDING         (-20)
+#define R_TREE_HALF_BUILDING    (-15)
+#define R_TREE_CRATER           (-2)
+#define R_TREE_ROAD             (-100)  // also pills, bases and anything else
+#define R_TREE_MINE             (-7)
+
 // Starts
 #define R_START_TANK_RANGE      1
 #define R_START_PILL_RANGE      9

@@ -23,7 +23,7 @@ static const uint8_t kTurn[16] = {
 	R_TURN_ROAD, R_TURN_FOREST, R_TURN_RUBBLE, R_TURN_GRASS
 };
 
-uint8_t g_speed_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player)
+uint8_t SEC_TANK g_speed_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player)
 {
 	int8_t b;
 	uint8_t t;
@@ -39,7 +39,7 @@ uint8_t g_speed_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uin
 	return t < 16 ? kSpeed[t] : R_SPEED_DEEP_SEA;
 }
 
-static uint8_t turn_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player)
+static uint8_t SEC_TANK turn_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player)
 {
 	int8_t b;
 	uint8_t t;
@@ -57,7 +57,7 @@ static uint8_t turn_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat,
 
 // Solid for a tank's circle: buildings, live pills and bases it can't
 // drive over.
-static uint8_t solid(const GameState *s, uint8_t x, uint8_t y, uint8_t player)
+static uint8_t SEC_TANK solid(const GameState *s, uint8_t x, uint8_t y, uint8_t player)
 {
 	int8_t b;
 	uint8_t t;
@@ -74,7 +74,7 @@ static uint8_t solid(const GameState *s, uint8_t x, uint8_t y, uint8_t player)
 // tankGetGunsightAt as a 16-world-unit cell: 4 * sightLen shell steps
 // (WinBolo's per-tick loop sums to floor(n * step / 256)) plus one more
 // whole step, less half a square.
-static uint16_t sight_cell(const Tank *k, uint16_t angle, uint16_t *cy)
+static uint16_t SEC_TANK sight_cell(const Tank *k, uint16_t angle, uint16_t *cy)
 {
 	int16_t sx, sy, lx, ly;
 	uint16_t x, y;
@@ -88,7 +88,7 @@ static uint16_t sight_cell(const Tank *k, uint16_t angle, uint16_t *cy)
 	return (uint16_t)(x >> 4);
 }
 
-void game_gunsight(const GameState *s, uint8_t t, uint16_t *wx, uint16_t *wy)
+void SEC_TANK game_gunsight(const GameState *s, uint8_t t, uint16_t *wx, uint16_t *wy)
 {
 	uint16_t cy, cx = sight_cell(&s->tanks[t], s->tanks[t].angle, &cy);
 
@@ -98,7 +98,7 @@ void game_gunsight(const GameState *s, uint8_t t, uint16_t *wx, uint16_t *wy)
 
 // tankVisibleTurn: on the first tick of a turn, the smallest multiple of
 // the step (up to 16 bradians) that moves the gunsight by a pixel.
-static uint16_t visible_turn(const Tank *k, uint16_t step, uint8_t left)
+static uint16_t SEC_TANK visible_turn(const Tank *k, uint16_t step, uint8_t left)
 {
 	uint16_t cx, cy, nx, ny, amount, i;
 	int16_t a;
@@ -122,7 +122,7 @@ static uint16_t visible_turn(const Tank *k, uint16_t step, uint8_t left)
 }
 
 // tankTurn. Holding both keys turns neither way.
-static void turn(Tank *k, uint8_t rate, uint8_t keys)
+static void SEC_TANK turn(Tank *k, uint8_t rate, uint8_t keys)
 {
 	uint8_t left = (keys & (IN_LEFT | IN_RIGHT)) == IN_LEFT;
 	uint8_t right = (keys & (IN_LEFT | IN_RIGHT)) == IN_RIGHT;
@@ -161,7 +161,7 @@ static void turn(Tank *k, uint8_t rate, uint8_t keys)
 }
 
 // tankAccel: cap is the terrain's top speed in quarters.
-static void accel(Tank *k, int16_t cap, uint8_t keys)
+static void SEC_TANK accel(Tank *k, int16_t cap, uint8_t keys)
 {
 	uint8_t faster = (keys & (IN_FASTER | IN_SLOWER)) == IN_FASTER;
 	uint8_t slower = (keys & (IN_FASTER | IN_SLOWER)) == IN_SLOWER;
@@ -184,7 +184,7 @@ static void accel(Tank *k, int16_t cap, uint8_t keys)
 }
 
 // tankApplyDamage: more damage than armour kills.
-static uint8_t damage(Tank *k, uint8_t amount)
+static uint8_t SEC_TANK damage(Tank *k, uint8_t amount)
 {
 	if (amount > k->armour) {
 		k->armour = 0;
@@ -195,12 +195,12 @@ static uint8_t damage(Tank *k, uint8_t amount)
 	return 0;
 }
 
-static uint8_t big_wreck(const Tank *k)
+static uint8_t SEC_TANK big_wreck(const Tank *k)
 {
 	return (uint8_t)(k->shells + k->mines > R_BIG_EXPLOSION);
 }
 
-void tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my)
+void SEC_TANK tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my)
 {
 	Tank *k = &s->tanks[t];
 	uint16_t cx = (uint16_t)(((uint16_t)mx << 8) + 128U), cy = (uint16_t)(((uint16_t)my << 8) + 128U);
@@ -223,7 +223,7 @@ void tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my)
 	}
 }
 
-uint8_t tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle)
+uint8_t SEC_TANK tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle)
 {
 	Tank *k = &s->tanks[t];
 	int16_t dx = (int16_t)(k->x - wx), dy = (int16_t)(k->y - wy);
@@ -251,12 +251,12 @@ uint8_t tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16
 }
 
 // startsIsValidSquare: deep sea without a mine.
-static uint8_t start_square_ok(uint8_t x, uint8_t y)
+static uint8_t SEC_TANK start_square_ok(uint8_t x, uint8_t y)
 {
 	return game_terrain(x, y) == TERRAIN_DEEP_SEA && !g_is_mine(x, y);
 }
 
-static uint8_t near(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by, uint8_t range)
+static uint8_t SEC_TANK near(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by, uint8_t range)
 {
 	uint8_t dx = ax > bx ? ax - bx : bx - ax, dy = ay > by ? ay - by : by - ay;
 
@@ -264,7 +264,7 @@ static uint8_t near(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by, uint8_t rang
 }
 
 // Another live tank within range squares; hostile only if asked.
-static uint8_t tank_near(const GameState *s, uint8_t self, uint8_t x, uint8_t y,
+static uint8_t SEC_TANK tank_near(const GameState *s, uint8_t self, uint8_t x, uint8_t y,
 	uint8_t range, uint8_t hostile)
 {
 	uint8_t i;
@@ -284,7 +284,7 @@ static uint8_t tank_near(const GameState *s, uint8_t self, uint8_t x, uint8_t y,
 
 // A live pill within range: 0 any, 1 not friendly (neutral too), 2 owned
 // by another side.
-static uint8_t pill_near(const GameState *s, uint8_t player, uint8_t x, uint8_t y, uint8_t kind)
+static uint8_t SEC_TANK pill_near(const GameState *s, uint8_t player, uint8_t x, uint8_t y, uint8_t kind)
 {
 	uint8_t i;
 
@@ -307,7 +307,7 @@ static uint8_t pill_near(const GameState *s, uint8_t player, uint8_t x, uint8_t 
 // startsGetStartOpen: from a random first start, the first ideal one (no
 // tank beside it and no pill but friendly ones near), else the first with
 // no enemy near, else the first valid, else the first.
-static int8_t pick_open(GameState *s, uint8_t t)
+static int8_t SEC_TANK pick_open(GameState *s, uint8_t t)
 {
 	uint8_t n = s->map.numStarts, i, player = s->tanks[t].player;
 	int8_t friendly = -1, fallback = -1, any = -1;
@@ -337,7 +337,7 @@ static int8_t pick_open(GameState *s, uint8_t t)
 
 enum { TIER_OWN, TIER_NEUTRAL, TIER_SAFE, TIER_FALLBACK, TIER_NONE };
 
-static uint8_t start_tier(const GameState *s, uint8_t t, const MapStart *st)
+static uint8_t SEC_TANK start_tier(const GameState *s, uint8_t t, const MapStart *st)
 {
 	uint8_t player = s->tanks[t].player, i, own = 0, neutral = 0;
 
@@ -372,7 +372,7 @@ static uint8_t start_tier(const GameState *s, uint8_t t, const MapStart *st)
 // startsGetStartTournament: near the player's own bases, or neutral ones
 // (taken together while over a fifth of the bases are neutral), else away
 // from everything, else anywhere valid; a random start within the tier.
-static int8_t pick_tournament(GameState *s, uint8_t t)
+static int8_t SEC_TANK pick_tournament(GameState *s, uint8_t t)
 {
 	uint8_t n = s->map.numStarts, i, tier, live = 0, neutral = 0, want, count;
 	uint8_t tiers[MAP_MAX_STARTS];
@@ -411,7 +411,7 @@ static int8_t pick_tournament(GameState *s, uint8_t t)
 
 // utilSpiralOffset: step 0 is the centre, then rings clockwise from the
 // top left.
-static void spiral(uint16_t step, int8_t *dx, int8_t *dy)
+static void SEC_TANK spiral(uint16_t step, int8_t *dx, int8_t *dy)
 {
 	uint16_t ring = 1, start = 1, side, off, len;
 
@@ -437,7 +437,7 @@ static void spiral(uint16_t step, int8_t *dx, int8_t *dy)
 
 // startsScatterFind: the nearest valid square to the start in a spiral,
 // first one clear of other tanks, then any.
-static void scatter(const GameState *s, uint8_t t, uint8_t *x, uint8_t *y)
+static void SEC_TANK scatter(const GameState *s, uint8_t t, uint8_t *x, uint8_t *y)
 {
 	uint8_t pass;
 	uint16_t step;
@@ -462,7 +462,7 @@ static void scatter(const GameState *s, uint8_t t, uint8_t *x, uint8_t *y)
 }
 
 // gameTypeGetItems: what a tank starts with.
-static void loadout(const GameState *s, Tank *k)
+static void SEC_TANK loadout(const GameState *s, Tank *k)
 {
 	k->armour = R_TANK_FULL_ARMOUR;
 	k->shells = 0;
@@ -487,7 +487,7 @@ static void loadout(const GameState *s, Tank *k)
 
 // The respawn half of tankDeath: stock by game type, a start by game type,
 // scattered off any tank already there, on a boat.
-static void respawn(GameState *s, uint8_t t)
+static void SEC_TANK respawn(GameState *s, uint8_t t)
 {
 	Tank *k = &s->tanks[t];
 	int8_t i = s->gameType == GAME_OPEN ? pick_open(s, t) : pick_tournament(s, t);
@@ -502,6 +502,8 @@ static void respawn(GameState *s, uint8_t t)
 	k->residual = 0;
 	k->waterCount = 0;
 	k->deathWait = 0;
+	// lgmTankDied: an order kept for later is dropped.
+	s->men[t].nextAction = LGM_IDLE;
 	if (i < 0) {
 		// No start: the middle of the map, on a boat.
 		k->x = 0x8080U;
@@ -519,7 +521,7 @@ static void respawn(GameState *s, uint8_t t)
 }
 
 // tankCreate.
-void tank_create(GameState *s, uint8_t t, uint8_t player)
+void SEC_TANK tank_create(GameState *s, uint8_t t, uint8_t player)
 {
 	Tank *k = &s->tanks[t];
 	uint8_t *p = (uint8_t *)k;
@@ -538,7 +540,7 @@ void tank_create(GameState *s, uint8_t t, uint8_t player)
 // the square. WinBolo does this in doubles; here the distance is in 1/256
 // world units from an integer square root and the push is truncated the
 // same way.
-static uint8_t nudge(GameState *s, Tank *k)
+static uint8_t SEC_TANK nudge(GameState *s, Tank *k)
 {
 	uint8_t pass, hit = 0;
 	int32_t x = k->x, y = k->y;
@@ -601,7 +603,7 @@ static uint8_t nudge(GameState *s, Tank *k)
 
 // tankCheckGroundClear's test: a live pill, a base of another side or a
 // building under the tank.
-static uint8_t ground_blocked(const GameState *s, const Tank *k, uint8_t x, uint8_t y)
+static uint8_t SEC_TANK ground_blocked(const GameState *s, const Tank *k, uint8_t x, uint8_t y)
 {
 	int8_t b = g_base_at(s, x, y);
 	uint8_t t;
@@ -617,7 +619,7 @@ static uint8_t ground_blocked(const GameState *s, const Tank *k, uint8_t x, uint
 
 // Leaving the boat: it stays on the river square left last if that is
 // near.
-static void leave_boat(Tank *k, uint8_t mx, uint8_t my)
+static void SEC_TANK leave_boat(Tank *k, uint8_t mx, uint8_t my)
 {
 	uint8_t dx = k->lastRiverX > mx ? k->lastRiverX - mx : mx - k->lastRiverX;
 	uint8_t dy = k->lastRiverY > my ? k->lastRiverY - my : my - k->lastRiverY;
@@ -627,14 +629,14 @@ static void leave_boat(Tank *k, uint8_t mx, uint8_t my)
 		game_set_terrain(k->lastRiverX, k->lastRiverY, TERRAIN_BOAT);
 }
 
-static uint8_t land_not_boat(const GameState *s, uint8_t x, uint8_t y)
+static uint8_t SEC_TANK land_not_boat(const GameState *s, uint8_t x, uint8_t y)
 {
 	return g_is_land(s, x, y) && game_terrain(x, y) != TERRAIN_BOAT;
 }
 
 // The boat part of tankMoveUnified. bmx, bmy is the square at the start of
 // the tick and ox, oy the position.
-static void boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy, uint16_t ox, uint16_t oy)
+static void SEC_TANK boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy, uint16_t ox, uint16_t oy)
 {
 	Tank *k = &s->tanks[t];
 	uint8_t mx = (uint8_t)(k->x >> 8), my = (uint8_t)(k->y >> 8);
@@ -690,7 +692,7 @@ static void boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy, uint16_
 }
 
 // tankMoveUnified for one tank.
-static void drive(GameState *s, uint8_t t, const GameInput *in)
+static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 {
 	Tank *k = &s->tanks[t];
 	uint8_t mx = (uint8_t)(k->x >> 8), my = (uint8_t)(k->y >> 8);
@@ -774,7 +776,7 @@ static void drive(GameState *s, uint8_t t, const GameInput *in)
 }
 
 // tankLayMine.
-static void lay_mine(GameState *s, Tank *k)
+static void SEC_TANK lay_mine(GameState *s, Tank *k)
 {
 	uint8_t mx = (uint8_t)(k->x >> 8), my = (uint8_t)(k->y >> 8);
 	uint8_t t = game_terrain(mx, my);
@@ -788,11 +790,12 @@ static void lay_mine(GameState *s, Tank *k)
 		return;
 	k->mines--;
 	game_set_terrain(mx, my, (uint8_t)(t + TERRAIN_MINE_ADD));
+	g_mine_laid(s, mx, my, k->player, 0);
 }
 
 // tankUpdate, with the gunsight and mine keys the client handles first and
 // after.
-void tank_update(GameState *s, uint8_t t, const GameInput *in)
+void SEC_TANK tank_update(GameState *s, uint8_t t, const GameInput *in)
 {
 	Tank *k = &s->tanks[t];
 
@@ -844,7 +847,14 @@ void tank_update(GameState *s, uint8_t t, const GameInput *in)
 		pills_drop(s, t);
 		return;
 	}
-	drive(s, t, in);
+	{
+		// tankNearMines from the square it started on, facing the way it
+		// turned to.
+		uint8_t mx = (uint8_t)(k->x >> 8), my = (uint8_t)(k->y >> 8);
+
+		drive(s, t, in);
+		g_mines_near(s, t, mx, my, util_dir16(k->angle));
+	}
 	if (in->keys & IN_MINE)
 		lay_mine(s, k);
 }

@@ -10,6 +10,9 @@
 // The tank, shells, explosions and the gunsight are drawn over the tiles
 // each frame the game ticked, and erased next time by drawing the tiles
 // under them again. The view follows the tank.
+//
+// Along the bottom is a row of buttons: the five builder actions, the one
+// chosen shown inverted, and the gunsight nearer and further.
 #include "palmbolo.h"
 #include "resource.h"
 #include "game/game.h"
@@ -30,7 +33,13 @@ static UInt8 gShown[5];
 // Pills and bases as last drawn: x, y, owner, armour and inTank (pills).
 static UInt8 gPillLook[MAP_MAX_PILLS][5], gBaseLook[MAP_MAX_BASES][2];
 static UInt16 gShownDeaths = 0xFFFF;
-static IndexedColorType gYellow, gOrange;
+static IndexedColorType gYellow, gOrange, gGreen;
+// The button row: its height, the action shown chosen, and whether it
+// needs drawing.
+#define kButtons 7
+static Coord gBarH;
+static UInt8 gAction, gBarShown = 0xFF;
+static UInt8 gManShown = 0xFF;
 
 static void SEC_UI BuildTankSheet(void);
 static void SEC_UI CentreOnTank(void);
@@ -208,9 +217,16 @@ void SEC_UI ViewResized(void)
 	}
 	NativeOn();
 	WinGetDisplayExtent(&w, &h);
+	{
+		FontID old = FntSetFont(stdFont);
+
+		gBarH = FntLineHeight() + 2;
+		FntSetFont(old);
+	}
 	NativeOff();
 	gW = w;
-	gH = h;
+	gH = h - gBarH;
+	gBarShown = 0xFF;
 	gVx = cx - gW / 2;
 	gVy = cy - gH / 2;
 }
@@ -244,6 +260,7 @@ void SEC_UI ViewOpen(const DeviceInfo *d, const GameState *game)
 	BuildSheet();
 	gYellow = ScreenIndex(250, 220, 40);
 	gOrange = ScreenIndex(230, 110, 20);
+	gGreen = ScreenNewWin() && ScreenDepth() > 1 ? ScreenIndex(0, 150, 0) : gBlack;
 	BuildTankSheet();
 	NativeOff();
 	gNumOld = 0;
@@ -316,8 +333,15 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 	WinSetClip(r);
 	for (ty = ty0; ty <= ty1; ty++) {
 		row = mapstore_row((uint8_t)ty);
-		for (tx = tx0; tx <= tx1; tx++)
-			CopyTile(tile_for_terrain(row[tx]) , tx, ty);
+		for (tx = tx0; tx <= tx1; tx++) {
+			uint8_t t = row[tx];
+
+			// A hidden mine the player wasn't shown is drawn without it.
+			if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST && gGame->hiddenMines &&
+			    !game_mine_shown(gGame, (uint8_t)tx, (uint8_t)ty))
+				t = (uint8_t)(t - TERRAIN_MINE_ADD);
+			CopyTile(tile_for_terrain(t), tx, ty);
+		}
 	}
 	for (i = 0; i < m->numStarts; i++)
 		if (m->starts[i].x >= tx0 && m->starts[i].x <= tx1 &&
@@ -486,12 +510,39 @@ static void SEC_UI DrawTank(const Tank *k)
 	Remember(x, y, gTs, gTs);
 }
 
+// The builder: a small green figure, under a canopy while he flies in.
+static void SEC_UI DrawMan(const Builder *m)
+{
+	Coord x, y, b = gTs / 4, c = gTs / 2;
+
+	if (m->inTank)
+		return;
+	x = WorldX(m->x);
+	y = WorldY(m->y);
+	if (m->isDead) {
+		Fill(x - c, y - c - b, c * 2, b, gWhite);
+		Fill(x - c, y - c - b, c * 2, 1, gBlack);
+		Fill(x - c, y - c, 1, c, gBlack);
+		Fill(x + c - 1, y - c, 1, c, gBlack);
+		Remember(x - c, y - c - b, c * 2, c + b + b);
+	}
+	Fill(x - b / 2 - 1, y - b, b + 2, b * 2, gBlack);
+	Fill(x - b / 2, y - b + 1, b, b * 2 - 2, gGreen);
+	Remember(x - b / 2 - 1, y - b, b + 2, b * 2);
+}
+
 static void SEC_UI DrawSprites(void)
 {
 	const GameState *g = gGame;
 	const Tank *k = &g->tanks[0];
 	UInt16 i;
 	Coord x, y, r, dot = gTs / 8 + 1;
+	RectangleType clip;
+
+	clip.topLeft.x = clip.topLeft.y = 0;
+	clip.extent.x = gW;
+	clip.extent.y = gH;
+	WinSetClip(&clip);
 
 	for (i = 0; i < g->numExpl; i++) {
 		r = (Coord)(gTs * g->expl[i].frame / 16);
@@ -503,6 +554,7 @@ static void SEC_UI DrawSprites(void)
 		Remember(x - r, y - r, r * 2, r * 2);
 	}
 	DrawTank(k);
+	DrawMan(&g->men[0]);
 	for (i = 0; i < g->numShells; i++) {
 		x = WorldX(g->shells[i].x) - dot / 2;
 		y = WorldY(g->shells[i].y) - dot / 2;
@@ -520,15 +572,77 @@ static void SEC_UI DrawSprites(void)
 		Fill(x, y - r, 1, r * 2, gRed);
 		Remember(x - r, y - r, r * 2 + 1, r * 2 + 1);
 	}
+	WinResetClip();
 }
 
-// Armour, shells, mines and trees, top left. Redrawn when they change or
-// something was drawn over them.
+static const Char kButtonText[] = "Tree\0Road\0Wall\0Pill\0Mine\0Near\0Far\0";
+
+// The button row, when the chosen action changed or on a full redraw.
+static void SEC_UI DrawBar(Boolean force)
+{
+	const Char *p = kButtonText;
+	RectangleType r;
+	UInt16 i;
+	Coord x0, x1, len;
+	FontID old;
+
+	if (!force && gBarShown == gAction)
+		return;
+	gBarShown = gAction;
+	old = FntSetFont(stdFont);
+	r.topLeft.x = 0;
+	r.topLeft.y = gH;
+	r.extent.x = gW;
+	r.extent.y = gBarH;
+	WinEraseRectangle(&r, 0);
+	Fill(0, gH, gW, 1, gBlack);
+	for (i = 0; i < kButtons; i++, p += len + 1) {
+		x0 = (Coord)((Int32)gW * i / kButtons);
+		x1 = (Coord)((Int32)gW * (i + 1) / kButtons);
+		len = StrLen(p);
+		if (i > 0)
+			Fill(x0, gH, 1, gBarH, gBlack);
+		WinDrawChars(p, len, x0 + (x1 - x0 - FntCharsWidth(p, len)) / 2, gH + 1);
+		if (i == gAction) {
+			r.topLeft.x = x0 + 1;
+			r.topLeft.y = gH + 1;
+			r.extent.x = x1 - x0 - 1;
+			r.extent.y = gBarH - 1;
+			WinInvertRectangle(&r, 0);
+		}
+	}
+	FntSetFont(old);
+}
+
+void SEC_UI ViewSetAction(UInt8 action)
+{
+	gAction = action;
+}
+
+Int16 SEC_UI ViewTap(Coord x, Coord y, UInt8 *mx, UInt8 *my)
+{
+	Int32 nx = (Int32)x * gTs / 8, ny = (Int32)y * gTs / 8;
+
+	if (ny >= gH) {
+		Int16 b = (Int16)(nx * kButtons / (gW > 0 ? gW : 1));
+
+		return b < kButtons ? b : kButtons - 1;
+	}
+	*mx = (UInt8)((gVx + nx) / gTs);
+	*my = (UInt8)((gVy + ny) / gTs);
+	return -1;
+}
+
+static void SEC_UI Erase(const RectangleType *r);
+
+// Armour, shells, mines, trees, pills carried and the builder, top left.
+// Redrawn when they change or something was drawn over them.
 static void SEC_UI DrawReadout(Boolean force)
 {
 	const Tank *k = &gGame->tanks[0];
+	const Builder *m = &gGame->men[0];
 	Char buf[48], *p = buf;
-	UInt8 v[5];
+	UInt8 v[5], man;
 	UInt16 i;
 	FontID old;
 
@@ -537,17 +651,23 @@ static void SEC_UI DrawReadout(Boolean force)
 	v[2] = k->mines;
 	v[3] = k->trees;
 	v[4] = k->numCarry;
-	if (!force && MemCmp(v, gShown, 5) == 0 && gShownDeaths == k->deaths)
+	// The builder: in the tank, going out, coming back or flying in.
+	man = m->isDead ? 3 : m->inTank ? 0 : m->state == LGM_STATE_GOING ? 1 : 2;
+	if (!force && MemCmp(v, gShown, 5) == 0 && gShownDeaths == k->deaths && man == gManShown)
 		return;
 	MemMove(gShown, v, 5);
 	gShownDeaths = k->deaths;
+	gManShown = man;
 	for (i = 0; i < 5; i++) {
 		*p++ = "ASMTP"[i];
 		StrIToA(p, v[i]);
 		p += StrLen(p);
 		*p++ = ' ';
 	}
-	*--p = 0;
+	StrCopy(p, man == 0 ? "in" : man == 1 ? "out" : man == 2 ? "back" : "new");
+	// The old text may be longer: put the tiles back under it first.
+	if (gReadout.extent.x > 0)
+		Erase(&gReadout);
 	old = FntSetFont(stdFont);
 	gReadout.topLeft.x = 1;
 	gReadout.topLeft.y = 1;
@@ -584,8 +704,6 @@ static void SEC_UI DrawChanges(void)
 			DrawRegion(&r);
 	}
 }
-
-static void SEC_UI Erase(const RectangleType *r);
 
 static void SEC_UI DrawSquare(UInt8 x, UInt8 y)
 {
@@ -732,6 +850,7 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 	gNumOld = 0;
 	DrawSprites();
 	DrawReadout(readout);
+	DrawBar(full);
 	NativeOff();
 #ifdef DEBUG
 	if (full)

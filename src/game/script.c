@@ -20,7 +20,14 @@ enum {
 	OP_PILLARM, // set that pill's armour to a
 	OP_BASESTOCK, // set that base's armour a, shells b, mines c
 	OP_TYPE,    // a new game of type a (GAME_OPEN etc)
-	OP_AWAY     // move the tank a squares south
+	OP_AWAY,    // move the tank a squares south
+	OP_TREES,   // set the tank's trees to a
+	OP_BUILD,   // builder order a (BUILD_*) at the tank's square moved b, c
+	            // (signed), then n ticks in all with no keys
+	OP_SET,     // terrain a at the tank's square moved b, c
+	OP_CARRY,   // the found pill goes into the tank, owned by it
+	OP_PILLOWN, // the found pill's owner becomes a
+	OP_MOVE     // move the tank b, c squares (signed)
 };
 
 typedef struct Op {
@@ -93,13 +100,54 @@ static const Op kScripts[] = {
 	{ OP_TYPE, GAME_OPEN, 0, 0, 0, 0 }, { OP_TYPE, GAME_TOURNAMENT, 0, 0, 0, 0 },
 	{ OP_TYPE, GAME_STRICT, 0, 0, 0, 0 }, { OP_BASE, 0, 0, 0, 0, 0 },
 	{ OP_KEYS, 0, 0, 0, 0, 1 }, { OP_TYPE, GAME_TOURNAMENT, 1, 0, 0, 0 },
-	{ OP_END, 0, 0, 0, 0, 0 }
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 15 gather trees from forest two squares east
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_FOREST, 2, 0, 0 }, { OP_TREES, 0, 0, 0, 0, 0 },
+	{ OP_BUILD, BUILD_TREE, 2, 0, 0, 40 }, { OP_KEYS, 0, 0, 0, 0, 160 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 16 a road, then one on the road (refused)
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 3, 0, 0 }, { OP_TREES, 10, 0, 0, 0, 0 },
+	{ OP_BUILD, BUILD_ROAD, 2, 0, 0, 200 }, { OP_BUILD, BUILD_ROAD, 2, 0, 0, 5 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 17 a wall, repairing a damaged one, one on the tank's square (refused)
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 3, 0, 0 }, { OP_TREES, 10, 0, 0, 0, 0 },
+	{ OP_BUILD, BUILD_WALL, 2, 0, 0, 200 }, { OP_SET, TERRAIN_HALFBUILDING, 2, 0, 0, 0 },
+	{ OP_BUILD, BUILD_WALL, 2, 0, 0, 200 }, { OP_BUILD, BUILD_WALL, 0, 0, 0, 5 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 18 a wall on a river makes a boat
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_RIVER, 2, 0, 0 }, { OP_TREES, 30, 0, 0, 0, 0 },
+	{ OP_BUILD, BUILD_WALL, 2, 0, 0, 200 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 19 put down a carried pill
+	{ OP_NEARPILL, 4, 0, 0, 0, 0 }, { OP_CARRY, 0, 0, 0, 0, 0 }, { OP_TREES, 10, 0, 0, 0, 0 },
+	{ OP_BUILD, BUILD_PILL, 2, 0, 0, 250 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 20 repair an own pill
+	{ OP_NEARPILL, 3, 0, 0, 0, 0 }, { OP_PILLOWN, 0, 0, 0, 0, 0 }, { OP_PILLARM, 5, 0, 0, 0, 0 },
+	{ OP_TREES, 10, 0, 0, 0, 0 }, { OP_BUILD, BUILD_PILL, 3, 0, 0, 250 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 21 lay a mine, then a road on it (refused)
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 3, 0, 0 }, { OP_BUILD, BUILD_MINE, 2, 0, 0, 200 },
+	{ OP_BUILD, BUILD_ROAD, 2, 0, 0, 5 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 22 the builder is shot on his way to build, and a new one flies in
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_FOREST, 2, 0, 0 }, { OP_TREES, 10, 0, 0, 0, 0 },
+	{ OP_BUILD, BUILD_TREE, 2, 0, 0, 1 }, { OP_KEYS, IN_SIGHT_NEAR, 0, 0, 0, 10 },
+	{ OP_KEYS, IN_FIRE, 0, 0, 0, 50 }, { OP_KEYS, 0, 0, 0, 0, 1000 }, { OP_KEYS, 0, 0, 0, 0, 1000 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 23 trees growing back
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_FOREST, 2, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 5000 },
+	{ OP_KEYS, 0, 0, 0, 0, 5000 }, { OP_KEYS, 0, 0, 0, 0, 5000 }, { OP_KEYS, 0, 0, 0, 0, 5000 },
+	{ OP_END, 0, 0, 0, 0, 0 },
+	// 24 a mine by a river is shot, and its crater floods
+	{ OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 3, 0, 0 }, { OP_KEYS, IN_MINE, 0, 0, 0, 1 },
+	{ OP_MOVE, 0, 2, 0, 0, 0 }, { OP_FACE, 12, 0, 0, 0, 0 },
+	{ OP_KEYS, IN_SIGHT_NEAR, 0, 0, 0, 10 }, { OP_KEYS, IN_FIRE, 0, 0, 0, 1 },
+	{ OP_KEYS, 0, 0, 0, 0, 30 }, { OP_KEYS, 0, 0, 0, 0, 40 }, { OP_END, 0, 0, 0, 0, 0 }
 };
 #undef F
 
 static const char kNames[] =
 	"drive\0speeds\0boat\0wading\0deep sea\0shoot\0range\0mines\0refuel\0"
-	"capture\0base fuel\0pill shot\0pill down\0restock\0types\0";
+	"capture\0base fuel\0pill shot\0pill down\0restock\0types\0trees\0road\0wall\0"
+	"boat wall\0put pill\0fix pill\0lgm mine\0lgm shot\0regrow\0flood\0";
 
 const char *script_name(uint8_t n)
 {
@@ -225,6 +273,9 @@ uint32_t script_run(GameState *s, uint8_t n,
 	}
 	game_init(s, 4242, 0);
 	in.opts = 0;
+	in.build = BUILD_NONE;
+	in.buildX = 0;
+	in.buildY = 0;
 	for (; o->op != OP_END; o++, i++) {
 		Tank *k = &s->tanks[0];
 
@@ -234,6 +285,41 @@ uint32_t script_run(GameState *s, uint8_t n,
 				in.keys = o->a;
 				game_tick(s, &in);
 			}
+			break;
+		case OP_BUILD:
+			in.keys = 0;
+			in.build = o->a;
+			in.buildX = (uint8_t)((k->x >> 8) + (int8_t)o->b);
+			in.buildY = (uint8_t)((k->y >> 8) + (int8_t)o->c);
+			for (t = 0; t < o->n; t++) {
+				game_tick(s, &in);
+				in.build = BUILD_NONE;
+			}
+			break;
+		case OP_TREES:
+			k->trees = o->a;
+			break;
+		case OP_SET:
+			game_set_terrain((uint8_t)((k->x >> 8) + (int8_t)o->b),
+				(uint8_t)((k->y >> 8) + (int8_t)o->c), o->a);
+			break;
+		case OP_MOVE:
+			k->x = (uint16_t)(k->x + (int16_t)((int8_t)o->b * 256));
+			k->y = (uint16_t)(k->y + (int16_t)((int8_t)o->c * 256));
+			break;
+		case OP_CARRY:
+			if (pill >= 0 && k->numCarry < MAP_MAX_PILLS) {
+				s->map.pills[pill].inTank = 1;
+				s->map.pills[pill].owner = k->player;
+				for (t = k->numCarry; t > 0; t--)
+					k->carry[t] = k->carry[t - 1];
+				k->carry[0] = (uint8_t)pill;
+				k->numCarry++;
+			}
+			break;
+		case OP_PILLOWN:
+			if (pill >= 0)
+				s->map.pills[pill].owner = o->a;
 			break;
 		case OP_FIND:
 			b[0] = find(s, o);

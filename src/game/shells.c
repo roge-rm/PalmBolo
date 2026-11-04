@@ -8,7 +8,7 @@
 #include "util.h"
 
 // shellsAddItem. The shell starts five steps ahead and lives life ticks.
-void shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
+void SEC_SHELLS shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
 	uint8_t life, uint8_t owner, uint8_t onBoat)
 {
 	Shell *h;
@@ -37,7 +37,7 @@ void shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
 }
 
 // mapIsPassable for a shell.
-static uint8_t passable(uint8_t t, uint8_t onBoat)
+static uint8_t SEC_SHELLS passable(uint8_t t, uint8_t onBoat)
 {
 	if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST)
 		t = (uint8_t)(t - TERRAIN_MINE_ADD);
@@ -56,7 +56,7 @@ static uint8_t passable(uint8_t t, uint8_t onBoat)
 }
 
 // shellsCheckRoad: a road hit from a side with water beyond becomes river.
-static uint8_t check_road(GameState *s, uint8_t x, uint8_t y, uint16_t angle)
+static uint8_t SEC_SHELLS check_road(GameState *s, uint8_t x, uint8_t y, uint16_t angle)
 {
 	uint8_t d = util_dir16(angle);
 
@@ -73,14 +73,17 @@ static uint8_t check_road(GameState *s, uint8_t x, uint8_t y, uint16_t angle)
 // base, then terrain the shell can't pass. Returns 0 for no hit, 1 for a
 // hit and 2 for a tank hit (which sets off no mine). A base hit moves the
 // explosion to the middle of the base.
-static uint8_t collide(GameState *s, const Shell *h, uint16_t *pwx, uint16_t *pwy)
+static uint8_t SEC_SHELLS collide(GameState *s, const Shell *h, uint16_t *pwx, uint16_t *pwy)
 {
 	uint16_t wx = *pwx, wy = *pwy;
 	uint8_t mx = (uint8_t)(wx >> 8), my = (uint8_t)(wy >> 8);
 	int8_t p = g_live_pill_at(s, mx, my), b;
 	uint8_t t, mine = 0, nt, i;
 
+	// A pill, base or terrain hit explodes in the middle of the square.
 	if (p >= 0) {
+		*pwx = (uint16_t)(((uint16_t)mx << 8) + 128U);
+		*pwy = (uint16_t)(((uint16_t)my << 8) + 128U);
 		pills_damage(s, (uint8_t)p, R_PILL_SHELL_DAMAGE);
 		return 1;
 	}
@@ -103,6 +106,8 @@ static uint8_t collide(GameState *s, const Shell *h, uint16_t *pwx, uint16_t *pw
 	}
 	if (passable(mapstore_get(mx, my), h->onBoat))
 		return 0;
+	*pwx = (uint16_t)(((uint16_t)mx << 8) + 128U);
+	*pwy = (uint16_t)(((uint16_t)my << 8) + 128U);
 	t = game_terrain(mx, my);
 	if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST) {
 		t = (uint8_t)(t - TERRAIN_MINE_ADD);
@@ -141,7 +146,7 @@ static uint8_t collide(GameState *s, const Shell *h, uint16_t *pwx, uint16_t *pw
 // shellsUpdate. A shell that hits or runs out explodes and may set off a
 // mine. WinBolo keeps a dead shell one more tick for the network; here it
 // goes at once.
-void shells_update(GameState *s)
+void SEC_SHELLS shells_update(GameState *s)
 {
 	uint8_t i, n = 0;
 
@@ -177,6 +182,7 @@ void shells_update(GameState *s)
 		g_explosion(s, wx, wy);
 		if (hit != 2)
 			g_mine_exp(s, (uint8_t)(wx >> 8), (uint8_t)(wy >> 8));
+		lgm_blast(s, wx, wy);
 	}
 	s->numShells = n;
 }

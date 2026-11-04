@@ -9,14 +9,6 @@
 
 #include "game.h"
 
-// pills.c is in its own code segment on the Palm, as the first is full.
-// Callers in other segments must see this on its declarations.
-#ifdef __palmos__
-#define SEC_RULES __attribute__((section("rules")))
-#else
-#define SEC_RULES
-#endif
-
 // game.c
 uint8_t g_is_mine(uint8_t x, uint8_t y);
 int8_t g_base_at(const GameState *s, uint8_t x, uint8_t y);
@@ -29,36 +21,62 @@ uint8_t g_damage(GameState *s, uint8_t kind, uint8_t x, uint8_t y);
 void g_damage_remove(GameState *s, uint8_t kind, uint8_t x, uint8_t y);
 void g_flood(GameState *s, uint8_t x, uint8_t y);
 void g_mine_exp(GameState *s, uint8_t x, uint8_t y);
+// minesExistPos: a mine the rules know of (all mines unless hidden mines
+// are on, then those seen by a tank or laid by a builder).
+uint8_t g_mine_known(const GameState *s, uint8_t x, uint8_t y);
+// tankNearMines: tank t at mx, my facing dir (0-15) sees the mines on its
+// square and the three ahead.
+void g_mines_near(GameState *s, uint8_t t, uint8_t mx, uint8_t my, uint8_t dir);
+// A mine laid by player at x, y: shown to the viewer if allied, and known
+// to the rules if known is set.
+void g_mine_laid(GameState *s, uint8_t x, uint8_t y, uint8_t player, uint8_t known);
 void g_tank_explosion(GameState *s, uint16_t wx, uint16_t wy, uint16_t angle,
 	uint8_t length, uint8_t big, uint8_t creator);
 
 // tank.c
-void tank_create(GameState *s, uint8_t t, uint8_t player);
-void tank_update(GameState *s, uint8_t t, const GameInput *in);
-void tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my);
+void SEC_TANK tank_create(GameState *s, uint8_t t, uint8_t player);
+void SEC_TANK tank_update(GameState *s, uint8_t t, const GameInput *in);
+void SEC_TANK tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my);
 // tankIsTankHit for a shell at wx, wy: 1 if it hit the tank.
-uint8_t tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle);
+uint8_t SEC_TANK tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle);
 // mapGetSpeed: the terrain's top speed in world units a tick for a tank of
 // player (on a boat or not); 0 where it can't drive.
-uint8_t g_speed_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player);
+uint8_t SEC_TANK g_speed_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player);
 // mapIsLand: river and deep sea without a base are not land.
 uint8_t g_is_land(const GameState *s, uint8_t x, uint8_t y);
 
 // shells.c
-void shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
+void SEC_SHELLS shells_add(GameState *s, uint16_t x, uint16_t y, uint16_t angle,
 	uint8_t life, uint8_t owner, uint8_t onBoat);
-void shells_update(GameState *s);
+void SEC_SHELLS shells_update(GameState *s);
 
 // pills.c: pillboxes and bases
-void SEC_RULES pills_update(GameState *s);
-void SEC_RULES pills_damage(GameState *s, uint8_t p, uint8_t amount);
-void SEC_RULES pills_base_hit(GameState *s, uint8_t b);
-void SEC_RULES pills_pickup(GameState *s, uint8_t t);
-void SEC_RULES pills_drop(GameState *s, uint8_t t);
-void SEC_RULES bases_update(GameState *s);
-uint8_t SEC_RULES bases_cant_drive(const GameState *s, uint8_t b, uint8_t player);
-uint8_t SEC_RULES bases_can_hit(const GameState *s, uint8_t b, uint8_t hitBy);
-void SEC_RULES bases_damage(GameState *s, uint8_t b);
-void SEC_RULES bases_capture(GameState *s, uint8_t b, uint8_t player);
+void SEC_PILLS pills_update(GameState *s);
+void SEC_PILLS pills_damage(GameState *s, uint8_t p, uint8_t amount);
+void SEC_PILLS pills_base_hit(GameState *s, uint8_t b);
+void SEC_PILLS pills_pickup(GameState *s, uint8_t t);
+void SEC_PILLS pills_drop(GameState *s, uint8_t t);
+// pillsDropSpiral: puts pill down dead and owned by owner on the nearest
+// free square to cx, cy. Returns 0 if there is none.
+uint8_t SEC_PILLS pills_drop_one(GameState *s, uint8_t pill, uint8_t cx, uint8_t cy, uint8_t owner);
+void SEC_PILLS bases_update(GameState *s);
+uint8_t SEC_PILLS bases_cant_drive(const GameState *s, uint8_t b, uint8_t player);
+uint8_t SEC_PILLS bases_can_hit(const GameState *s, uint8_t b, uint8_t hitBy);
+void SEC_PILLS bases_damage(GameState *s, uint8_t b);
+void SEC_PILLS bases_capture(GameState *s, uint8_t b, uint8_t player);
+
+// lgm.c: the builder
+void SEC_BUILDER lgm_create(GameState *s, uint8_t t);
+// lgmAddRequest: action is LGM_TREE to LGM_BOAT.
+void SEC_BUILDER lgm_request(GameState *s, uint8_t t, uint8_t x, uint8_t y, uint8_t action);
+void SEC_BUILDER lgm_update(GameState *s, uint8_t t);
+// lgmDeathCheck for every builder against an explosion at wx, wy.
+void SEC_BUILDER lgm_blast(GameState *s, uint16_t wx, uint16_t wy);
+// lgmIsGoingToBuildAt for any builder.
+uint8_t SEC_BUILDER lgm_building_at(const GameState *s, uint8_t x, uint8_t y);
+
+// treegrow.c
+void SEC_BUILDER tree_init(GameState *s);
+void SEC_BUILDER tree_update(GameState *s);
 
 #endif

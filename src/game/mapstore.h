@@ -29,4 +29,12 @@ void mapstore_set_bytes(uint8_t x, uint8_t y, uint16_t n, const uint8_t *src);
 // must not be written through.
 const uint8_t *mapstore_row(uint8_t y);
 
+// Two bit planes beside the terrain, one bit a square, for which mines are
+// known: MS_KNOWN to the rules, MS_SEEN to the player on this screen.
+// mapstore_open clears them.
+enum { MS_KNOWN = 0, MS_SEEN = 1, MS_PLANES = 2 };
+uint8_t mapstore_flag(uint8_t plane, uint8_t x, uint8_t y);
+void mapstore_set_flag(uint8_t plane, uint8_t x, uint8_t y, uint8_t on);
+void mapstore_clear_flags(void);
+
 #endif

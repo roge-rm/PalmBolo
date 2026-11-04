@@ -12,6 +12,7 @@
 #define CHANGE_MAX 32
 static uint8_t gChange[CHANGE_MAX * 2];
 static uint8_t gChangeCount, gChangeOver;
+static uint8_t gViewer;     // the player on this screen, for hidden mines
 
 uint8_t game_terrain(uint8_t x, uint8_t y)
 {
@@ -20,11 +21,8 @@ uint8_t game_terrain(uint8_t x, uint8_t y)
 	return TERRAIN_DEEP_SEA;
 }
 
-void game_set_terrain(uint8_t x, uint8_t y, uint8_t t)
+static void note_change(uint8_t x, uint8_t y)
 {
-	if (mapstore_get(x, y) == t)
-		return;
-	mapstore_set(x, y, t);
 	if (gChangeCount < CHANGE_MAX) {
 		gChange[gChangeCount * 2] = x;
 		gChange[gChangeCount * 2 + 1] = y;
@@ -32,6 +30,28 @@ void game_set_terrain(uint8_t x, uint8_t y, uint8_t t)
 	} else {
 		gChangeOver = 1;
 	}
+}
+
+void game_set_terrain(uint8_t x, uint8_t y, uint8_t t)
+{
+	if (mapstore_get(x, y) == t)
+		return;
+	mapstore_set(x, y, t);
+	if (t < TERRAIN_MINE_FIRST || t > TERRAIN_MINE_LAST) {
+		// minesRemoveItem: the mine is gone.
+		mapstore_set_flag(MS_KNOWN, x, y, 0);
+		mapstore_set_flag(MS_SEEN, x, y, 0);
+	}
+	note_change(x, y);
+}
+
+// A mine the viewer is shown now: its square is drawn again.
+static void show_mine(uint8_t x, uint8_t y)
+{
+	if (mapstore_flag(MS_SEEN, x, y))
+		return;
+	mapstore_set_flag(MS_SEEN, x, y, 1);
+	note_change(x, y);
 }
 
 uint8_t game_take_changes(uint8_t *xy, uint8_t max)
@@ -57,6 +77,69 @@ uint8_t g_is_mine(uint8_t x, uint8_t y)
 		return 1;
 	t = mapstore_get(x, y);
 	return t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST;
+}
+
+uint8_t g_mine_known(const GameState *s, uint8_t x, uint8_t y)
+{
+	if (x <= MAP_EDGE_LOW || x >= MAP_EDGE_HIGH || y <= MAP_EDGE_LOW || y >= MAP_EDGE_HIGH)
+		return 1;
+	if (s->hiddenMines)
+		return mapstore_flag(MS_KNOWN, x, y);
+	return g_is_mine(x, y);
+}
+
+// The squares ahead of a tank facing each of the 16 directions, three each
+// (WinBolo's forwardDX and forwardDY).
+static const int8_t kAheadX[16][3] = {
+	{0, -1, 1}, {0, 1, 1}, {1, 0, 1}, {1, 1, 0}, {1, 1, 1}, {1, 1, 0}, {1, 1, 0}, {1, 0, 1},
+	{0, 1, -1}, {0, -1, -1}, {-1, 0, -1}, {-1, -1, 0}, {-1, -1, -1}, {-1, -1, 0}, {-1, -1, 0}, {-1, 0, -1}
+};
+static const int8_t kAheadY[16][3] = {
+	{-1, -1, -1}, {-1, -1, 0}, {-1, -1, 0}, {-1, 0, -1}, {0, -1, 1}, {0, 1, 1}, {1, 0, 1}, {1, 1, 0},
+	{1, 1, 1}, {1, 1, 0}, {1, 1, 0}, {1, 0, 1}, {0, 1, -1}, {0, -1, -1}, {-1, 0, -1}, {-1, -1, 0}
+};
+
+static void see_mine(const GameState *s, uint8_t t, uint8_t x, uint8_t y)
+{
+	if (!g_is_mine(x, y))
+		return;
+	mapstore_set_flag(MS_KNOWN, x, y, 1);
+	if (s->tanks[t].player == gViewer)
+		show_mine(x, y);
+}
+
+void g_mines_near(GameState *s, uint8_t t, uint8_t mx, uint8_t my, uint8_t dir)
+{
+	uint8_t i;
+
+	if (!s->hiddenMines)
+		return;     // only hidden mines need finding
+	dir &= 15;
+	see_mine(s, t, mx, my);
+	for (i = 0; i < 3; i++)
+		see_mine(s, t, (uint8_t)(mx + kAheadX[dir][i]), (uint8_t)(my + kAheadY[dir][i]));
+}
+
+void g_mine_laid(GameState *s, uint8_t x, uint8_t y, uint8_t player, uint8_t known)
+{
+	if (!s->hiddenMines)
+		return;
+	if (known)
+		mapstore_set_flag(MS_KNOWN, x, y, 1);
+	if (game_allied(s, player, gViewer))
+		show_mine(x, y);
+}
+
+void game_set_viewer(uint8_t player)
+{
+	gViewer = player;
+}
+
+uint8_t game_mine_shown(const GameState *s, uint8_t x, uint8_t y)
+{
+	if (!g_is_mine(x, y))
+		return 0;
+	return !s->hiddenMines || mapstore_flag(MS_SEEN, x, y);
 }
 
 int8_t g_base_at(const GameState *s, uint8_t x, uint8_t y)
@@ -301,6 +384,7 @@ static void mine_fill(GameState *s, uint8_t x, uint8_t y)
 	if (!g_is_mine(x, y))
 		return;
 	game_set_terrain(x, y, TERRAIN_CRATER);
+	lgm_blast(s, (uint16_t)(((uint16_t)x << 8) + 128U), (uint16_t)(((uint16_t)y << 8) + 128U));
 	for (i = 0; i < s->numTanks; i++)
 		tank_mine_damage(s, i, x, y);
 	g_explosion(s, (uint16_t)(((uint16_t)x << 8) + 128U), (uint16_t)(((uint16_t)y << 8) + 128U));
@@ -383,6 +467,11 @@ static void big_square(GameState *s, uint8_t x, uint8_t y)
 	}
 }
 
+static void blast_square(GameState *s, uint8_t x, uint8_t y)
+{
+	lgm_blast(s, (uint16_t)(((uint16_t)x << 8) + 128U), (uint16_t)(((uint16_t)y << 8) + 128U));
+}
+
 // tkExplosionUpdate: every second tick each wreck moves on and leaves
 // explosions behind it; at the end it blows a crater, or four.
 static void tk_explosions_update(GameState *s)
@@ -428,6 +517,7 @@ static void tk_explosions_update(GameState *s)
 					game_set_terrain(mx, my, TERRAIN_CRATER);
 					g_flood(s, mx, my);
 				}
+				lgm_blast(s, e->x, e->y);
 			} else {
 				int16_t dx, dy;
 				uint8_t ax, ay;
@@ -437,8 +527,12 @@ static void tk_explosions_update(GameState *s)
 				ay = (uint8_t)(dy > 0 ? my + 1 : my - 1);
 				g_explosion(s, e->x, e->y);
 				big_square(s, ax, ay);
+				blast_square(s, ax, ay);
 				big_square(s, ax, my);
+				blast_square(s, ax, my);
 				big_square(s, mx, ay);
+				blast_square(s, mx, ay);
+				blast_square(s, mx, my);
 				big_square(s, mx, my);
 			}
 		}
@@ -511,9 +605,13 @@ void game_init(GameState *s, uint32_t seed, const GameSetup *setup)
 	}
 	gChangeCount = 0;
 	gChangeOver = 0;
+	mapstore_clear_flags();
 	s->numTanks = n;
-	for (i = 0; i < n; i++)
+	for (i = 0; i < n; i++) {
+		lgm_create(s, (uint8_t)i);
 		tank_create(s, (uint8_t)i, (uint8_t)i);
+	}
+	tree_init(s);
 }
 
 // xorshift32
@@ -541,14 +639,20 @@ uint16_t game_random_below(GameState *s, uint16_t n)
 	return (uint16_t)(r % n);
 }
 
-// Order as WinBolo's server tick: tanks, pills, bases and refuelling,
-// wrecks, shells, mines, explosions, flooding.
+// Order as WinBolo's server tick: tanks with their builder orders, the
+// builders, pills, bases and refuelling, wrecks, shells, mines, explosions,
+// flooding, then tree growth once for each tank.
 void game_tick(GameState *s, const GameInput *in)
 {
 	uint8_t i;
 
-	for (i = 0; i < s->numTanks; i++)
+	for (i = 0; i < s->numTanks; i++) {
 		tank_update(s, i, &in[i]);
+		if (in[i].build != BUILD_NONE && in[i].build <= BUILD_MINE)
+			lgm_request(s, i, in[i].buildX, in[i].buildY, (uint8_t)(in[i].build - 1));
+	}
+	for (i = 0; i < s->numTanks; i++)
+		lgm_update(s, i);
 	pills_update(s);
 	bases_update(s);
 	tk_explosions_update(s);
@@ -556,6 +660,8 @@ void game_tick(GameState *s, const GameInput *in)
 	mines_update(s);
 	explosions_update(s);
 	flood_update(s);
+	for (i = 0; i < s->numTanks; i++)
+		tree_update(s);
 	s->tick++;
 }
 
@@ -624,6 +730,20 @@ uint32_t game_checksum(const GameState *s)
 		crc = util_crc(crc, &k->armour, 20);
 		crc = util_crc(crc, k->carry, k->numCarry);
 	}
+	for (i = 0; i < s->numTanks; i++) {
+		const Builder *m = &s->men[i];
+
+		crc = c16(crc, m->x);
+		crc = c16(crc, m->y);
+		crc = c16(crc, m->destX);
+		crc = c16(crc, m->destY);
+		crc = util_crc(crc, &m->state, 16);
+	}
+	crc = c16(crc, s->treeSeed);
+	crc = c16(crc, (uint16_t)s->treeTime);
+	crc = c16(crc, (uint16_t)s->treeScore);
+	crc = c8(crc, s->treeX);
+	crc = c8(crc, s->treeY);
 	crc = c8(crc, s->numShells);
 	for (i = 0; i < s->numShells; i++) {
 		const Shell *h = &s->shells[i];

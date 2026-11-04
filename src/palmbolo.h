@@ -102,6 +102,12 @@ void SEC_UI ViewClose(void);
 void SEC_UI ViewResized(void);
 void SEC_UI ViewFrame(Boolean full, Boolean ticked);
 Boolean SEC_UI ViewSetInputArea(Boolean closed);
+// The builder action shown chosen in the button row (0 tree to 4 mine).
+void SEC_UI ViewSetAction(UInt8 action);
+// A tap at x, y (standard coordinates): the button number 0-6 when it is
+// on the button row (0-4 the actions, 5 gunsight nearer, 6 further), else
+// -1 with the map square in mx, my.
+Int16 SEC_UI ViewTap(Coord x, Coord y, UInt8 *mx, UInt8 *my);
 #ifdef DEBUG
 // Draws the whole view count times and logs the average time.
 void SEC_UI ViewTimeFull(UInt16 count);

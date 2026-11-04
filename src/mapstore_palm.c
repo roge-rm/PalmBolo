@@ -1,7 +1,8 @@
 // Map storage on the Palm: the 256 x 256 terrain bytes live in the database
 // PalmBoloMapCache, kRows rows to a record (a record can't hold 64 KB on
 // OS 3). The records stay locked while the map is open, and writes go
-// through DmWrite. Nothing here is allocated in the dynamic heap.
+// through DmWrite. Nothing here is allocated in the dynamic heap. After the
+// terrain come the mine flag planes, 8 KB a record.
 #include "palmbolo.h"
 #include "game/mapstore.h"
 
@@ -11,16 +12,18 @@
 #define kRowsPerRecord  16
 #define kRecords        (256 / kRowsPerRecord)
 #define kRecordBytes    (kRowsPerRecord * 256)
+#define kFlagBytes      8192
+#define kAllRecords     (kRecords + MS_PLANES)
 
 static DmOpenRef gDb;
-static UInt8 *gRec[kRecords];   // locked record pointers
-static MemHandle gHandle[kRecords];
+static UInt8 *gRec[kAllRecords];    // locked record pointers
+static MemHandle gHandle[kAllRecords];
 
 static void Unlock(void)
 {
 	UInt16 i;
 
-	for (i = 0; i < kRecords; i++) {
+	for (i = 0; i < kAllRecords; i++) {
 		if (gRec[i]) {
 			MemHandleUnlock(gHandle[i]);
 			gRec[i] = NULL;
@@ -47,11 +50,11 @@ static DmOpenRef OpenCache(void)
 
 	db = DmOpenDatabaseByTypeCreator(kCacheType, kCreator, dmModeReadWrite);
 	if (db) {
-		Boolean ok = DmNumRecords(db) == kRecords;
+		Boolean ok = DmNumRecords(db) == kAllRecords;
 
-		for (i = 0; ok && i < kRecords; i++) {
+		for (i = 0; ok && i < kAllRecords; i++) {
 			h = DmQueryRecord(db, i);
-			ok = h && MemHandleSize(h) == kRecordBytes;
+			ok = h && MemHandleSize(h) == (i < kRecords ? kRecordBytes : kFlagBytes);
 		}
 		if (ok)
 			return db;
@@ -65,9 +68,9 @@ static DmOpenRef OpenCache(void)
 	db = DmOpenDatabaseByTypeCreator(kCacheType, kCreator, dmModeReadWrite);
 	if (!db)
 		return NULL;
-	for (i = 0; i < kRecords; i++) {
+	for (i = 0; i < kAllRecords; i++) {
 		index = dmMaxRecordIndex;
-		h = DmNewRecord(db, &index, kRecordBytes);
+		h = DmNewRecord(db, &index, i < kRecords ? kRecordBytes : kFlagBytes);
 		if (!h) {
 			DmCloseDatabase(db);
 			id = DmFindDatabase(0, kCacheName);
@@ -88,7 +91,7 @@ int mapstore_open(uint8_t value)
 	gDb = OpenCache();
 	if (!gDb)
 		return 1;
-	for (i = 0; i < kRecords; i++) {
+	for (i = 0; i < kAllRecords; i++) {
 		gHandle[i] = DmQueryRecord(gDb, i);
 		gRec[i] = gHandle[i] ? MemHandleLock(gHandle[i]) : NULL;
 		if (!gRec[i]) {
@@ -97,6 +100,7 @@ int mapstore_open(uint8_t value)
 		}
 	}
 	mapstore_fill(value);
+	mapstore_clear_flags();
 	return 0;
 }
 
@@ -129,4 +133,31 @@ void mapstore_set_bytes(uint8_t x, uint8_t y, uint16_t n, const uint8_t *src)
 	if (x + n > 256)
 		n = 256 - x;
 	DmWrite(gRec[y / kRowsPerRecord], (UInt32)(y % kRowsPerRecord) * 256 + x, src, n);
+}
+
+uint8_t mapstore_flag(uint8_t plane, uint8_t x, uint8_t y)
+{
+	return (uint8_t)((gRec[kRecords + plane][(UInt16)y * 32 + (x >> 3)] >> (x & 7)) & 1);
+}
+
+void mapstore_set_flag(uint8_t plane, uint8_t x, uint8_t y, uint8_t on)
+{
+	UInt8 *rec = gRec[kRecords + plane];
+	UInt16 off = (UInt16)y * 32 + (x >> 3);
+	UInt8 b = rec[off];
+
+	if (on)
+		b = (UInt8)(b | (1 << (x & 7)));
+	else
+		b = (UInt8)(b & ~(1 << (x & 7)));
+	if (b != rec[off])
+		DmWrite(rec, off, &b, 1);
+}
+
+void mapstore_clear_flags(void)
+{
+	UInt16 i;
+
+	for (i = 0; i < MS_PLANES; i++)
+		DmSet(gRec[kRecords + i], 0, kFlagBytes, 0);
 }

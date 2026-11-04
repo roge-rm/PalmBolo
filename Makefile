@@ -5,7 +5,8 @@
 #   make build/maprender   host tool: maprender FILE.map OUT.png [TILE_PX [X Y W H]]
 # EXTRA="-DAUTOQUIT_SECONDS=9" makes a debug build quit by itself, and
 # EXTRA="-DSELFTEST_AT_START" runs the self-test at launch (it is on the menu),
-# and EXTRA="-DDEMO_START" puts the tank west of the first base for replays.
+# EXTRA="-DDEMO_START" puts the tank west of the first base for replays, and
+# EXTRA="-DDEMO_BUILDER" by a forest on Everard Island with no trees.
 
 SDK      = ../palm-os-sdk/sdk-5r3
 PRC      = PalmBolo.prc
@@ -24,7 +25,11 @@ CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES)
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
 SRCS     = main screen detect dlog timing mapload mapstore_palm tileview
-GAMESRCS = game tank shells pills script util map tiles
+GAMESRCS = game tank shells pills lgm treegrow util map tiles
+# The scripted games are for the debug self-test only.
+ifdef DEBUG
+GAMESRCS += script
+endif
 OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS)))
 
 all: build/$(PRC)
@@ -60,7 +65,7 @@ build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
 host-test: build/hosttest
 	build/hosttest
 
-HOSTSRC  = src/game/game.c src/game/tank.c src/game/shells.c src/game/pills.c src/game/script.c src/game/util.c src/game/map.c src/game/tiles.c host/mapstore_host.c
+HOSTSRC  = src/game/game.c src/game/tank.c src/game/shells.c src/game/pills.c src/game/lgm.c src/game/treegrow.c src/game/script.c src/game/util.c src/game/map.c src/game/tiles.c host/mapstore_host.c
 
 build/hosttest: host/hosttest.c $(HOSTSRC) src/game/*.h | $(BUILD)
 	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) -lm -o $@

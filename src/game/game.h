@@ -13,6 +13,21 @@
 #include "map.h"
 #include "rules.h"
 
+// Code segments on the Palm. The rules are split by area so each segment
+// has room to grow; game.c, util.c and map.c stay in the first. A call into
+// another segment must see that segment's attribute on the declaration.
+#ifdef __palmos__
+#define SEC_TANK    __attribute__((section("tank")))
+#define SEC_SHELLS  __attribute__((section("shells")))
+#define SEC_PILLS   __attribute__((section("pills")))
+#define SEC_BUILDER __attribute__((section("builder")))
+#else
+#define SEC_TANK
+#define SEC_SHELLS
+#define SEC_PILLS
+#define SEC_BUILDER
+#endif
+
 #define GAME_TICKS_PER_SECOND 50
 #define GAME_MAX_PLAYERS    16      // the player and owner tables
 #define GAME_MAX_TANKS      1       // tanks playing now, up to GAME_MAX_PLAYERS later
@@ -40,9 +55,17 @@ enum {
 	OPT_AUTOSLOW = 0x01,    // slow down when no speed key is held
 	OPT_AUTOSIGHT = 0x02    // hide the gunsight at full range, show it nearer
 };
+// A builder order rides along with the keys: build is BUILD_NONE or one
+// of the actions, for the square buildX, buildY.
+enum {
+	BUILD_NONE = 0,
+	BUILD_TREE, BUILD_ROAD, BUILD_WALL, BUILD_PILL, BUILD_MINE
+};
 typedef struct GameInput {
 	uint8_t keys;
 	uint8_t opts;
+	uint8_t build;
+	uint8_t buildX, buildY;
 } GameInput;
 
 enum { BOAT_OFF = 0, BOAT_IN = 1 };
@@ -82,6 +105,21 @@ typedef struct Tank {
 	uint8_t firstRight, obstructed, player, numCarry;
 	uint8_t carry[MAP_MAX_PILLS];   // pills carried, newest first
 } Tank;
+
+// The builder (WinBolo's lgm). Actions are BUILD_* less one, so LGM_TREE
+// is 0, plus the boat a wall on a river turns into.
+enum { LGM_TREE, LGM_ROAD, LGM_BUILDING, LGM_PILL, LGM_MINE, LGM_BOAT, LGM_IDLE };
+enum { LGM_STATE_IDLE, LGM_STATE_GOING, LGM_STATE_RETURN };
+#define LGM_NO_PILL         255
+#define LGM_HELICOPTER_FRAME 3
+typedef struct Builder {
+	uint16_t x, y;          // world units
+	uint16_t destX, destY;  // where he walks to, or flies to when dead
+	uint8_t state, waitTime, inTank, isDead;
+	uint8_t numTrees, numMines, pill, action;   // pill: index carried, or LGM_NO_PILL
+	uint8_t nextX, nextY, nextAction, frame;    // frame 0-2 walking, 3 parachute
+	uint8_t blessX, blessY, onTop, obstructed;
+} Builder;
 
 typedef struct Shell {
 	uint16_t x, y;
@@ -136,6 +174,10 @@ typedef struct GameState {
 	Square mineExp[GAME_MAX_MINEEXP];       // [0] is the newest
 	Square flood[GAME_MAX_FLOOD];           // [0] is the oldest
 	SquareList damage[DMG_KINDS];           // [0] is the newest
+	Builder men[GAME_MAX_TANKS];            // tank n's builder
+	uint16_t treeSeed;      // tree growth's own generator, seeded from rng
+	int16_t treeTime, treeScore;            // ticks to the next tree, best score
+	uint8_t treeX, treeY;   // where it grows
 	MapInfo map;            // pills, bases and starts of the loaded map
 } GameState;
 
@@ -171,7 +213,13 @@ uint8_t game_take_changes(uint8_t *xy, uint8_t max);
 
 // Gunsight square of a tank in world units (where a shell at this range
 // lands), and whether it is shown.
-void game_gunsight(const GameState *s, uint8_t t, uint16_t *wx, uint16_t *wy);
+void SEC_TANK game_gunsight(const GameState *s, uint8_t t, uint16_t *wx, uint16_t *wy);
+
+// Whether the player whose screen this is (game_set_viewer, 0 by default)
+// is shown the mine at a square. With hidden mines on that is only mines
+// they laid or saw, or an ally laid; drawing only, the rules see them all.
+void game_set_viewer(uint8_t player);
+uint8_t game_mine_shown(const GameState *s, uint8_t x, uint8_t y);
 
 // Terrain at a square as the rules see it: deep sea in the mined border.
 uint8_t game_terrain(uint8_t x, uint8_t y);
