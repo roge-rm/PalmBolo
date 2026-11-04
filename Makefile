@@ -1,0 +1,62 @@
+# Builds build/PalmBolo.prc with prc-tools-remix and PilRC.
+#   make             release PRC
+#   make DEBUG=1     adds the debug log, timers and self-test (build-debug/)
+#   make host-test   builds and runs the game rules test on the host
+# EXTRA="-DAUTOQUIT_SECONDS=9" makes a debug build quit by itself.
+
+SDK      = ../palm-os-sdk/sdk-5r3
+PRC      = PalmBolo.prc
+
+ifdef DEBUG
+BUILD    = build/debug
+DEFS     = -DDEBUG $(EXTRA)
+else
+BUILD    = build/release
+DEFS     = $(EXTRA)
+endif
+
+CC       = m68k-palmos-gcc
+INCLUDES = $(addprefix -I,$(shell find $(SDK)/include -type d))
+CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES)
+LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
+
+SRCS     = main screen detect dlog timing
+OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) game))
+
+all: build/$(PRC)
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+$(BUILD)/%.o: src/%.c src/palmbolo.h src/resource.h src/game/game.h | $(BUILD)
+	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/game.o: src/game/game.c src/game/game.h | $(BUILD)
+	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/palmbolo-sections.s $(BUILD)/palmbolo-sections.ld: src/palmbolo.def | $(BUILD)
+	m68k-palmos-multigen -b $(BUILD)/palmbolo-sections src/palmbolo.def
+
+$(BUILD)/palmbolo-sections.o: $(BUILD)/palmbolo-sections.s
+	$(CC) -c $< -o $@
+
+$(BUILD)/palmbolo: $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld
+	$(CC) $(LDFLAGS) $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld -o $@
+
+$(BUILD)/palmbolo.ro: src/palmbolo.rcp src/resource.h res/icon.bmp res/smallicon.bmp | $(BUILD)
+	pilrc -q -ro -I src src/palmbolo.rcp $@
+
+# The PRC is always written to build/PalmBolo.prc, so build one flavour at a time.
+build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
+	build-prc -o $@ src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
+
+host-test: build/hosttest
+	build/hosttest
+
+build/hosttest: host/hosttest.c src/game/game.c src/game/game.h | $(BUILD)
+	gcc -Wall -Wextra -O2 host/hosttest.c src/game/game.c -o $@
+
+clean:
+	rm -rf build
+
+.PHONY: all clean host-test

@@ -1,0 +1,37 @@
+#include "resource.h"
+
+VERSION ID 1 "0.1"
+ICON "../res/icon.bmp"
+SMALLICON "../res/smallicon.bmp"
+
+FORM ID MainForm AT (0 0 160 160)
+NOFRAME
+USABLE
+MENUID MainMenu
+BEGIN
+END
+
+MENU ID MainMenu
+BEGIN
+  PULLDOWN "Game"
+  BEGIN
+    MENUITEM "About PalmBolo" ID MainMenuAbout
+    MENUITEM "Quit" ID MainMenuQuit
+  END
+END
+
+ALERT ID AboutAlert
+INFORMATION
+BEGIN
+  TITLE "About PalmBolo"
+  MESSAGE "PalmBolo 0.1\nBolo for Palm OS. GPLv3."
+  BUTTONS "OK"
+END
+
+ALERT ID RomIncompatibleAlert
+ERROR
+BEGIN
+  TITLE "System Incompatible"
+  MESSAGE "PalmBolo needs Palm OS 3.0 or later."
+  BUTTONS "OK"
+END
