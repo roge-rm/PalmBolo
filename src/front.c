@@ -179,6 +179,61 @@ static void * SEC_FRONT Obj(FormType *frm, UInt16 id)
 	return FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, id));
 }
 
+// ---- tall screens ----
+
+static Coord gMidShift;     // how far the form's contents have moved down
+static Coord gBotShift;     // and its bottom buttons
+
+// The form's 160 high layout on a taller screen. Everything but the title
+// bar and the two bottom buttons moves down half the extra height, the
+// buttons go to the bottom. With a list id given, the contents stay and that
+// list gets the extra rows instead. reset is true on a freshly loaded form.
+static void SEC_FRONT TallLayout(FormType *frm, UInt16 bot1, UInt16 bot2,
+	UInt16 list, Boolean reset)
+{
+	RectangleType r;
+	Coord extra, mid, bot, dm, db;
+	UInt16 i, n;
+
+	if (reset)
+		gMidShift = gBotShift = 0;
+	ScreenDisplayRect(&r);
+	extra = (Coord)(r.extent.y - 160);
+	if (extra < 0)
+		extra = 0;
+	bot = extra;
+	mid = list != 0xFFFF ? 0 : (Coord)(extra / 2);
+	dm = (Coord)(mid - gMidShift);
+	db = (Coord)(bot - gBotShift);
+	n = FrmGetNumberOfObjects(frm);
+	for (i = 0; i < n; i++) {
+		UInt16 id = FrmGetObjectId(frm, i);
+		FormObjectKind kind = FrmGetObjectType(frm, i);
+		Coord x, y;
+
+		if (kind == frmTitleObj || kind == frmGraffitiStateObj || kind == frmPopupObj)
+			continue;
+		if (id == list) {
+			LstSetHeight((ListType *)FrmGetObjectPtr(frm, i), (Int16)(11 + extra / 11));
+			continue;
+		}
+		FrmGetObjectPosition(frm, i, &x, &y);
+		if (kind == frmListObj) {
+			LstSetPosition((ListType *)FrmGetObjectPtr(frm, i), x,
+				(Coord)(y + (id == bot1 || id == bot2 ? db : dm)));
+			continue;
+		}
+		if (id == bot1 || id == bot2) {
+			if (db)
+				FrmSetObjectPosition(frm, i, x, (Coord)(y + db));
+		} else if (dm) {
+			FrmSetObjectPosition(frm, i, x, (Coord)(y + dm));
+		}
+	}
+	gMidShift = mid;
+	gBotShift = bot;
+}
+
 // ---- title ----
 
 static MemHandle gTitleRes;     // the picture, locked while the title shows
@@ -327,6 +382,7 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 				sel = i;
 		}
 		LstSetListChoices(lst, gNamePtrs, gNumMaps);
+		TallLayout(frm, MapNext, MapBack, MapList, true);
 		LstSetSelection(lst, sel);
 		FrmDrawForm(frm);
 		return true;
@@ -351,6 +407,7 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 		return false;
 	case winDisplayChangedEvent:
 		FitWindow(frm);
+		TallLayout(frm, MapNext, MapBack, MapList, false);
 		FrmDrawForm(frm);
 		return true;
 	default:
@@ -376,6 +433,7 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 	switch (e->eType) {
 	case frmOpenEvent:
 		FitForm(frm, false);
+		TallLayout(frm, NgStart, NgBack, 0xFFFF, true);
 		SetPopup(frm, NgTypeTrig, NgTypeList, p->gameType);
 		CtlSetValue((ControlType *)Obj(frm, NgMines), p->hiddenMines);
 		SetPopup(frm, NgTimeTrig, NgTimeList, p->timeLimit);
@@ -412,6 +470,7 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 		return false;
 	case winDisplayChangedEvent:
 		FitWindow(frm);
+		TallLayout(frm, NgStart, NgBack, 0xFFFF, false);
 		FrmDrawForm(frm);
 		return true;
 	default:
@@ -457,6 +516,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 
 		// Closed, so the keyboard doesn't pop up on its own.
 		FitForm(frm, false);
+		TallLayout(frm, SetOK, SetCancel, 0xFFFF, true);
 		ViewInputTrigger();
 		if (h) {
 			StrCopy((Char *)MemHandleLock(h), p->name);
@@ -471,6 +531,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 			KeyLabel(frm, i);
 		}
 		FrmDrawForm(frm);
+		GsiSetLocation(75, (Coord)(146 + gBotShift));
 		FrmSetFocus(frm, noFocus);
 		return true;
 	}
@@ -520,7 +581,9 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 	}
 	case winDisplayChangedEvent:
 		FitWindow(frm);
+		TallLayout(frm, SetOK, SetCancel, 0xFFFF, false);
 		FrmDrawForm(frm);
+		GsiSetLocation(75, (Coord)(146 + gBotShift));
 		return true;
 	default:
 		break;
@@ -543,7 +606,7 @@ static void SEC_FRONT ResultsDraw(void)
 	const AppPrefs *p = AppPrefsGet();
 	Char buf[20];
 	UInt16 i, j;
-	Coord y = 20;
+	Coord y = (Coord)(20 + gMidShift);
 
 	if (!g)
 		return;
@@ -592,6 +655,7 @@ static Boolean SEC_FRONT ResultsHandler(EventType *e)
 	switch (e->eType) {
 	case frmOpenEvent:
 		FitForm(frm, false);
+		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, true);
 		FrmDrawForm(frm);
 		ResultsDraw();
 		return true;
@@ -604,6 +668,7 @@ static Boolean SEC_FRONT ResultsHandler(EventType *e)
 		return false;
 	case winDisplayChangedEvent:
 		FitWindow(frm);
+		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, false);
 		FrmDrawForm(frm);
 		ResultsDraw();
 		return true;
