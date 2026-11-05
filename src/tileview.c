@@ -12,9 +12,9 @@
 // Which terrain cell a square shows depends on its neighbours (tilepick.c),
 // so a changed square redraws the squares round it too.
 //
-// The tanks, builder, shells, explosions and the gunsight are drawn over
-// the tiles each frame the game ticked, and erased next time by drawing the
-// tiles under them again. The view follows the tank.
+// The tanks, builder, shells, explosions, wrecks and the gunsight are
+// drawn over the tiles each frame the game ticked, and erased next time by
+// drawing the tiles under them again. The view follows the tank.
 //
 // Under the view is the status panel (panel.c), then along the bottom a
 // row of buttons: the five builder actions, the one chosen shown inverted,
@@ -31,8 +31,8 @@ static const GameState *gGame;
 static WinHandle gSheet, gSprites, gMasks;
 static UInt8 gShift = 5;        // world units to view pixels
 // Rectangles drawn over the tiles last frame, to erase next frame: room
-// for every explosion, tank, builder and shell and the gunsight.
-#define kMaxRects (GAME_MAX_EXPL + 2 * GAME_MAX_TANKS + GAME_MAX_SHELLS + 1)
+// for every explosion, wreck, tank, builder and shell and the gunsight.
+#define kMaxRects (GAME_MAX_EXPL + GAME_MAX_TKEXPL + 2 * GAME_MAX_TANKS + GAME_MAX_SHELLS + 1)
 static RectangleType gOld[kMaxRects];
 static UInt16 gNumOld;
 // Pills and bases as last drawn: x, y, owner, armour and inTank (pills).
@@ -76,13 +76,12 @@ static void SEC_UI Fill(Coord x, Coord y, Coord w, Coord h, IndexedColorType c)
 
 // Colour indexes, looked up while the screen is the draw window, since an
 // offscreen window may not have the screen's palette.
-static IndexedColorType gWhite, gBlack, gRed;
+static IndexedColorType gWhite, gBlack;
 
 static void SEC_UI LookupColours(void)
 {
 	gWhite = ScreenIndex(255, 255, 255);
 	gBlack = ScreenIndex(0, 0, 0);
-	gRed = ScreenIndex(200, 0, 0);
 }
 
 // The index with every bit set, which the sprite masks are drawn in so
@@ -670,7 +669,6 @@ static void SEC_UI DrawSprites(void)
 	UInt8 vt = game_viewer_tank(g);
 	const Tank *k = &g->tanks[vt];
 	UInt16 i;
-	Coord x, y, r;
 	RectangleType clip;
 
 	clip.topLeft.x = clip.topLeft.y = 0;
@@ -683,6 +681,9 @@ static void SEC_UI DrawSprites(void)
 
 		DrawAt(AS_EXPL_0 + (f < 0 ? 0 : f > 7 ? 7 : f), g->expl[i].x, g->expl[i].y);
 	}
+	// A dead tank's wreck flying off: one frame, at the head of its trail.
+	for (i = 0; i < g->numTkExpl; i++)
+		DrawAt(AS_TKEXPL, g->tkExpl[i].x, g->tkExpl[i].y);
 	// Every tank in its own, allied or enemy look, the viewer's on top,
 	// and every builder that is out.
 	for (i = 0; i < g->numTanks; i++)
@@ -697,12 +698,7 @@ static void SEC_UI DrawSprites(void)
 		uint16_t wx, wy;
 
 		game_gunsight(g, vt, &wx, &wy);
-		x = WorldX((uint16_t)(wx + 128));
-		y = WorldY((uint16_t)(wy + 128));
-		r = gTs / 2;
-		Fill(x - r, y, r * 2, 1, gRed);
-		Fill(x, y - r, 1, r * 2, gRed);
-		Remember(x - r, y - r, r * 2 + 1, r * 2 + 1);
+		DrawAt(AS_GUNSIGHT, (uint16_t)(wx + 128), (uint16_t)(wy + 128));
 	}
 	WinResetClip();
 }

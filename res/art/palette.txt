@@ -78,6 +78,7 @@
 63  start          255 204   0   2  0  0
 64  sel           255 204   0   3  1  d
 65  icon_own       0 204   0  10  3  1
+85  sight         255  51  51   1  0  0
 # Launcher icon and title screen (tools/titleart.py).
 66  pda_case      153 153 153   4  1  0
 67  pda_case_hi   204 204 204   1  0  0

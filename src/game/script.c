@@ -200,7 +200,16 @@ static const Op kScripts[] = {
 	{ OP_KEYS, 0, 0, 0, 0, 1000 }, { OP_KEYS, 0, 0, 0, 0, 1000 }, { OP_END, 0, 0, 0, 0, 0 },
 	// 34 a hard bot takes over tank 0 after it drives off its boat
 	{ OP_PLAYERS, 2, 0, 0, 0, 0 }, { OP_KEYS, F, 0, 0, 0, 150 }, { OP_BOT, BOT_HARD, 0, 0, 0, 0 },
-	{ OP_KEYS, 0, 0, 0, 0, 1500 }, { OP_KEYS, 0, 0, 0, 0, 1500 }, { OP_END, 0, 0, 0, 0, 0 }
+	{ OP_KEYS, 0, 0, 0, 0, 1500 }, { OP_KEYS, 0, 0, 0, 0, 1500 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 35 a slow boat drifts onto a bank and is held off it, slides along
+	// it heading north east, then lands at full speed
+	{ OP_FIND, TERRAIN_RIVER, TERRAIN_GRASS, 3, 1, 0 }, { OP_KEYS, F, 0, 0, 0, 40 },
+	{ OP_KEYS, 0, 0, 0, 0, 120 }, { OP_FACE, 2, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 80 },
+	{ OP_KEYS, F, 0, 0, 0, 120 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 36 a tournament tank drowns and comes back at a start
+	{ OP_TYPE, GAME_TOURNAMENT, 0, 0, 0, 0 },
+	{ OP_FIND, TERRAIN_DEEP_SEA, TERRAIN_DEEP_SEA, 2, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 10 },
+	{ OP_KEYS, 0, 0, 0, 0, 260 }, { OP_END, 0, 0, 0, 0, 0 }
 };
 #undef F
 
@@ -209,7 +218,7 @@ static const char kNames[] =
 	"capture\0base fuel\0pill shot\0pill down\0restock\0types\0trees\0road\0wall\0"
 	"boat wall\0put pill\0fix pill\0lgm mine\0lgm shot\0regrow\0flood\0boat wreck\0"
 	"mine wreck\0base wreck\0collide\0tank kill\0pill near\0pill ally\0mine other\0"
-	"bots\0takeover\0";
+	"bots\0takeover\0boat bank\0tourn back\0";
 
 const char *script_name(uint8_t n)
 {

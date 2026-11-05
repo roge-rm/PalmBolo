@@ -201,6 +201,11 @@ Boolean SEC_FRONT SaveWrite(const struct GameState *g);
 // the game in progress until written again.
 Boolean SEC_FRONT SaveRead(struct GameState *g);
 void SEC_FRONT SaveDrop(void);
+#if defined(DEBUG) && defined(DEMO_SHOWCASE)
+// Sets up a new game so the parachute, the builder walking, carried pills
+// and a wreck are on screen (EXTRA=-DDEMO_SHOWCASE).
+void SEC_FRONT DemoShowcase(struct GameState *g);
+#endif
 #ifdef DEBUG
 // Plays a game straight through and saved and resumed halfway, and logs
 // whether the checksums match. Replaces any saved game.

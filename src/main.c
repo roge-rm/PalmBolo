@@ -222,6 +222,9 @@ void AppOpenMap(UInt16 index, const Char *name)
 		k->boat = BOAT_OFF;
 	}
 #endif
+#if defined(DEBUG) && defined(DEMO_SHOWCASE)
+	DemoShowcase(&gGame);
+#endif
 #if defined(DEBUG) && defined(DEMO_BUILDER)
 	// For the builder replay on Everard Island: the tank on the road at
 	// 160,116 facing east with no trees, forest two squares south east.

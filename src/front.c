@@ -7,6 +7,7 @@
 #include "art.h"
 #include "game/game.h"
 #include "game/mapstore.h"
+#include "game/util.h"
 
 #define kSaveDbName     "PalmBoloSavedGame"
 #define kSaveDbType     'Sgam'
@@ -684,5 +685,46 @@ void SEC_FRONT FrontSaveTest(GameState *g)
 	LOG(("save and resume %s %s terrain %s %s", hex, hex2, ta == tb ? "same" : "DIFFERENT",
 		a == b && ta == tb ? "ok" : "WRONG"));
 	SaveDrop();
+}
+#endif
+
+#if defined(DEBUG) && defined(DEMO_SHOWCASE)
+// For the art replay: the tank on land six squares west of the first base
+// with the first two pills on board, its builder under a parachute three
+// squares north flying to four squares east of it, and a wreck flying east
+// from three squares south.
+void SEC_FRONT DemoShowcase(struct GameState *g)
+{
+	Tank *k = &g->tanks[game_viewer_tank(g)];
+	Builder *m = &g->men[game_viewer_tank(g)];
+	TankExplosion *e;
+	UInt8 i;
+
+	if (g->map.numBases > 0) {
+		k->x = (UInt16)(((UInt16)g->map.bases[0].x - 6) * 256 + 128);
+		k->y = (UInt16)((UInt16)g->map.bases[0].y * 256 + 128);
+	}
+	k->angle = 64 * ANGLE_ONE;
+	k->boat = BOAT_OFF;
+	for (i = 0; i < 2 && i < g->map.numPills; i++) {
+		g->map.pills[i].inTank = 1;
+		g->map.pills[i].owner = k->player;
+		k->carry[k->numCarry++] = i;
+	}
+	m->inTank = 0;
+	m->isDead = 1;
+	m->frame = LGM_HELICOPTER_FRAME;
+	m->x = k->x;
+	m->y = (UInt16)(k->y - 3 * 256);
+	m->destX = (UInt16)(k->x + 4 * 256);
+	m->destY = k->y;
+	e = &g->tkExpl[0];
+	e->x = k->x;
+	e->y = (UInt16)(k->y + 3 * 256);
+	e->angle = 64 * ANGLE_ONE;
+	e->length = 255;
+	e->big = 0;
+	e->creator = GAME_NO_PLAYER;
+	g->numTkExpl = 1;
 }
 #endif

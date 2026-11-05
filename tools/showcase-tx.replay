@@ -1,0 +1,40 @@
+# Open items art check on a TX: a new game set up by DEMO_SHOWCASE with
+# the builder under a parachute, two carried pills, a wreck flying and the
+# gunsight. Debug build with EXTRA="-DDEMO_SHOWCASE -DAUTOQUIT_SECONDS=45".
+# Times are ms after launch and settle.
+0 snapshot "1-title.png"
+4500 pen-down 160 246
+4600 pen-up
+5700 pen-down 68 301
+5800 pen-up
+7200 pen-down 68 301
+7300 pen-up
+8000 snapshot "2-start.png"
+10500 snapshot "6.png"
+15000 snapshot "d15000.png"
+15150 snapshot "d15150.png"
+15300 snapshot "d15300.png"
+15450 snapshot "d15450.png"
+15600 snapshot "d15600.png"
+15750 snapshot "d15750.png"
+15900 snapshot "d15900.png"
+16050 snapshot "d16050.png"
+16200 snapshot "d16200.png"
+16350 snapshot "d16350.png"
+16500 snapshot "d16500.png"
+16650 snapshot "d16650.png"
+16800 snapshot "d16800.png"
+16950 snapshot "d16950.png"
+17100 snapshot "d17100.png"
+17250 snapshot "d17250.png"
+17400 snapshot "d17400.png"
+17550 snapshot "d17550.png"
+17700 snapshot "d17700.png"
+17850 snapshot "d17850.png"
+18000 snapshot "d18000.png"
+18150 snapshot "d18150.png"
+18300 snapshot "d18300.png"
+18450 snapshot "d18450.png"
+18600 snapshot "d18600.png"
+18750 snapshot "d18750.png"
+18900 snapshot "d18900.png"

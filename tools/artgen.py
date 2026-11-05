@@ -672,7 +672,7 @@ SPRITES = ["TANK_%s%s_%d" % (o, b, d) for o in OWNERS for b in ("", "_BOAT") for
     ["MAN_0", "MAN_1", "MAN_2", "PARA"] + ["SHELL_%d" % d for d in range(16)] + \
     ["EXPL_%d" % i for i in range(8)] + ["MINE"] + \
     ["ICON_" + n for n in ICON_NAMES] + ["ICON_%s_SEL" % n for n in ICON_NAMES] + \
-    ["ICON_" + n for n in ICON_EXTRA]
+    ["ICON_" + n for n in ICON_EXTRA] + ["GUNSIGHT", "TKEXPL"]
 
 
 def combos(alphabet):
@@ -1538,6 +1538,30 @@ def draw_expl(s, k):
     return c
 
 
+def draw_tkexpl(s):
+    """The flying wreck of a dead tank: the second explosion frame,
+    outlined so it shows on light ground at 1 and 2 bits."""
+    return outline(draw_expl(s, 1))
+
+
+def draw_gunsight(s):
+    """A ring over the target square, with four ticks out to the edges at
+    16 pixels, outlined so it shows on light and dark ground."""
+    c = Cell(s)
+    mid = s / 2 - 0.5
+    lo, hi = (2.0, 2.6) if s == 8 else (4.0, 5.0)
+    for y in range(s):
+        for x in range(s):
+            if lo <= math.hypot(x - mid, y - mid) <= hi:
+                c.set(x, y, "sight")
+    if s == 16:
+        for a in (1, 2, 13, 14):
+            for (x, y) in [(7, a), (8, a), (a, 7), (a, 8)]:
+                c.set(x, y, "sight")
+    outline(c)
+    return c
+
+
 def draw_mine(s):
     c = Cell(s)
     mid = s / 2
@@ -1618,6 +1642,7 @@ def sprite_cells(s):
     out += [draw_expl(s, k) for k in range(8)]
     out.append(draw_mine(s))
     out += icon_cells(s)
+    out += [draw_gunsight(s), draw_tkexpl(s)]
     assert len(out) == len(SPRITES)
     return out
 

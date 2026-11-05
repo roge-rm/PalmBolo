@@ -9,6 +9,8 @@
 # EXTRA="-DDEMO_START" puts the tank west of the first base for replays,
 # EXTRA="-DKEEP_INPUT_AREA" leaves the input area open on a TX, and
 # EXTRA="-DDEMO_BUILDER" by a forest on Everard Island with no trees.
+# EXTRA="-DDEMO_SHOWCASE" puts a parachute, carried pills and a wreck on
+# screen in a new game.
 # EXTRA="-DTEST_TIME_LIMIT=1000" ends a debug game after that many ticks.
 # EXTRA="-DTEST_LEAVE_AT=500" leaves a debug game for the title at that tick.
 # EXTRA="-DBOT_COUNT=3 -DBOT_LEVEL=2" sets the bots in a new game (level

@@ -272,7 +272,8 @@ static uint8_t SEC_TANK near(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by, uin
 	return dx <= range && dy <= range;
 }
 
-// Another live tank within range squares; hostile only if asked.
+// Another tank within range squares; hostile only if asked. A tank waiting
+// to respawn counts where it died, as in WinBolo.
 static uint8_t SEC_TANK tank_near(const GameState *s, uint8_t self, uint8_t x, uint8_t y,
 	uint8_t range, uint8_t hostile)
 {
@@ -281,7 +282,7 @@ static uint8_t SEC_TANK tank_near(const GameState *s, uint8_t self, uint8_t x, u
 	for (i = 0; i < s->numTanks; i++) {
 		const Tank *o = &s->tanks[i];
 
-		if (i == self || o->destroyed)
+		if (i == self)
 			continue;
 		if (hostile && game_allied(s, o->player, s->tanks[self].player))
 			continue;
@@ -315,11 +316,12 @@ static uint8_t SEC_TANK pill_near(const GameState *s, uint8_t player, uint8_t x,
 
 // startsGetStartOpen: from a random first start, the first ideal one (no
 // tank beside it and no pill but friendly ones near), else the first with
-// no enemy near, else the first valid, else the first.
+// no enemy near, else the first valid, else the lowest numbered start on
+// the map.
 static int8_t SEC_TANK pick_open(GameState *s, uint8_t t)
 {
 	uint8_t n = s->map.numStarts, i, player = s->tanks[t].player;
-	int8_t friendly = -1, fallback = -1, any = -1;
+	int8_t friendly = -1, fallback = -1;
 	uint16_t r = game_random_below(s, n);
 
 	for (i = 0; i < n; i++) {
@@ -328,8 +330,6 @@ static int8_t SEC_TANK pick_open(GameState *s, uint8_t t)
 
 		if (!st->active)
 			continue;
-		if (any < 0)
-			any = (int8_t)j;
 		if (!start_square_ok(st->x, st->y))
 			continue;
 		if (!tank_near(s, t, st->x, st->y, R_START_TANK_RANGE, 0) &&
@@ -341,20 +341,31 @@ static int8_t SEC_TANK pick_open(GameState *s, uint8_t t)
 		if (fallback < 0)
 			fallback = (int8_t)j;
 	}
-	return friendly >= 0 ? friendly : fallback >= 0 ? fallback : any;
+	if (friendly >= 0)
+		return friendly;
+	if (fallback >= 0)
+		return fallback;
+	for (i = 0; i < n; i++)
+		if (s->map.starts[i].active)
+			return (int8_t)i;
+	return -1;
 }
 
-enum { TIER_OWN, TIER_NEUTRAL, TIER_SAFE, TIER_FALLBACK, TIER_NONE };
+// What startsGetStartTournament learns about one start: valid (deep sea, no
+// mine), near an own or allied base, near a neutral base, clear of every
+// tank and pill. A start with an enemy tank, pill or base near is only
+// valid.
+enum { ST_VALID = 1, ST_OWN = 2, ST_NEUTRAL = 4, ST_SAFE = 8 };
 
-static uint8_t SEC_TANK start_tier(const GameState *s, uint8_t t, const MapStart *st)
+static uint8_t SEC_TANK start_flags(const GameState *s, uint8_t t, const MapStart *st)
 {
-	uint8_t player = s->tanks[t].player, i, own = 0, neutral = 0;
+	uint8_t player = s->tanks[t].player, i, f = ST_VALID;
 
 	if (!st->active || !start_square_ok(st->x, st->y))
-		return TIER_NONE;
+		return 0;
 	if (tank_near(s, t, st->x, st->y, R_START_TANK_RANGE, 1) ||
 	    pill_near(s, player, st->x, st->y, 2))
-		return TIER_FALLBACK;
+		return ST_VALID;
 	for (i = 0; i < s->map.numBases; i++) {
 		const MapBase *b = &s->map.bases[i];
 
@@ -362,29 +373,39 @@ static uint8_t SEC_TANK start_tier(const GameState *s, uint8_t t, const MapStart
 		    !near(b->x, b->y, st->x, st->y, R_START_BASE_RANGE))
 			continue;
 		if (b->owner == MAP_NEUTRAL)
-			neutral = 1;
+			f |= ST_NEUTRAL;
 		else if (game_allied(s, b->owner, player))
-			own = 1;
+			f |= ST_OWN;
 		else
-			return TIER_FALLBACK;
+			return ST_VALID;
 	}
-	if (own)
-		return TIER_OWN;
-	if (neutral)
-		return TIER_NEUTRAL;
 	if (!tank_near(s, t, st->x, st->y, R_START_TANK_RANGE, 0) &&
 	    !pill_near(s, player, st->x, st->y, 0))
-		return TIER_SAFE;
-	return TIER_FALLBACK;
+		f |= ST_SAFE;
+	return f;
 }
 
-// startsGetStartTournament: near the player's own bases, or neutral ones
-// (taken together while over a fifth of the bases are neutral), else away
-// from everything, else anywhere valid; a random start within the tier.
+// The start numbered want among those with flag set, in start order.
+static int8_t SEC_TANK nth_start(const uint8_t *flags, uint8_t n, uint8_t flag, uint8_t want)
+{
+	uint8_t i;
+
+	for (i = 0; i < n; i++)
+		if ((flags[i] & flag) && want-- == 0)
+			return (int8_t)i;
+	return -1;
+}
+
+// startsGetStartTournament: a random start near an own base, else near a
+// neutral one, else clear of everything, else any valid one. While over a
+// fifth of the bases are neutral, own and neutral are drawn from one list,
+// own starts first, and a start near both is in it twice (WinBolo quirk).
+// With nothing valid, the lowest numbered start on the map.
 static int8_t SEC_TANK pick_tournament(GameState *s, uint8_t t)
 {
-	uint8_t n = s->map.numStarts, i, tier, live = 0, neutral = 0, want, count;
-	uint8_t tiers[MAP_MAX_STARTS];
+	uint8_t n = s->map.numStarts, i, live = 0, neutral = 0, want;
+	uint8_t nOwn = 0, nNeutral = 0, nSafe = 0, nValid = 0;
+	uint8_t flags[MAP_MAX_STARTS];
 
 	for (i = 0; i < s->map.numBases; i++) {
 		const MapBase *b = &s->map.bases[i];
@@ -396,22 +417,28 @@ static int8_t SEC_TANK pick_tournament(GameState *s, uint8_t t)
 			neutral++;
 	}
 	for (i = 0; i < n; i++) {
-		tiers[i] = start_tier(s, t, &s->map.starts[i]);
-		if (live > 0 && (uint16_t)neutral * 100 / live > R_START_NEUTRAL_PCT &&
-		    tiers[i] == TIER_NEUTRAL)
-			tiers[i] = TIER_OWN;
+		uint8_t f = start_flags(s, t, &s->map.starts[i]);
+
+		flags[i] = f;
+		nOwn = (uint8_t)(nOwn + ((f & ST_OWN) != 0));
+		nNeutral = (uint8_t)(nNeutral + ((f & ST_NEUTRAL) != 0));
+		nSafe = (uint8_t)(nSafe + ((f & ST_SAFE) != 0));
+		nValid = (uint8_t)(nValid + ((f & ST_VALID) != 0));
 	}
-	for (tier = TIER_OWN; tier < TIER_NONE; tier++) {
-		count = 0;
-		for (i = 0; i < n; i++)
-			count = (uint8_t)(count + (tiers[i] == tier));
-		if (count == 0)
-			continue;
-		want = (uint8_t)game_random_below(s, count);
-		for (i = 0; i < n; i++)
-			if (tiers[i] == tier && want-- == 0)
-				return (int8_t)i;
+	if (live > 0 && (uint16_t)neutral * 100 / live > R_START_NEUTRAL_PCT && nOwn + nNeutral > 0) {
+		want = (uint8_t)game_random_below(s, (uint16_t)(nOwn + nNeutral));
+		if (want < nOwn)
+			return nth_start(flags, n, ST_OWN, want);
+		return nth_start(flags, n, ST_NEUTRAL, (uint8_t)(want - nOwn));
 	}
+	if (nOwn > 0)
+		return nth_start(flags, n, ST_OWN, (uint8_t)game_random_below(s, nOwn));
+	if (nNeutral > 0)
+		return nth_start(flags, n, ST_NEUTRAL, (uint8_t)game_random_below(s, nNeutral));
+	if (nSafe > 0)
+		return nth_start(flags, n, ST_SAFE, (uint8_t)game_random_below(s, nSafe));
+	if (nValid > 0)
+		return nth_start(flags, n, ST_VALID, (uint8_t)game_random_below(s, nValid));
 	for (i = 0; i < n; i++)
 		if (s->map.starts[i].active)
 			return (int8_t)i;
@@ -721,8 +748,8 @@ static uint8_t SEC_TANK land_not_boat(const GameState *s, uint8_t x, uint8_t y)
 }
 
 // The boat part of tankMoveUnified. bmx, bmy is the square at the start of
-// the tick and ox, oy the position.
-static void SEC_TANK boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy, uint16_t ox, uint16_t oy)
+// the tick.
+static void SEC_TANK boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy)
 {
 	Tank *k = &s->tanks[t];
 	uint8_t mx = (uint8_t)(k->x >> 8), my = (uint8_t)(k->y >> 8);
@@ -734,20 +761,21 @@ static void SEC_TANK boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy
 	} else if (terr == TERRAIN_BOAT) {
 		// Driving a boat into another sinks the other one.
 		game_set_terrain(mx, my, TERRAIN_RIVER);
-		g_explosion(s, k->x, k->y);
+		g_explosion(s, (uint16_t)(((uint16_t)mx << 8) + 128U), (uint16_t)(((uint16_t)my << 8) + 128U));
 		g_sound(SND_SHOT_BUILDING, mx, my, GAME_NO_PLAYER);
 	}
 	if (slow && !g_is_land(s, mx, my)) {
-		// Keep a slow boat off the bank.
+		// Keep a slow boat off the bank: the centre stays the inset inside
+		// the square, 64 to 191.
 		uint16_t lo = (uint16_t)(((uint16_t)mx << 8) + R_TANK_BOAT_EXIT_INSET);
-		uint16_t hi = (uint16_t)(((uint16_t)mx << 8) + 256 - R_TANK_BOAT_EXIT_INSET);
+		uint16_t hi = (uint16_t)(((uint16_t)mx << 8) + 255 - R_TANK_BOAT_EXIT_INSET);
 
 		if (land_not_boat(s, (uint8_t)(mx - 1), my) && k->x < lo)
 			k->x = lo;
 		if (land_not_boat(s, (uint8_t)(mx + 1), my) && k->x > hi)
 			k->x = hi;
 		lo = (uint16_t)(((uint16_t)my << 8) + R_TANK_BOAT_EXIT_INSET);
-		hi = (uint16_t)(((uint16_t)my << 8) + 256 - R_TANK_BOAT_EXIT_INSET);
+		hi = (uint16_t)(((uint16_t)my << 8) + 255 - R_TANK_BOAT_EXIT_INSET);
 		if (land_not_boat(s, mx, (uint8_t)(my - 1)) && k->y < lo)
 			k->y = lo;
 		if (land_not_boat(s, mx, (uint8_t)(my + 1)) && k->y > hi)
@@ -760,22 +788,38 @@ static void SEC_TANK boat_move(GameState *s, uint8_t t, uint8_t bmx, uint8_t bmy
 			leave_boat(k, mx, my);
 			if (g_is_mine(mx, my))
 				g_mine_exp(s, mx, my);
-		} else if (mx != bmx && !g_is_land(s, bmx, my)) {
-			k->x = ox;
-		} else if (my != bmy && !g_is_land(s, mx, bmy)) {
-			k->y = oy;
 		} else {
-			k->x = ox;
-			k->y = oy;
+			// Too slow to land: each axis that crossed onto land is held
+			// to the edge of the square the tick started on, both if
+			// neither alone explains it.
+			uint8_t xc = mx != bmx && g_is_land(s, mx, bmy);
+			uint8_t yc = my != bmy && g_is_land(s, bmx, my);
+			uint16_t lo;
+
+			if (!xc && !yc)
+				xc = yc = 1;
+			if (xc) {
+				lo = (uint16_t)((uint16_t)bmx << 8);
+				if (k->x < lo)
+					k->x = lo;
+				else if (k->x > lo + 255)
+					k->x = (uint16_t)(lo + 255);
+			}
+			if (yc) {
+				lo = (uint16_t)((uint16_t)bmy << 8);
+				if (k->y < lo)
+					k->y = lo;
+				else if (k->y > lo + 255)
+					k->y = (uint16_t)(lo + 255);
+			}
 		}
 	}
-	mx = (uint8_t)(k->x >> 8);
-	my = (uint8_t)(k->y >> 8);
-	if (k->boat && g_is_mine(mx, my)) {
+	// A boat on a mine, tested on the square the tick started on.
+	if (k->boat && g_is_mine(bmx, bmy)) {
 		k->boat = BOAT_OFF;
 		k->speed = 0;
-		g_explosion(s, k->x, k->y);
-		g_sound(SND_MINE_EXPLOSION, mx, my, GAME_NO_PLAYER);
+		g_explosion(s, (uint16_t)(((uint16_t)bmx << 8) + 128U), (uint16_t)(((uint16_t)bmy << 8) + 128U));
+		g_sound(SND_MINE_EXPLOSION, bmx, bmy, GAME_NO_PLAYER);
 	}
 }
 
@@ -852,7 +896,7 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 	pills_pickup(s, t);
 
 	if (k->boat) {
-		boat_move(s, t, bmx, bmy, ox, oy);
+		boat_move(s, t, bmx, bmy);
 		return;
 	}
 	mx = (uint8_t)(k->x >> 8);
