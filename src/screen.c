@@ -5,6 +5,7 @@ static UInt32 gOldDepth;
 static Boolean gDepthSet;
 static Boolean gHiRes;          // drawing in the native (double density) system
 static Boolean gNewWin;         // OS 3.5 or later: colour and screen mode calls
+static Boolean gOs40;           // OS 4.0 or later
 static UInt16 gDepth = 1;
 
 IndexedColorType SEC_UI ScreenIndex(UInt8 r, UInt8 g, UInt8 b)
@@ -27,6 +28,7 @@ void SEC_UI ScreenInit(const DeviceInfo *d)
 	UInt16 i;
 
 	gNewWin = d->rom >= kRom35;
+	gOs40 = d->rom >= sysMakeROMVersion(4, 0, 0, sysROMStageRelease, 0);
 	gHiRes = d->winVersion >= 4 && d->density == kDensityDouble;
 	gDepth = 1;
 
@@ -78,4 +80,12 @@ void SEC_UI HexStr(UInt32 v, Char *out)
 
 Boolean SEC_UI ScreenHiRes(void) { return gHiRes; }
 Boolean SEC_UI ScreenNewWin(void) { return gNewWin; }
+Boolean SEC_UI ScreenOs40(void) { return gOs40; }
 UInt16 SEC_UI ScreenDepth(void) { return gDepth; }
+
+void SEC_UI ScreenDisplayRect(RectangleType *r)
+{
+	r->topLeft.x = 0;
+	r->topLeft.y = 0;
+	WinGetDisplayExtent(&r->extent.x, &r->extent.y);
+}

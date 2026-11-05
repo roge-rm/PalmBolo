@@ -162,6 +162,28 @@ void game_set_viewer(uint8_t player)
 	gViewer = player;
 }
 
+uint8_t game_viewer(void)
+{
+	return gViewer;
+}
+
+int8_t game_tank_of(const GameState *s, uint8_t player)
+{
+	uint8_t i;
+
+	for (i = 0; i < s->numTanks; i++)
+		if (s->tanks[i].player == player)
+			return (int8_t)i;
+	return -1;
+}
+
+uint8_t game_viewer_tank(const GameState *s)
+{
+	int8_t t = game_tank_of(s, gViewer);
+
+	return t >= 0 ? (uint8_t)t : 0;
+}
+
 uint8_t game_mine_shown(const GameState *s, uint8_t x, uint8_t y)
 {
 	if (!g_is_mine(x, y))
@@ -169,10 +191,49 @@ uint8_t game_mine_shown(const GameState *s, uint8_t x, uint8_t y)
 	return !s->hiddenMines || mapstore_flag(MS_SEEN, x, y);
 }
 
+// Columns and rows that may hold a pill or base, a bit each, so most
+// lookups miss without a search. Built from the state at the start of each
+// tick, with pills put down during it added, and used only inside
+// game_tick; outside it the lookups search. Not part of the state.
+static uint8_t gOccX[32], gOccY[32], gOccOn;
+
+static void occ_add(uint8_t x, uint8_t y)
+{
+	gOccX[x >> 3] = (uint8_t)(gOccX[x >> 3] | (1 << (x & 7)));
+	gOccY[y >> 3] = (uint8_t)(gOccY[y >> 3] | (1 << (y & 7)));
+}
+
+static void occ_build(const GameState *s)
+{
+	uint8_t i;
+
+	for (i = 0; i < 32; i++) {
+		gOccX[i] = 0;
+		gOccY[i] = 0;
+	}
+	for (i = 0; i < s->map.numPills; i++)
+		occ_add(s->map.pills[i].x, s->map.pills[i].y);
+	for (i = 0; i < s->map.numBases; i++)
+		occ_add(s->map.bases[i].x, s->map.bases[i].y);
+	gOccOn = 1;
+}
+
+void g_pill_moved(uint8_t x, uint8_t y)
+{
+	occ_add(x, y);
+}
+
+static uint8_t occ_maybe(uint8_t x, uint8_t y)
+{
+	return !gOccOn || ((gOccX[x >> 3] >> (x & 7)) & (gOccY[y >> 3] >> (y & 7)) & 1);
+}
+
 int8_t g_base_at(const GameState *s, uint8_t x, uint8_t y)
 {
 	uint8_t i;
 
+	if (!occ_maybe(x, y))
+		return -1;
 	for (i = 0; i < s->map.numBases; i++)
 		if (s->map.bases[i].x == x && s->map.bases[i].y == y && s->map.bases[i].active)
 			return (int8_t)i;
@@ -183,6 +244,8 @@ int8_t g_pill_at(const GameState *s, uint8_t x, uint8_t y)
 {
 	uint8_t i;
 
+	if (!occ_maybe(x, y))
+		return -1;
 	for (i = 0; i < s->map.numPills; i++) {
 		const MapPill *p = &s->map.pills[i];
 
@@ -617,7 +680,7 @@ void game_init(GameState *s, uint32_t seed, const GameSetup *setup)
 {
 	uint8_t *p = (uint8_t *)s;
 	uint16_t i;
-	uint8_t n = setup ? setup->numPlayers : 1;
+	uint8_t n = setup ? setup->numPlayers : 1, bots = setup ? setup->numBots : 0;
 	MapInfo keep = s->map;
 
 	for (i = 0; i < sizeof(*s); i++)
@@ -629,9 +692,13 @@ void game_init(GameState *s, uint32_t seed, const GameSetup *setup)
 		n = 1;
 	if (n > GAME_MAX_TANKS)
 		n = GAME_MAX_TANKS;
+	if (bots > GAME_MAX_TANKS - n)
+		bots = (uint8_t)(GAME_MAX_TANKS - n);
+	n = (uint8_t)(n + bots);
 	if (setup) {
 		s->gameType = setup->gameType;
 		s->hiddenMines = setup->hiddenMines;
+		s->timeLimit = (uint32_t)setup->timeLimit * 60UL * GAME_TICKS_PER_SECOND;
 	}
 	for (i = 0; i < s->map.numBases; i++)
 		s->baseStopped[i] = 1;
@@ -647,12 +714,32 @@ void game_init(GameState *s, uint32_t seed, const GameSetup *setup)
 	gChangeOver = 0;
 	gSoundCount = 0;
 	mapstore_clear_flags();
-	s->numTanks = n;
+	// Tanks join one at a time, as in WinBolo, so each start is picked
+	// away from the tanks already in.
 	for (i = 0; i < n; i++) {
+		s->numTanks = (uint8_t)(i + 1);
 		lgm_create(s, (uint8_t)i);
 		tank_create(s, (uint8_t)i, (uint8_t)i);
 	}
+	for (i = (uint16_t)(n - bots); i < n; i++)
+		game_set_bot(s, (uint8_t)i, setup->botLevel ? setup->botLevel : BOT_NORMAL);
 	tree_init(s);
+}
+
+void game_set_bot(GameState *s, uint8_t t, uint8_t level)
+{
+	if (t >= s->numTanks || level >= BOT_LEVELS)
+		return;
+	bot_reset(s, t, level);
+	if (level)
+		s->botMask = (uint8_t)(s->botMask | (1 << t));
+	else
+		s->botMask = (uint8_t)(s->botMask & ~(1 << t));
+}
+
+void game_bot_inputs(GameState *s, const GameInput *in, GameInput *out)
+{
+	bots_tick(s, in, out);
 }
 
 // xorshift32
@@ -685,7 +772,18 @@ uint16_t game_random_below(GameState *s, uint16_t n)
 // flooding, then tree growth once for each tank.
 void game_tick(GameState *s, const GameInput *in)
 {
+	GameInput bin[GAME_MAX_TANKS];
 	uint8_t i;
+
+	if (s->over)
+		return;
+	occ_build(s);
+	// Bots make their tanks' keys first, all from the state at the start
+	// of the tick.
+	if (s->botMask) {
+		bots_tick(s, in, bin);
+		in = bin;
+	}
 
 	for (i = 0; i < s->numTanks; i++) {
 		tank_update(s, i, &in[i]);
@@ -704,6 +802,9 @@ void game_tick(GameState *s, const GameInput *in)
 	for (i = 0; i < s->numTanks; i++)
 		tree_update(s);
 	s->tick++;
+	if (s->timeLimit && s->tick >= s->timeLimit)
+		s->over = 1;
+	gOccOn = 0;
 }
 
 static uint32_t c8(uint32_t crc, uint8_t v)
@@ -768,6 +869,7 @@ uint32_t game_checksum(const GameState *s)
 		crc = c32(crc, (uint32_t)k->bumpY);
 		crc = c16(crc, k->deathWait);
 		crc = c16(crc, k->deaths);
+		crc = c16(crc, k->kills);
 		crc = util_crc(crc, &k->armour, 20);
 		crc = util_crc(crc, k->carry, k->numCarry);
 	}
@@ -830,6 +932,32 @@ uint32_t game_checksum(const GameState *s)
 	}
 	for (i = 0; i < s->map.numPills; i++)
 		crc = util_crc(crc, &s->map.pills[i].x, 10);
+	// A time limit only when there is one, so games without sum as before.
+	if (s->timeLimit) {
+		crc = c32(crc, s->timeLimit);
+		crc = c8(crc, s->over);
+	}
+	// Bots only when there are any, so games without them sum as before.
+	if (s->botMask) {
+		const BotSearch *q = &s->search;
+
+		crc = c8(crc, s->botMask);
+		for (i = 0; i < s->numTanks; i++)
+			if (s->bots[i].level)
+				crc = util_crc(crc, &s->bots[i].level, sizeof(Bot));
+		crc = util_crc(crc, &q->who, 14);
+		if (q->who) {
+			uint8_t j;
+
+			crc = c16(crc, q->best);
+			crc = c16(crc, q->cur);
+			crc = c8(crc, q->lastDir);
+			crc = util_crc(crc, &q->way[0][0], sizeof(q->way));
+			crc = util_crc(crc, q->cell, sizeof(q->cell));
+			for (j = q->head; j != q->tail; j = (uint8_t)((j + 1) % BOT_QUEUE))
+				crc = c16(crc, q->queue[j]);
+		}
+	}
 	return ~crc;
 }
 
@@ -840,5 +968,6 @@ uint32_t game_terrain_checksum(void)
 
 	for (y = 0; y < 256; y++)
 		crc = util_crc(crc, mapstore_row((uint8_t)y), 256);
+	crc = util_crc(crc, mapstore_flags(MS_KNOWN), 8192);
 	return ~crc;
 }

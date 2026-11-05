@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "../src/game/game.h"
 #include "../src/game/gamepriv.h"
 #include "../src/game/mapstore.h"
@@ -181,6 +182,9 @@ static int count_forest(void)
 }
 
 static int gForests[2], gManDied;
+// Tank 0 to tank 1 (dx + dy) in the collide script, after driving into
+// each other and at the end.
+static int gDriveGap, gLastGap;
 
 // Facts after each script step.
 // Terrain one and two squares east of the tank after each step of the
@@ -241,6 +245,26 @@ static void fact(const GameState *s, uint8_t n, uint8_t i, void *ctx)
 			}
 			if (m->isDead)
 				gManDied = 1;
+		}
+		if (n >= 28) {
+			int j;
+
+			for (j = 1; j < s->numTanks; j++) {
+				const Tank *o = &s->tanks[j];
+
+				printf("\n        tank%d sq %3u,%3u+%3u,%3u spd %2d arm %2u dead %u/%u wait %3u kills %u"
+					" obst %u | tank0 kills %u obst %u",
+					j, o->x >> 8, o->y >> 8, o->x & 255, o->y & 255, o->speed / 4, o->armour,
+					o->destroyed, o->deaths, o->deathWait, o->kills, o->obstructed,
+					k->kills, k->obstructed);
+			}
+			if (n == 28) {
+				int dx = abs((int)s->tanks[1].x - k->x), dy = abs((int)s->tanks[1].y - k->y);
+
+				if (i == 11)
+					gDriveGap = s->tanks[1].x > k->x ? dx + dy : -1;
+				gLastGap = dx + dy;
+			}
 		}
 		if (n == 25 && i < 9) {
 			gWreck[i][0] = game_terrain(mx + 1, my);
@@ -347,6 +371,27 @@ static void after_script(const GameState *s, uint8_t n)
 		break;
 	case 26:
 		CHECK(k->destroyed, "mine wreck: the mine killed the tank");
+		break;
+	case 28:
+		// Tanks nearer than a square push apart and nudge apart until dx
+		// + dy is a square, so two pressing into each other settle a
+		// little under a square apart. The one put on top is pushed out.
+		CHECK(gDriveGap >= 224 && gLastGap >= 224, "collide: tanks pushed apart");
+		break;
+	case 29:
+		CHECK(s->tanks[1].deaths == 1 && k->kills == 1 && s->tanks[1].kills == 0 &&
+			!s->tanks[1].destroyed && s->tanks[1].armour == 40,
+			"tank kill: shot dead, kill counted, back at a start");
+		break;
+	case 30:
+		CHECK(s->tanks[1].armour < 40 && k->armour == 40, "pill near: the nearer tank shot");
+		break;
+	case 31:
+		CHECK(s->tanks[1].armour < 40 && k->armour == 40, "pill ally: the ally passed over");
+		break;
+	case 32:
+		CHECK((s->tanks[1].armour < 40 || s->tanks[1].destroyed) && k->armour == 40,
+			"mine other: the other tank's mine hurt it");
 		break;
 	case 27:
 		// The wreck moves as neutral, so it stops west of its own base and
@@ -606,6 +651,456 @@ static void hidden_mines(const uint8_t *ev, uint32_t len)
 		"hidden: mine ahead seen");
 }
 
+
+// ---- save, resume and the time limit ----
+
+static void run_ticks(GameState *g, uint32_t from, uint32_t to)
+{
+	GameInput in[GAME_MAX_TANKS];
+	uint32_t t;
+
+	for (t = from; t < to; t++) {
+		memset(in, 0, sizeof(in));
+		in[0].keys = (uint8_t)(IN_FASTER | ((t / 40) % 3 == 0 ? IN_LEFT : 0) | (t % 7 == 0 ? IN_FIRE : 0) |
+			(t % 211 == 0 ? IN_MINE : 0));
+		in[0].opts = OPT_AUTOSLOW;
+		game_tick(g, in);
+	}
+}
+
+// A game run straight through and the same game saved halfway, with
+// another game played on the same map in between, then resumed must end
+// in the same state: the checksums, the terrain and every byte.
+static void save_resume(const uint8_t *ev, uint32_t len)
+{
+	static GameState a, b, c, saved;
+	GameSetup setup;
+	uint32_t sumA, sumB, terrA;
+
+	memset(&setup, 0, sizeof(setup));
+	setup.numPlayers = 1;
+	setup.numBots = 3;
+	setup.botLevel = BOT_NORMAL;
+	setup.hiddenMines = 1;
+	CHECK(parse_buf(&a.map, ev, len) == MAP_OK, "save: map");
+	game_set_viewer(0);
+	game_init(&a, 777, &setup);
+	run_ticks(&a, 0, 3000);
+	sumA = game_checksum(&a);
+	terrA = game_terrain_checksum();
+
+	CHECK(parse_buf(&b.map, ev, len) == MAP_OK, "save: map");
+	game_init(&b, 777, &setup);
+	run_ticks(&b, 0, 1500);
+	CHECK(!mapstore_have_save(), "save: none yet");
+	CHECK(mapstore_save() == 0 && mapstore_have_save(), "save: saved");
+	memcpy(&saved, &b, sizeof(b));
+	memset(&b, 0xA5, sizeof(b));
+	CHECK(parse_buf(&c.map, ev, len) == MAP_OK, "save: map");
+	game_init(&c, 999, &setup);
+	run_ticks(&c, 0, 400);
+	CHECK(mapstore_resume() == 0, "save: resumed");
+	memcpy(&b, &saved, sizeof(b));
+	run_ticks(&b, 1500, 3000);
+	sumB = game_checksum(&b);
+	printf("save and resume: straight %08lx, resumed %08lx, terrain %08lx %08lx\n", (unsigned long)sumA,
+		(unsigned long)sumB, (unsigned long)terrA, (unsigned long)game_terrain_checksum());
+	CHECK(sumA == sumB, "save: checksum matches");
+	CHECK(terrA == game_terrain_checksum(), "save: terrain matches");
+	CHECK(memcmp(&a, &b, sizeof(a)) == 0, "save: state matches byte for byte");
+	mapstore_drop_save();
+	CHECK(!mapstore_have_save(), "save: dropped");
+
+	// The time limit: one minute is 3000 ticks, and the tick that reaches it is the last.
+	setup.timeLimit = 1;
+	CHECK(parse_buf(&a.map, ev, len) == MAP_OK, "limit: map");
+	game_init(&a, 5, &setup);
+	run_ticks(&a, 0, 2999);
+	CHECK(!a.over, "limit: not over early");
+	run_ticks(&a, 2999, 3000);
+	CHECK(a.over && a.tick == 3000, "limit: over at 3000");
+}
+
+
+// ---- bots ----
+
+typedef struct BotStats {
+	int captures, pickups, placed, drowned, sunk, kills, deaths, firstCapture;
+	int pillHits, tankHits, byPill, byTank, byOther, pillsDown, noPath, botTicks, allyHits;
+	int basesOwned[GAME_MAX_TANKS], pillsOwned[GAME_MAX_TANKS];
+} BotStats;
+
+// One tick with every tank a bot drives, counting what happened. A tank
+// that dies on deep sea off a boat drowned.
+static void bot_tick(GameState *g, BotStats *st)
+{
+	GameInput in[GAME_MAX_TANKS];
+	GameSound snd[GAME_MAX_SOUNDS];
+	uint8_t alive[GAME_MAX_TANKS], carry[GAME_MAX_TANKS], boat[GAME_MAX_TANKS], bump[GAME_MAX_TANKS], i, n;
+	uint8_t near[GAME_MAX_TANKS], arm[GAME_MAX_TANKS], parm[MAP_MAX_PILLS], ally[GAME_MAX_TANKS];
+
+	memset(in, 0, sizeof(in));
+	for (i = 0; i < g->map.numPills; i++)
+		parm[i] = g->map.pills[i].armour;
+	for (i = 0; i < g->numTanks; i++) {
+		int j;
+
+		// What shell, if any, is near the tank: 1 a pill's, 2 a tank's.
+		near[i] = 0;
+		ally[i] = 0;
+		arm[i] = g->tanks[i].armour;
+		for (j = 0; j < g->numShells; j++) {
+			const Shell *h = &g->shells[j];
+
+			if (abs((int)h->x - (int)g->tanks[i].x) < 400 && abs((int)h->y - (int)g->tanks[i].y) < 400 &&
+			    h->owner != g->tanks[i].player)
+			{
+				near[i] = h->owner == GAME_NO_PLAYER ? 1 : 2;
+				if (near[i] == 2 && game_allied(g, h->owner, g->tanks[i].player))
+					ally[i] = 1;
+			}
+		}
+		alive[i] = !g->tanks[i].destroyed && !g->tanks[i].deathWait;
+		// Ticks a bot has somewhere to go but no path to follow yet.
+		if (alive[i] && (g->botMask & (1 << i))) {
+			st->botTicks++;
+			st->noPath += g->bots[i].goal != 0 && g->bots[i].wayN == 0 && g->bots[i].mode == 0;
+		}
+		carry[i] = g->tanks[i].numCarry;
+		boat[i] = g->tanks[i].boat;
+		bump[i] = g->tanks[i].bumpX || g->tanks[i].bumpY;
+	}
+	game_tick(g, in);
+	n = game_take_sounds(snd, GAME_MAX_SOUNDS);
+	for (i = 0; i < n; i++) {
+		if (snd[i].kind == SND_BASE_CAPTURE) {
+			st->captures++;
+			if (st->firstCapture < 0)
+				st->firstCapture = (int)g->tick;
+		}
+	}
+	for (i = 0; i < g->map.numPills; i++)
+		if (parm[i] > 0 && g->map.pills[i].armour == 0)
+			st->pillsDown++;
+	for (i = 0; i < g->numTanks; i++) {
+		const Tank *k = &g->tanks[i];
+
+		if (k->numCarry > carry[i])
+			st->pickups += k->numCarry - carry[i];
+		else if (k->numCarry < carry[i] && !k->destroyed && !k->deathWait)
+			st->placed += carry[i] - k->numCarry;
+		if (alive[i] && (k->armour < arm[i] || k->destroyed || k->deathWait)) {
+			if (near[i] == 1)
+				st->pillHits++;
+			else if (near[i] == 2)
+				st->tankHits++;
+			st->allyHits += ally[i];
+		}
+		if (alive[i] && (k->destroyed || k->deathWait)) {
+			if (near[i] == 1)
+				st->byPill++;
+			else if (near[i] == 2)
+				st->byTank++;
+			else
+				st->byOther++;
+		}
+		// Shot off a boat or knocked into the sea by a shell it sinks: that
+		// isn't the bot's driving.
+		if (alive[i] && k->destroyed && !k->boat &&
+		    game_terrain(k->x >> 8, k->y >> 8) == TERRAIN_DEEP_SEA) {
+			if (boat[i] || bump[i]) {
+				st->sunk++;
+			} else {
+				st->drowned++;
+				printf("  drowned: tank %u at %u,%u tick %u\n", i, k->x >> 8, k->y >> 8,
+					(unsigned)g->tick);
+			}
+		}
+	}
+}
+
+static void bot_tally(const GameState *g, BotStats *st)
+{
+	int i, j;
+
+	for (i = 0; i < g->numTanks; i++) {
+		st->kills += g->tanks[i].kills;
+		st->deaths += g->tanks[i].deaths;
+		st->basesOwned[i] = st->pillsOwned[i] = 0;
+		for (j = 0; j < g->map.numBases; j++)
+			st->basesOwned[i] += g->map.bases[j].owner == g->tanks[i].player;
+		for (j = 0; j < g->map.numPills; j++)
+			st->pillsOwned[i] += g->map.pills[j].owner == g->tanks[i].player;
+	}
+}
+
+static int gTeams;      // soak games in teams of two: tanks 0 and 1, 2 and 3...
+
+static void bot_new(GameState *g, const uint8_t *ev, uint32_t len, uint32_t seed, int players,
+	int bots, int level)
+{
+	GameSetup st;
+	int i;
+
+	memset(&st, 0, sizeof(st));
+	for (i = 0; gTeams && i < GAME_MAX_PLAYERS; i++)
+		st.allies[i] = (uint16_t)(1 << (i ^ 1));
+	st.numPlayers = players;
+	st.numBots = bots;
+	st.botLevel = level;
+	CHECK(parse_buf(&g->map, ev, len) == MAP_OK, "bot map");
+	game_set_viewer(0);
+	game_init(g, seed, &st);
+}
+
+static void bot_checks(const uint8_t *ev, uint32_t len)
+{
+	static GameState g;
+	BotStats st;
+	int t, armour0, deaths0, onBase = 0;
+
+	// A lone bot takes a neutral base. The nearest one sits in a maze.
+	memset(&st, 0, sizeof(st));
+	st.firstCapture = -1;
+	bot_new(&g, ev, len, 99, 1, 0, 0);
+	game_set_bot(&g, 0, BOT_NORMAL);
+	for (t = 0; t < 5000 && st.firstCapture < 0; t++) {
+		if (getenv("BT1") && t % (getenv("BT2") ? 10 : 50) == 0 && t >= (getenv("BT2") ? atoi(getenv("BT2")) : 0))
+			printf("  t%d spd %d ang %u way %u,%u who %u ph %u cur %u %u,%u arm %u goal %u tgt %u at %u,%u mode %u w%u fails %u skip %u\n", t, g.tanks[0].speed, g.tanks[0].angle, g.bots[0].way[0][0], g.bots[0].way[0][1], g.search.who, g.search.phase, g.search.cur, g.tanks[0].x >> 8,
+				g.tanks[0].y >> 8, g.tanks[0].armour, g.bots[0].goal, g.bots[0].target, g.bots[0].goalX,
+				g.bots[0].goalY, g.bots[0].mode, g.bots[0].wayN, g.bots[0].fails, g.bots[0].skip);
+		bot_tick(&g, &st);
+	}
+	printf("bot: first capture at tick %d\n", st.firstCapture);
+	CHECK(st.firstCapture >= 0 && st.firstCapture < 5000, "bot: captures a neutral base in 5000 ticks");
+	// Low on armour and shells, it goes back to a base and fills up.
+	for (t = 0; t < 2000; t++)
+		bot_tick(&g, &st);
+	g.tanks[0].armour = 8;
+	g.tanks[0].shells = 2;
+	armour0 = g.tanks[0].armour;
+	deaths0 = g.tanks[0].deaths;
+	for (t = 0; t < 3000 && g.tanks[0].armour < 40; t++) {
+		int b = g_base_at(&g, g.tanks[0].x >> 8, g.tanks[0].y >> 8);
+
+		if (getenv("BT") && t % 10 == 0) printf("  t%d ang %u w%u %u,%u %u,%u arm %u goal %u tgt %u at %u,%u mode %u spd %d boat %u ter %u near %d\n", t, g.tanks[0].angle, g.bots[0].wayN, g.bots[0].way[0][0], g.bots[0].way[0][1], g.tanks[0].x>>8, g.tanks[0].y>>8, g.tanks[0].armour, g.bots[0].goal, g.bots[0].target, g.bots[0].goalX, g.bots[0].goalY, g.bots[0].mode, g.tanks[0].speed, g.tanks[0].boat, game_terrain(g.tanks[0].x>>8, g.tanks[0].y>>8), g.numShells);
+		bot_tick(&g, &st);
+		if (b >= 0 && g.map.bases[b].owner == g.tanks[0].player)
+			onBase = 1;
+	}
+	printf("bot: refuel from armour %d to %u shells %u in %d ticks, on base %d, deaths %u\n", armour0,
+		g.tanks[0].armour, g.tanks[0].shells, t, onBase, g.tanks[0].deaths - deaths0);
+	CHECK(onBase && g.tanks[0].deaths == deaths0 && g.tanks[0].armour == 40,
+		"bot: refuels at an own base when low");
+	CHECK(st.drowned == 0, "bot: no drowning");
+
+	// A player's tank is handed to a bot mid-game.
+	memset(&st, 0, sizeof(st));
+	st.firstCapture = -1;
+	bot_new(&g, ev, len, 7, 2, 0, 0);
+	{
+		GameInput in[GAME_MAX_TANKS];
+
+		memset(in, 0, sizeof(in));
+		in[0].keys = IN_FASTER | IN_LEFT;
+		for (t = 0; t < 150; t++)
+			game_tick(&g, in);
+		game_take_sounds(NULL, 0);
+	}
+	game_set_bot(&g, 0, BOT_HARD);
+	for (t = 0; t < 5000 && st.firstCapture < 0; t++)
+		bot_tick(&g, &st);
+	printf("bot: takeover at tick 150, first capture at tick %d\n", st.firstCapture);
+	CHECK(st.firstCapture >= 0 && g.map.bases[0].owner != 1, "bot: takes over a tank and plays");
+	CHECK(st.drowned == 0, "bot: no drowning after takeover");
+}
+
+// Long bot games with different seeds. Prints what the bots did.
+static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
+{
+	static GameState g;
+	int n, i, totalDrowned = 0;
+	static const int kBots[] = { 4, 8, 3, 6, 2, 5 };
+
+	for (n = 0; n < games; n++) {
+		BotStats st;
+		int bots = kBots[n % 6], level = 1 + n % 3;
+
+		memset(&st, 0, sizeof(st));
+		st.firstCapture = -1;
+		bot_new(&g, ev, len, 1000 + n * 77, 1, bots - 1, level);
+		game_set_bot(&g, 0, level);
+		if (getenv("MD") && n == 0) {
+			int x0, y0, x, y;
+
+			sscanf(getenv("MD"), "%d,%d", &x0, &y0);
+			for (y = y0; y < y0 + 40; y++) {
+				printf("%3d ", y);
+				for (x = x0; x < x0 + 60; x++) {
+					int t = game_terrain(x, y);
+					char c = "#rs=.Tu,hb" [t < 10 ? t : 0];
+
+					if (t == 255) c = '~';
+					else if (t >= 10) c = 'm';
+					if (g_pill_at(&g, x, y) >= 0) c = 'P';
+					if (g_base_at(&g, x, y) >= 0) c = 'B';
+					putchar(c);
+				}
+				putchar('\n');
+			}
+		}
+		for (i = 0; i < ticks; i++) {
+			if (getenv("ST") && atoi(getenv("ST")) == n && i % (getenv("SE") ? atoi(getenv("SE")) : 25) == 0 && i >= (getenv("S0") ? atoi(getenv("S0")) : 0)) {
+				int tk = getenv("STK") ? atoi(getenv("STK")) : 0;
+				const Tank *k = &g.tanks[tk];
+				const Bot *b = &g.bots[tk];
+
+				printf("  t%d %u,%u arm %u sh %u spd %d ang %u goal %u tgt %u (pa %u) at %u,%u mode %u w%u fails %u\n",
+					i, k->x >> 8, k->y >> 8, k->armour, k->shells, k->speed, k->angle >> 8, b->goal, b->target,
+					b->goal == 2 ? g.map.pills[b->target].armour : 0, b->goalX, b->goalY, b->mode, b->wayN, k->numCarry); if (b->wayN) printf("     way %u,%u %u,%u x %u y %u search %u\n", b->way[0][0], b->way[0][1], b->way[1][0], b->way[1][1], k->x & 255, k->y & 255, g.search.who);
+			}
+			bot_tick(&g, &st);
+		}
+		bot_tally(&g, &st);
+		printf("soak %d: %d bots level %d, %d ticks: captures %d (first %d) pickups %d kills %d deaths %d"
+			" drowned %d sunk %d placed %d\n   bases/pills held:", n, bots, level, ticks, st.captures,
+			st.firstCapture, st.pickups, st.kills, st.deaths, st.drowned, st.sunk, st.placed);
+		for (i = 0; i < g.numTanks; i++)
+			printf(" %d/%d", st.basesOwned[i], st.pillsOwned[i]);
+		if (getenv("CARRY"))
+			for (i = 0; i < g.numTanks; i++)
+				if (!g.men[i].inTank)
+					printf(" [man %d out, dead %u state %u ob %u wait %u at %u,%u, tank at %u,%u goal %u]", i, g.men[i].isDead,
+						g.men[i].state, g.men[i].obstructed, g.men[i].waitTime, g.men[i].x >> 8, g.men[i].y >> 8, g.tanks[i].x >> 8, g.tanks[i].y >> 8, g.bots[i].goal);
+		if (getenv("CARRY"))
+			for (i = 0; i < g.numTanks; i++)
+				if (g.tanks[i].numCarry)
+					printf(" [tank %d carries %u, trees %u, goal %u]", i, g.tanks[i].numCarry,
+						g.tanks[i].trees, g.bots[i].goal);
+		printf("\n   pills down %d, hits by pills %d by tanks %d, deaths by pills %d tanks %d other %d,"
+			" ally hits %d, no path %d%%\n", st.pillsDown, st.pillHits, st.tankHits, st.byPill, st.byTank,
+			st.byOther, st.allyHits, st.botTicks ? st.noPath * 100 / st.botTicks : 0);
+		totalDrowned += st.drowned;
+	}
+	CHECK(totalDrowned == 0, "soak: no drowning");
+}
+
+static double now_us(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1e6 + ts.tv_nsec / 1e3;
+}
+
+// Times the bots apart from the rules, as the debug build does on the Palm,
+// over n ticks from the end of script sc, or of a fresh game with bots.
+static void bot_bench(const uint8_t *ev, uint32_t len, int sc, int bots, int n)
+{
+	static GameState c;
+	static double each[20000];
+	GameInput none[GAME_MAX_TANKS], keys[GAME_MAX_TANKS];
+	double t0, t1, worst = 0, sum = 0;
+	int i, nb = 0, over = 0;
+	uint8_t mask;
+
+	if (n > 20000)
+		n = 20000;
+	memset(none, 0, sizeof(none));
+	if (sc >= 0) {
+		CHECK(parse_buf(&c.map, ev, len) == MAP_OK, "bench map");
+		script_run(&c, (uint8_t)sc, NULL, NULL);
+	} else {
+		bot_new(&c, ev, len, 4321, 1, bots, BOT_NORMAL);
+		game_set_bot(&c, 0, BOT_NORMAL);
+	}
+	mask = c.botMask;
+	for (i = 0; i < GAME_MAX_TANKS; i++)
+		nb += (mask >> i) & 1;
+	t0 = now_us();
+	for (i = 0; i < n; i++) {
+		double a = now_us(), d;
+
+		game_bot_inputs(&c, none, keys);
+		d = now_us() - a;
+		each[i] = d;
+		sum += d;
+		if (d > worst)
+			worst = d;
+		c.botMask = 0;
+		game_tick(&c, keys);
+		c.botMask = mask;
+	}
+	t1 = now_us();
+	for (i = 0; i < n; i++)
+		over += each[i] > 4 * sum / n;
+	printf("bench %s %d: %d tanks %d bots x%d: %.2f us a tick, bots %.2f us a bot a tick, worst bot tick %.0f us, "
+		"%d ticks over 4x the mean\n", sc >= 0 ? "script" : "game", sc >= 0 ? sc : bots, c.numTanks, nb, n,
+		(t1 - t0) / n, sum / n / nb, worst, over);
+}
+
+// One bot against each pill of the map in turn, the other pills gone and
+// the nearest base its own. Prints how long the pill lasted.
+static void bot_duel(const uint8_t *ev, uint32_t len, int level, int ticks)
+{
+	static GameState g;
+	int pi, i, totalDown = 0, totalDeaths = 0, left = 0, hits = 0;
+
+	for (pi = 0; pi < 16; pi++) {
+		BotStats st;
+		int bi = -1, bd = 9999, downAt = -1;
+
+		memset(&st, 0, sizeof(st));
+		bot_new(&g, ev, len, 500 + pi + (getenv("DS") ? atoi(getenv("DS")) * 1000 : 0), 1, 0, 0);
+		if (pi >= g.map.numPills)
+			break;
+		for (i = 0; i < g.map.numPills; i++)
+			if (i != pi)
+				g.map.pills[i].active = 0;
+		for (i = 0; i < g.map.numBases; i++) {
+			int d = abs(g.map.bases[i].x - g.map.pills[pi].x) + abs(g.map.bases[i].y - g.map.pills[pi].y);
+
+			if (d < bd && d > 10) {
+				bd = d;
+				bi = i;
+			}
+		}
+		for (i = 0; i < g.map.numBases; i++)
+			if (i != bi)
+				g.map.bases[i].active = 0;
+		g.map.bases[bi].owner = g.tanks[0].player;
+		g.map.bases[bi].armour = 90;
+		g.map.bases[bi].shells = 90;
+		g.tanks[0].x = (uint16_t)((g.map.bases[bi].x << 8) + 128);
+		g.tanks[0].y = (uint16_t)((g.map.bases[bi].y << 8) + 128);
+		g.tanks[0].boat = 0;
+		game_set_bot(&g, 0, level);
+		for (i = 0; i < ticks && downAt < 0; i++) {
+			if (getenv("DT") && atoi(getenv("DT")) == pi && i % 10 == 0) {
+				const Tank *k = &g.tanks[0];
+				const Bot *b = &g.bots[0];
+
+				printf("  t%d %u.%02u,%u.%02u arm %u sh %u spd %d ang %u goal %u pa %u spd %u at %u,%u mode %u w%u\n",
+					i, k->x >> 8, (k->x & 255) * 100 / 256, k->y >> 8, (k->y & 255) * 100 / 256, k->armour,
+					k->shells, k->speed, k->angle >> 8, b->goal, g.map.pills[pi].armour, g.map.pills[pi].speed,
+					b->goalX, b->goalY, b->mode, b->wayN);
+			}
+			bot_tick(&g, &st);
+			if (g.map.pills[pi].armour == 0)
+				downAt = i;
+		}
+		printf("duel pill %d at %d,%d base %d away: down at %d, armour %d, deaths %u, hits taken %d\n", pi,
+			g.map.pills[pi].x, g.map.pills[pi].y, bd, downAt, g.map.pills[pi].armour, g.tanks[0].deaths,
+			st.pillHits);
+		totalDown += downAt >= 0;
+		totalDeaths += g.tanks[0].deaths;
+		left += g.map.pills[pi].armour;
+		hits += st.pillHits;
+	}
+	printf("duel: %d pills down, %d deaths, pill armour left %d, hits taken %d\n", totalDown, totalDeaths,
+		left, hits);
+}
+
 int main(int argc, char **argv)
 {
 	int i;
@@ -632,9 +1127,36 @@ int main(int argc, char **argv)
 		ev[0] = 'X';
 		CHECK(parse_buf(&info, ev, len) == MAP_ERR_HEADER, "bad header");
 		ev[0] = 'B';
+		if (argc > 1 && strcmp(argv[1], "--bench") == 0) {
+			int n = argc > 2 ? atoi(argv[2]) : 2000;
+
+			bot_bench(ev, len, 33, 0, n);
+			bot_bench(ev, len, 34, 0, n);
+			bot_bench(ev, len, -1, 3, n);
+			bot_bench(ev, len, -1, 7, n);
+			free(ev);
+			return 0;
+		}
+		if (argc > 1 && strcmp(argv[1], "--duel") == 0) {
+			bot_duel(ev, len, argc > 2 ? atoi(argv[2]) : 2, argc > 3 ? atoi(argv[3]) : 6000);
+			free(ev);
+			return 0;
+		}
+		if (argc > 1 && strcmp(argv[1], "--soak") == 0) {
+			int games = argc > 2 ? atoi(argv[2]) : 6, ticks = argc > 3 ? atoi(argv[3]) : 30000;
+
+			gTeams = argc > 4 && strcmp(argv[4], "teams") == 0;
+
+			bot_soak(ev, len, games, ticks);
+			free(ev);
+			printf(gFails ? "%d checks failed\n" : "ok\n", gFails);
+			return gFails != 0;
+		}
 		scripts(ev, len);
 		winbolo_numbers(ev, len);
 		hidden_mines(ev, len);
+		bot_checks(ev, len);
+		save_resume(ev, len);
 		fuzz(ev, len);
 		free(ev);
 	}

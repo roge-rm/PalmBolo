@@ -30,8 +30,9 @@
 static const GameState *gGame;
 static WinHandle gSheet, gSprites, gMasks;
 static UInt8 gShift = 5;        // world units to view pixels
-// Rectangles drawn over the tiles last frame, to erase next frame.
-#define kMaxRects 48
+// Rectangles drawn over the tiles last frame, to erase next frame: room
+// for every explosion, tank, builder and shell and the gunsight.
+#define kMaxRects (GAME_MAX_EXPL + 2 * GAME_MAX_TANKS + GAME_MAX_SHELLS + 1)
 static RectangleType gOld[kMaxRects];
 static UInt16 gNumOld;
 // Pills and bases as last drawn: x, y, owner, armour and inTank (pills).
@@ -175,7 +176,7 @@ static WinHandle SEC_UI LoadSheet(UInt16 id, UInt16 cells, Boolean oneBit)
 	DmReleaseResource(h);
 	WinSetDrawWindow(old);
 #ifdef DEBUG
-	if (ScreenNewWin()) {
+	if (ScreenOs40()) {
 		BitmapType *bmp = WinGetBitmap(win);
 		Coord bw = 0, bh = 0;
 		UInt16 rb = 0;
@@ -287,6 +288,28 @@ static Boolean SEC_UI PinsAvailable(void)
 		v >= pinAPIVersion1_0;
 }
 
+// Tells the view the device has a collapsible input area, before any game.
+void SEC_UI ViewPins(Boolean on)
+{
+	gPins = on;
+}
+
+// Sets the input area for a new form, which has its own policy, even if
+// it is already in that state.
+void SEC_UI ViewFormInputArea(Boolean closed)
+{
+	gInputClosed = !closed;
+	ViewSetInputArea(closed);
+}
+
+// Lets the user open the input area from the status bar while it stays
+// closed.
+void SEC_UI ViewInputTrigger(void)
+{
+	if (PinsAvailable())
+		PINSetInputTriggerState(pinInputTriggerEnabled);
+}
+
 // Opens or closes the input area. Returns true if it asked the system to.
 Boolean SEC_UI ViewSetInputArea(Boolean closed)
 {
@@ -321,7 +344,7 @@ void SEC_UI ViewResized(void)
 	Int32 cx = gVx + gW / 2, cy = gVy + gH / 2;
 
 	if (frm) {
-		WinGetBounds(WinGetDisplayWindow(), &r);
+		ScreenDisplayRect(&r);
 		WinSetBounds(FrmGetWindowHandle(frm), &r);
 	}
 	NativeOn();
@@ -376,7 +399,7 @@ Boolean SEC_UI ViewOpen(const DeviceInfo *d, const GameState *game)
 	gTs = gHiRes ? 16 : 8;
 	gTps = d->ticksPerSecond ? d->ticksPerSecond : 100;
 	gW = gH = 0;
-	ViewSetInputArea(true);
+	ViewFormInputArea(true);
 	ViewResized();
 	gShift = gTs == 16 ? 4 : 5;
 	NativeOn();
@@ -449,7 +472,7 @@ static void SEC_UI DrawSprite(UInt16 cell, Coord x, Coord y)
 // 0 own, 1 allied, 2 enemy or nobody's, for the art's owner order.
 static UInt16 SEC_UI OwnerArt(uint8_t owner)
 {
-	UInt8 kind = game_owner_kind(gGame, owner, gGame->tanks[0].player);
+	UInt8 kind = game_owner_kind(gGame, owner, game_viewer());
 
 	return kind == OWN_SELF ? 0 : kind == OWN_ALLY ? 1 : 2;
 }
@@ -467,7 +490,7 @@ static UInt16 SEC_UI PillTile(const MapPill *p)
 
 static UInt16 SEC_UI BaseTile(const MapBase *b)
 {
-	UInt8 kind = game_owner_kind(gGame, b->owner, gGame->tanks[0].player);
+	UInt8 kind = game_owner_kind(gGame, b->owner, game_viewer());
 
 	return kind == OWN_NEUTRAL ? AT_BASE_NEUTRAL : AT_BASE_OWN + OwnerArt(b->owner);
 }
@@ -644,7 +667,8 @@ static void SEC_UI DrawMan(const Builder *m)
 static void SEC_UI DrawSprites(void)
 {
 	const GameState *g = gGame;
-	const Tank *k = &g->tanks[0];
+	UInt8 vt = game_viewer_tank(g);
+	const Tank *k = &g->tanks[vt];
 	UInt16 i;
 	Coord x, y, r;
 	RectangleType clip;
@@ -659,15 +683,20 @@ static void SEC_UI DrawSprites(void)
 
 		DrawAt(AS_EXPL_0 + (f < 0 ? 0 : f > 7 ? 7 : f), g->expl[i].x, g->expl[i].y);
 	}
+	// Every tank in its own, allied or enemy look, the viewer's on top,
+	// and every builder that is out.
 	for (i = 0; i < g->numTanks; i++)
-		DrawTank(&g->tanks[i], i == 0 ? 0 : OwnerArt(g->tanks[i].player));
-	DrawMan(&g->men[0]);
+		if (i != vt)
+			DrawTank(&g->tanks[i], OwnerArt(g->tanks[i].player));
+	DrawTank(k, 0);
+	for (i = 0; i < g->numTanks; i++)
+		DrawMan(&g->men[i]);
 	for (i = 0; i < g->numShells; i++)
 		DrawAt(AS_SHELL_0 + util_dir16(g->shells[i].angle), g->shells[i].x, g->shells[i].y);
 	if (!k->destroyed && k->showSight) {
 		uint16_t wx, wy;
 
-		game_gunsight(g, 0, &wx, &wy);
+		game_gunsight(g, vt, &wx, &wy);
 		x = WorldX((uint16_t)(wx + 128));
 		y = WorldY((uint16_t)(wy + 128));
 		r = gTs / 2;
@@ -858,11 +887,12 @@ static void SEC_UI DrawItemChanges(Boolean all, Boolean covered)
 // distance to scroll on each axis.
 static void SEC_UI Follow(Int32 *dx, Int32 *dy)
 {
-	const Tank *k = &gGame->tanks[0];
+	UInt8 vt = game_viewer_tank(gGame);
+	const Tank *k = &gGame->tanks[vt];
 	uint16_t sx, sy;
 	Int32 tx, ty, mx = gW / 4, my = gH / 4;
 
-	game_gunsight(gGame, 0, &sx, &sy);
+	game_gunsight(gGame, vt, &sx, &sy);
 	tx = ((Int32)k->x + ((Int32)(int16_t)(uint16_t)(sx + 128 - k->x) >> 1)) >> gShift;
 	ty = ((Int32)k->y + ((Int32)(int16_t)(uint16_t)(sy + 128 - k->y) >> 1)) >> gShift;
 	*dx = *dy = 0;
@@ -878,8 +908,10 @@ static void SEC_UI Follow(Int32 *dx, Int32 *dy)
 
 static void SEC_UI CentreOnTank(void)
 {
-	gVx = ((Int32)gGame->tanks[0].x >> gShift) - gW / 2;
-	gVy = ((Int32)gGame->tanks[0].y >> gShift) - gH / 2;
+	const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
+
+	gVx = ((Int32)k->x >> gShift) - gW / 2;
+	gVy = ((Int32)k->y >> gShift) - gH / 2;
 	ClampView();
 }
 
@@ -908,7 +940,7 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 	Int32 dx, dy;
 	UInt16 i;
 	Boolean covered = PanelCovers();
-	const Tank *k = &gGame->tanks[0];
+	const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
 #ifdef DEBUG
 	UInt32 t0 = TimGetTicks();
 #endif

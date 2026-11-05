@@ -32,6 +32,9 @@
 #define R_TANK_MIN_MOVE         6       // residual speed needed to move
 #define R_TANK_HIT_RADIUS       112     // world units
 #define R_TANK_NUDGE_PASSES     5
+#define R_TANK_COLLIDE          256     // tanks nearer than this push apart, world units
+#define R_TANK_NUDGE_THRESHOLD  96      // nudge along x when further apart than this on x
+#define R_TANK_NUDGE_STEP       16      // a pixel
 #define R_TANK_BUMP_DECAY_SHIFT 2
 #define R_TANK_BOAT_EXIT_INSET  64
 #define R_TANK_BOAT_EXIT_SPEED  16      // whole world units a tick: a boat this fast runs aground

@@ -131,11 +131,12 @@ void SEC_PILLS pills_update(GameState *s)
 				continue;
 			dx = abs_diff(k->x, px);
 			dy = abs_diff(k->y, py);
+			// utilIsItemInRange: distance at most the range. Checked before
+			// the trees, which give the same answer and cost more.
+			if (dx > R_PILL_RANGE || dy > R_PILL_RANGE)
+				continue;
 			if ((dx >= R_TREE_HIDE_DIST || dy >= R_TREE_HIDE_DIST) && !k->justFired &&
 			    in_trees(s, k->x, k->y))
-				continue;
-			// utilIsItemInRange: distance at most the range.
-			if (dx > R_PILL_RANGE || dy > R_PILL_RANGE)
 				continue;
 			d2 = (uint32_t)dx * dx + (uint32_t)dy * dy;
 			if (d2 <= (uint32_t)R_PILL_RANGE * R_PILL_RANGE && d2 < best) {
@@ -267,6 +268,7 @@ uint8_t SEC_PILLS pills_drop_one(GameState *s, uint8_t pill, uint8_t cx, uint8_t
 	p = &s->map.pills[pill];
 	p->x = (uint8_t)x;
 	p->y = (uint8_t)y;
+	g_pill_moved(p->x, p->y);
 	p->armour = 0;
 	p->owner = owner;
 	p->speed = R_PILL_ATTACK_NORMAL;

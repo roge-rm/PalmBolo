@@ -21,16 +21,18 @@
 #define SEC_SHELLS  __attribute__((section("shells")))
 #define SEC_PILLS   __attribute__((section("pills")))
 #define SEC_BUILDER __attribute__((section("builder")))
+#define SEC_BOTS    __attribute__((section("bots")))
 #else
 #define SEC_TANK
 #define SEC_SHELLS
 #define SEC_PILLS
 #define SEC_BUILDER
+#define SEC_BOTS
 #endif
 
 #define GAME_TICKS_PER_SECOND 50
 #define GAME_MAX_PLAYERS    16      // the player and owner tables
-#define GAME_MAX_TANKS      1       // tanks playing now, up to GAME_MAX_PLAYERS later
+#define GAME_MAX_TANKS      8       // the host and up to 7 more, players or bots
 #define GAME_MAX_SHELLS     24
 #define GAME_MAX_EXPL       32      // small explosions (drawn only)
 #define GAME_MAX_TKEXPL     8       // dying tank wrecks
@@ -76,12 +78,17 @@ enum { BOAT_OFF = 0, BOAT_IN = 1 };
 // tournament: armour only.
 enum { GAME_OPEN = 0, GAME_TOURNAMENT = 1, GAME_STRICT = 2 };
 
+// How hard a bot plays. BOT_OFF is a tank driven by its player.
+enum { BOT_OFF = 0, BOT_EASY, BOT_NORMAL, BOT_HARD, BOT_LEVELS };
+
 // Chosen by the host for a game.
 typedef struct GameSetup {
 	uint8_t gameType;
 	uint8_t hiddenMines;    // other players' mines aren't shown (drawing only)
 	uint8_t numPlayers;     // 1 to GAME_MAX_TANKS, player n drives tank n
-	uint8_t pad;
+	uint8_t numBots;        // bots after the players, numPlayers + numBots tanks in all
+	uint8_t botLevel;       // BOT_EASY to BOT_HARD
+	uint8_t timeLimit;      // minutes, 0 for none
 	uint16_t allies[GAME_MAX_PLAYERS];  // bit n set: allied to player n
 } GameSetup;
 
@@ -98,6 +105,7 @@ typedef struct Tank {
 	int32_t bumpX, bumpY;   // shell knockback, moved >> 9 a tick
 	uint16_t deathWait;     // ticks until a respawn
 	uint16_t deaths;
+	uint16_t kills;         // other tanks it shot dead (WinBolo's round stats)
 	uint8_t armour, shells, mines, trees;
 	uint8_t destroyed, boat, lastRiverX, lastRiverY;
 	uint8_t reload, sightLen, showSight, opts;
@@ -156,6 +164,60 @@ typedef struct SquareList {
 
 enum { DMG_BUILDING, DMG_GRASS, DMG_SWAMP, DMG_RUBBLE, DMG_KINDS };
 
+// A bot driving a tank (bot.c). Everything it remembers is here, bytes
+// only, so the checksum can take it whole and any Palm can hand a tank to
+// a bot at any tick.
+#define BOT_WAYS    12      // path turning points kept, way[0] next
+typedef struct Bot {
+	uint8_t level;          // BOT_OFF or BOT_EASY..BOT_HARD
+	uint8_t goal;           // what it is doing (BG_* in bot.c)
+	uint8_t target;         // the base, pill or tank of the goal
+	uint8_t goalX, goalY;   // the square it is making for
+	uint8_t think;          // ticks to the next look round
+	uint8_t mode;           // how it drives this tick (BM_* in bot.c)
+	uint8_t modeTime;       // ticks left in the mode
+	uint8_t veer;           // heading of a veer, 1/32 of a turn
+	uint8_t foe;            // tank it is fighting, or 255
+	uint8_t react;          // ticks before it fires at a new foe
+	uint8_t aimErr;         // signed, 1/32 bradians added to its aim
+	uint8_t clear;          // the line to what it aims at was clear at the last look
+	uint8_t want;           // waiting for a path search
+	uint8_t pathX, pathY;   // goal the waypoints lead to
+	uint8_t boat;           // on a boat when the path was made
+	uint8_t fails;          // searches in a row that got no nearer
+	uint8_t skip, skipTime; // goal (kind << 5 | index) left alone for a while
+	uint8_t lastX, lastY;   // square at the last stuck check
+	uint8_t stuck;          // stuck checks with no new square
+	uint8_t minesLaid;
+	uint8_t buildWait;      // ticks before another builder order
+	uint8_t wayN;
+	uint8_t way[BOT_WAYS][2];
+} Bot;
+
+// The one path search running, shared by all bots in turn: a breadth
+// first search over a window of BOT_WIN squares, a few cells a tick for
+// each bot.
+#define BOT_WIN     32
+#define BOT_QUEUE   128
+typedef struct BotSearch {
+	uint8_t who;            // tank searched for, plus 1; 0 when idle
+	uint8_t phase;          // 2 marking pill zones, 0 searching, 1 tracing the path back
+	uint8_t ox, oy;         // window's top left square
+	uint8_t goalX, goalY;
+	uint8_t head, tail;     // queue ring
+	uint8_t boat;           // searching as a boat
+	uint8_t next;           // round robin: the tank after the last served
+	uint8_t bestH, wayN;
+	uint8_t near;           // stop this near the goal
+	uint8_t zone;           // next pill to mark the zone of
+	uint16_t best, cur;     // window cells: best so far; cells expanded, then the trace position
+	uint8_t lastDir, wayPos;        // wayPos: next slot of the ring
+	uint8_t way[BOT_WAYS][2];       // turning points found, a ring
+	uint8_t cell[BOT_WIN * BOT_WIN / 2];  // a nibble a cell: 0 new, 1-8 from, 9 start,
+	                                      // 10 new in a hostile pill's reach, 15 blocked
+	uint16_t queue[BOT_QUEUE];      // cell | wait << 10
+} BotSearch;
+
 typedef struct GameState {
 	uint32_t rng;           // random number generator state, never 0
 	uint32_t tick;          // game ticks run so far
@@ -178,6 +240,11 @@ typedef struct GameState {
 	uint16_t treeSeed;      // tree growth's own generator, seeded from rng
 	int16_t treeTime, treeScore;            // ticks to the next tree, best score
 	uint8_t treeX, treeY;   // where it grows
+	uint8_t botMask;        // bit n: a bot drives tank n
+	uint8_t over;           // the time limit has run out
+	uint32_t timeLimit;     // ticks the game lasts, 0 for no limit
+	Bot bots[GAME_MAX_TANKS];
+	BotSearch search;
 	MapInfo map;            // pills, bases and starts of the loaded map
 } GameState;
 
@@ -195,14 +262,27 @@ uint8_t game_allied(const GameState *s, uint8_t a, uint8_t b);
 enum { OWN_NEUTRAL, OWN_SELF, OWN_ALLY, OWN_ENEMY };
 uint8_t game_owner_kind(const GameState *s, uint8_t owner, uint8_t viewer);
 
-// Advances one tick. in has one entry per tank.
+// Advances one tick; over is set when the time limit is reached, and the
+// tick that sets it is the last. in has one entry per tank, numTanks of them; a tank
+// a bot drives ignores its entry.
 void game_tick(GameState *s, const GameInput *in);
+
+// Hands tank t to a bot of level, from where it is now, or back to its
+// player with BOT_OFF. Every Palm in a game must do this on the same tick.
+void game_set_bot(GameState *s, uint8_t t, uint8_t level);
+
+// The keys the bots make for this tick, as game_tick starts with. For
+// timing the bots apart from the rules: game_tick with these and botMask
+// cleared does the same tick.
+void game_bot_inputs(GameState *s, const GameInput *in, GameInput *out);
 
 // Next random number from the state's generator, and one below n.
 uint32_t game_random(GameState *s);
 uint16_t game_random_below(GameState *s, uint16_t n);
 
-// CRC-32 over the state's fields in big-endian order, and over the terrain.
+// CRC-32 over the state's fields in big-endian order, and over the terrain
+// with the plane of mines known to the rules (MS_KNOWN). The viewer's seen
+// mines are left out, as they differ from screen to screen.
 uint32_t game_checksum(const GameState *s);
 uint32_t game_terrain_checksum(void);
 
@@ -215,10 +295,18 @@ uint8_t game_take_changes(uint8_t *xy, uint8_t max);
 // lands), and whether it is shown.
 void SEC_TANK game_gunsight(const GameState *s, uint8_t t, uint16_t *wx, uint16_t *wy);
 
-// Whether the player whose screen this is (game_set_viewer, 0 by default)
-// is shown the mine at a square. With hidden mines on that is only mines
-// they laid or saw, or an ally laid; drawing only, the rules see them all.
+// The viewer is the player whose screen this is (game_set_viewer, 0 by
+// default). It is a player number; game_tank_of gives the tank that player
+// drives, or -1 if none.
 void game_set_viewer(uint8_t player);
+uint8_t game_viewer(void);
+int8_t game_tank_of(const GameState *s, uint8_t player);
+// The tank the screen follows: the viewer's, or tank 0 if they have none.
+uint8_t game_viewer_tank(const GameState *s);
+
+// Whether the viewer is shown the mine at a square. With hidden mines on
+// that is only mines they laid or saw, or an ally laid; drawing only, the
+// rules see them all.
 uint8_t game_mine_shown(const GameState *s, uint8_t x, uint8_t y);
 
 // Terrain at a square as the rules see it: deep sea in the mined border.

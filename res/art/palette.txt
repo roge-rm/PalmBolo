@@ -78,3 +78,23 @@
 63  start          255 204   0   2  0  0
 64  sel           255 204   0   3  1  d
 65  icon_own       0 204   0  10  3  1
+# Launcher icon and title screen (tools/titleart.py).
+66  pda_case      153 153 153   4  1  0
+67  pda_case_hi   204 204 204   1  0  0
+68  pda_case_sh   102 102 102   9  2  1
+69  pda_bezel      51  51  51  13  3  1
+70  lcd           153 204 153   1  0  0
+71  lcd_px         51 102  51  12  3  1
+72  lcd_sh        102 153 102   5  1  d
+73  stylus        204 204 204   2  1  0
+74  stylus_hi     255 255 255   0  0  0
+75  stylus_tip     51  51  51  12  3  1
+76  pda_btn        51  51  51  12  3  1
+77  pda_btn_hi    153 153 153   5  1  0
+78  logo_hi       255 255 153   0  0  0
+79  logo          255 204   0   2  1  0
+80  logo_sh       255 153   0   4  1  0
+81  logo_ex       153  51   0  12  3  1
+82  ground_sh       0  17   0   6  2  d
+83  antenna        51  51  51  12  3  1
+84  grass_ft        0 102  51   5  1  0

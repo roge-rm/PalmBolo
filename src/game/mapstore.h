@@ -36,5 +36,17 @@ enum { MS_KNOWN = 0, MS_SEEN = 1, MS_PLANES = 2 };
 uint8_t mapstore_flag(uint8_t plane, uint8_t x, uint8_t y);
 void mapstore_set_flag(uint8_t plane, uint8_t x, uint8_t y, uint8_t on);
 void mapstore_clear_flags(void);
+// A whole plane, 8 KB: bit x & 7 of byte y * 32 + x / 8. Read only.
+const uint8_t *mapstore_flags(uint8_t plane);
+
+// Saved game. mapstore_save closes the store and keeps it, terrain and mine
+// planes, as the saved game's; mapstore_open after that starts a separate
+// one, so a new game can't change it. mapstore_resume closes the current
+// store and copies the saved one into a new store (the save stays until
+// mapstore_drop_save or the next mapstore_save). Both return 0, or non-zero on failure.
+int mapstore_save(void);
+int mapstore_resume(void);
+int mapstore_have_save(void);
+void mapstore_drop_save(void);
 
 #endif

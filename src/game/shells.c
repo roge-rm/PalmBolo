@@ -90,7 +90,7 @@ static uint8_t SEC_SHELLS collide(GameState *s, const Shell *h, uint16_t *pwx, u
 		return 1;
 	}
 	for (i = 0; i < s->numTanks; i++) {
-		if (s->tanks[i].player != h->owner && tank_shell_hit(s, i, wx, wy, h->angle)) {
+		if (s->tanks[i].player != h->owner && tank_shell_hit(s, i, wx, wy, h->angle, h->owner)) {
 			g_sound(SND_HIT_TANK, mx, my, s->tanks[i].player);
 			return 2;
 		}

@@ -28,7 +28,7 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 ART = os.path.join(HERE, "..", "res", "art")
 COLS = 16
-RES_TERRAIN, RES_SPRITES, RES_MASKS = 3000, 3001, 3002
+RES_TERRAIN, RES_SPRITES, RES_MASKS, RES_TITLE = 3000, 3001, 3002, 3003
 TANK_CELLS = 96         # 3 owners x land and boat x 16 headings
 
 
@@ -158,6 +158,51 @@ def icon_preview(src, mats, s, depth, names, path):
     scaled(row, 64 // s).save(path)
 
 
+def load_png(name):
+    im = Image.open(os.path.join(ART, name + ".png"))
+    if im.mode != "P":
+        raise SystemExit("%s.png must be an indexed PNG" % name)
+    return im
+
+
+def family(out, members, with_ids=None):
+    """pilrc lines for bitmap family members: (png name, depth, density,
+    transparent, compress). The 8-bit icon members keep their clear pixels
+    magenta for pilrc's TRANSPARENCY."""
+    lines = []
+    mats = load_palette()
+    for name, depth, density, transparent, compress in members:
+        img = render(load_png(name), mats, depth if depth != 4 else 4, clear_white=not transparent)
+        f = "%s-%d.bmp" % (name, depth)
+        (img.convert("1") if depth == 1 else img).save(os.path.join(out, f))
+        lines.append('  BITMAP "%s" BPP %d%s%s%s\n' % (
+            os.path.join(out, f), depth, " DENSITY 2" if density == 2 else "",
+            " COMPRESS" if compress else "",
+            " TRANSPARENCY 255 0 255" if transparent else ""))
+    return lines
+
+
+def title_and_icons(out, mats, preview):
+    """The launcher icons (OS 3 before 3.5 reads the 32x22 1 and 2-bit
+    members, later systems the 32x32 ones) and the title picture family.
+    Only the title form loads the title, from storage."""
+    r = []
+    r.append("ICONFAMILYEX\nBEGIN\n")
+    r += family(out, [("icon-22", 1, 1, False, False), ("icon-22", 2, 1, False, False),
+                      ("icon-32", 4, 1, False, True), ("icon-32", 8, 1, True, True),
+                      ("icon-64", 8, 2, True, True)])
+    r.append("END\n\nSMALLICONFAMILYEX\nBEGIN\n")
+    r += family(out, [("icon-15", 1, 1, False, False), ("icon-15", 2, 1, False, False),
+                      ("icon-15", 4, 1, False, True), ("icon-15", 8, 1, True, True),
+                      ("icon-30", 8, 2, True, True)])
+    r.append("END\n\nBITMAP ID %d\nBEGIN\n" % RES_TITLE)
+    r += family(out, [("title-160", 1, 1, False, False), ("title-160", 2, 1, False, False),
+                      ("title-160", 4, 1, False, True), ("title-160", 8, 1, False, True),
+                      ("title-320", 8, 2, False, True)])
+    r.append("END\n\n")
+    return r
+
+
 def main():
     if len(sys.argv) < 2:
         raise SystemExit("usage: art2palm.py OUTDIR [--preview DIR]")
@@ -216,12 +261,13 @@ def main():
             scaled(m.convert("RGB"), 8 // (s // 8) * 1).save(
                 os.path.join(preview, "art-preview-masks%d-1bit.png" % s))
     rcp.append("END\n")
+    rcp.extend(title_and_icons(out, mats, preview))
     open(os.path.join(out, "art.rcp"), "w").write("".join(rcp))
 
     h = ["// Made by tools/art2palm.py from res/art/layout.txt. Don't edit.\n",
          "#ifndef ART_H\n#define ART_H\n\n",
-         "#define ArtTerrainBmp %d\n#define ArtSpriteBmp %d\n#define ArtMaskBmp %d\n" %
-         (RES_TERRAIN, RES_SPRITES, RES_MASKS),
+         "#define ArtTerrainBmp %d\n#define ArtSpriteBmp %d\n#define ArtMaskBmp %d\n#define ArtTitleBmp %d\n" %
+         (RES_TERRAIN, RES_SPRITES, RES_MASKS, RES_TITLE),
          "#define ART_COLS %d\n#define ART_TERRAIN_CELLS %d\n#define ART_SPRITE_CELLS %d\n" %
          (COLS, nt, ns),
          "#define ART_MASK_CELLS %d\n#define ART_TANK_CELLS %d\n\n" % (32 + ns - TANK_CELLS, TANK_CELLS)]

@@ -1,5 +1,6 @@
 // Scripted games for checking the rules: each script places the tank on a
 // kind of terrain found on the map and holds keys for a number of ticks.
+// The ops act on the current tank, tank 0 until OP_TANK picks another.
 #include "script.h"
 #include "gamepriv.h"
 #include "util.h"
@@ -28,8 +29,14 @@ enum {
 	OP_CARRY,   // the found pill goes into the tank, owned by it
 	OP_PILLOWN, // the found pill's owner becomes a
 	OP_MOVE,    // move the tank b, c squares (signed)
-	OP_WRECK    // a tank wreck, big if a, at the tank's square moved b, c,
+	OP_WRECK,   // a tank wreck, big if a, at the tank's square moved b, c,
 	            // heading the tank's way for n steps
+	OP_PLAYERS, // a new open game with a players, player 0 allied to each
+	            // player n with bit n of b set, and c bots at level d
+	OP_TANK,    // the ops after this act on tank a
+	OP_NEAR,    // put the tank on tank a's square moved b, c (signed), off
+	            // the boat, facing east
+	OP_BOT      // a bot at level a drives the current tank
 };
 
 typedef struct Op {
@@ -158,7 +165,42 @@ static const Op kScripts[] = {
 	{ OP_BASE, 0, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 1 }, { OP_BASESTOCK, 90, 0, 0, 0, 0 },
 	{ OP_SET, TERRAIN_GRASS, 0xFF, 0, 0, 0 }, { OP_SET, TERRAIN_GRASS, 0xFE, 0, 0, 0 },
 	{ OP_WRECK, 0, 0xFE, 0, 0, 12 },
-	{ OP_KEYS, 0, 0, 0, 0, 4 }, { OP_KEYS, 0, 0, 0, 0, 40 }, { OP_END, 0, 0, 0, 0, 0 }
+	{ OP_KEYS, 0, 0, 0, 0, 4 }, { OP_KEYS, 0, 0, 0, 0, 40 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 28 two tanks drive into each other, then one is put on top of the
+	// other and they push apart
+	{ OP_PLAYERS, 2, 0, 0, 0, 0 }, { OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 6, 0, 0 },
+	{ OP_TANK, 1, 0, 0, 0, 0 }, { OP_NEAR, 0, 4, 0, 0, 0 }, { OP_FACE, 12, 0, 0, 0, 0 },
+	{ OP_KEYS, F, 0, 0, 0, 0 }, { OP_TANK, 0, 0, 0, 0, 0 }, { OP_KEYS, F, 0, 0, 0, 100 },
+	{ OP_TANK, 1, 0, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 0 }, { OP_TANK, 0, 0, 0, 0, 0 },
+	{ OP_KEYS, 0, 0, 0, 0, 60 }, { OP_TANK, 1, 0, 0, 0, 0 }, { OP_NEAR, 0, 0, 0, 0, 0 },
+	{ OP_KEYS, 0, 0, 0, 0, 1 }, { OP_KEYS, 0, 0, 0, 0, 30 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 29 one tank shoots another dead, which comes back at a start
+	{ OP_PLAYERS, 2, 0, 0, 0, 0 }, { OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 6, 0, 0 },
+	{ OP_TANK, 1, 0, 0, 0, 0 }, { OP_NEAR, 0, 3, 0, 0, 0 }, { OP_STOCK, 4, 40, 40, 0, 0 },
+	{ OP_TANK, 0, 0, 0, 0, 0 }, { OP_KEYS, IN_FIRE, 0, 0, 0, 1 }, { OP_KEYS, 0, 0, 0, 0, 60 },
+	{ OP_KEYS, 0, 0, 0, 0, 300 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 30 a neutral pill shoots the nearer of two tanks
+	{ OP_PLAYERS, 2, 0, 0, 0, 0 }, { OP_NEARPILL, 5, 0, 0, 0, 0 },
+	{ OP_TANK, 1, 0, 0, 0, 0 }, { OP_NEAR, 0, 2, 0, 0, 0 }, { OP_KEYS, 0, 0, 0, 0, 1 },
+	{ OP_KEYS, 0, 0, 0, 0, 300 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 31 a pill of player 2 passes over its ally, tank 0, a square north
+	// of the line and nearer, and shoots tank 1
+	{ OP_PLAYERS, 3, 4, 0, 0, 0 }, { OP_NEARPILL, 5, 0, 0, 0, 0 }, { OP_PILLOWN, 2, 0, 0, 0, 0 },
+	{ OP_TANK, 1, 0, 0, 0, 0 }, { OP_NEAR, 0, 0, 0, 0, 0 }, { OP_TANK, 0, 0, 0, 0, 0 },
+	{ OP_MOVE, 0, 2, 0xFF, 0, 0 }, { OP_SET, TERRAIN_GRASS, 0, 0, 0, 0 },
+	{ OP_KEYS, 0, 0, 0, 0, 1 }, { OP_KEYS, 0, 0, 0, 0, 300 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 32 tank 1 drives over a mine tank 0 laid
+	{ OP_PLAYERS, 2, 0, 0, 0, 0 }, { OP_FIND, TERRAIN_GRASS, TERRAIN_GRASS, 6, 0, 0 },
+	{ OP_TANK, 1, 0, 0, 0, 0 }, { OP_NEAR, 0, 0xFE, 0, 0, 0 }, { OP_SET, TERRAIN_GRASS, 0, 0, 0, 0 },
+	{ OP_SET, TERRAIN_GRASS, 1, 0, 0, 0 }, { OP_TANK, 0, 0, 0, 0, 0 },
+	{ OP_KEYS, IN_MINE, 0, 0, 0, 1 }, { OP_KEYS, F, 0, 0, 0, 40 }, { OP_TANK, 1, 0, 0, 0, 0 },
+	{ OP_KEYS, F, 0, 0, 0, 80 }, { OP_KEYS, 0, 0, 0, 0, 60 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 33 a player sits still while 3 normal bots play
+	{ OP_PLAYERS, 1, 0, 3, BOT_NORMAL, 0 }, { OP_KEYS, 0, 0, 0, 0, 1000 },
+	{ OP_KEYS, 0, 0, 0, 0, 1000 }, { OP_KEYS, 0, 0, 0, 0, 1000 }, { OP_END, 0, 0, 0, 0, 0 },
+	// 34 a hard bot takes over tank 0 after it drives off its boat
+	{ OP_PLAYERS, 2, 0, 0, 0, 0 }, { OP_KEYS, F, 0, 0, 0, 150 }, { OP_BOT, BOT_HARD, 0, 0, 0, 0 },
+	{ OP_KEYS, 0, 0, 0, 0, 1500 }, { OP_KEYS, 0, 0, 0, 0, 1500 }, { OP_END, 0, 0, 0, 0, 0 }
 };
 #undef F
 
@@ -166,7 +208,8 @@ static const char kNames[] =
 	"drive\0speeds\0boat\0wading\0deep sea\0shoot\0range\0mines\0refuel\0"
 	"capture\0base fuel\0pill shot\0pill down\0restock\0types\0trees\0road\0wall\0"
 	"boat wall\0put pill\0fix pill\0lgm mine\0lgm shot\0regrow\0flood\0boat wreck\0"
-	"mine wreck\0base wreck\0";
+	"mine wreck\0base wreck\0collide\0tank kill\0pill near\0pill ally\0mine other\0"
+	"bots\0takeover\0";
 
 const char *script_name(uint8_t n)
 {
@@ -179,9 +222,8 @@ const char *script_name(uint8_t n)
 }
 
 // For the refuel script the square must be a base; for the rest, terrain.
-static uint8_t find(GameState *s, const Op *o)
+static uint8_t find(GameState *s, Tank *k, const Op *o)
 {
-	Tank *k = &s->tanks[0];
 	uint8_t x, y, i, ok;
 
 	for (y = MAP_EDGE_LOW + 1; y < MAP_EDGE_HIGH; y++) {
@@ -279,9 +321,9 @@ uint32_t script_run(GameState *s, uint8_t n,
 	uint32_t crc = 0xFFFFFFFFUL, v;
 	uint8_t i = 0, b[8];
 	uint16_t t;
-	uint8_t n0 = n;
+	uint8_t n0 = n, cur = 0;
 	int8_t pill = -1, base = -1;
-	GameInput in;
+	GameInput in[GAME_MAX_TANKS];
 	GameSetup setup;
 	MapInfo start = s->map;
 
@@ -291,29 +333,57 @@ uint32_t script_run(GameState *s, uint8_t n,
 		o++;
 	}
 	game_init(s, 4242, 0);
-	in.opts = 0;
-	in.build = BUILD_NONE;
-	in.buildX = 0;
-	in.buildY = 0;
+	for (t = 0; t < sizeof(in); t++)
+		((uint8_t *)in)[t] = 0;
 	for (; o->op != OP_END; o++, i++) {
-		Tank *k = &s->tanks[0];
+		Tank *k = &s->tanks[cur];
 
 		switch (o->op) {
 		case OP_KEYS:
-			for (t = 0; t < o->n; t++) {
-				in.keys = o->a;
-				game_tick(s, &in);
-			}
+			// The keys stay held for later ticks of other tanks' ops.
+			in[cur].keys = o->a;
+			for (t = 0; t < o->n; t++)
+				game_tick(s, in);
 			break;
 		case OP_BUILD:
-			in.keys = 0;
-			in.build = o->a;
-			in.buildX = (uint8_t)((k->x >> 8) + (int8_t)o->b);
-			in.buildY = (uint8_t)((k->y >> 8) + (int8_t)o->c);
+			in[cur].keys = 0;
+			in[cur].build = o->a;
+			in[cur].buildX = (uint8_t)((k->x >> 8) + (int8_t)o->b);
+			in[cur].buildY = (uint8_t)((k->y >> 8) + (int8_t)o->c);
 			for (t = 0; t < o->n; t++) {
-				game_tick(s, &in);
-				in.build = BUILD_NONE;
+				game_tick(s, in);
+				in[cur].build = BUILD_NONE;
 			}
+			break;
+		case OP_PLAYERS:
+			s->map = start;
+			for (t = 0; t < sizeof(setup); t++)
+				((uint8_t *)&setup)[t] = 0;
+			setup.gameType = GAME_OPEN;
+			setup.numPlayers = o->a;
+			setup.numBots = o->c;
+			setup.botLevel = o->d;
+			for (t = 1; t < o->a; t++) {
+				if (o->b & (1 << t)) {
+					setup.allies[0] |= (uint16_t)(1 << t);
+					setup.allies[t] |= 1;
+				}
+			}
+			game_init(s, 4242, &setup);
+			for (t = 0; t < sizeof(in); t++)
+				((uint8_t *)in)[t] = 0;
+			cur = 0;
+			break;
+		case OP_BOT:
+			game_set_bot(s, cur, o->a);
+			break;
+		case OP_TANK:
+			if (o->a < s->numTanks)
+				cur = o->a;
+			break;
+		case OP_NEAR:
+			place(k, (uint8_t)((s->tanks[o->a].x >> 8) + (int8_t)o->b),
+				(uint8_t)((s->tanks[o->a].y >> 8) + (int8_t)o->c));
 			break;
 		case OP_TREES:
 			k->trees = o->a;
@@ -346,7 +416,7 @@ uint32_t script_run(GameState *s, uint8_t n,
 				s->map.pills[pill].owner = o->a;
 			break;
 		case OP_FIND:
-			b[0] = find(s, o);
+			b[0] = find(s, k, o);
 			crc = util_crc(crc, b, 1);
 			break;
 		case OP_STOCK:
@@ -398,6 +468,7 @@ uint32_t script_run(GameState *s, uint8_t n,
 			setup.gameType = o->a;
 			setup.numPlayers = 1;
 			game_init(s, 4242, &setup);
+			cur = 0;
 			break;
 		}
 		if (step)

@@ -56,7 +56,44 @@ void mapstore_set_flag(uint8_t plane, uint8_t x, uint8_t y, uint8_t on)
 		*b = (uint8_t)(*b & ~(1 << (x & 7)));
 }
 
+const uint8_t *mapstore_flags(uint8_t plane)
+{
+	return gFlag[plane];
+}
+
 void mapstore_clear_flags(void)
 {
 	memset(gFlag, 0, sizeof(gFlag));
+}
+
+// The saved game: a copy of the arrays.
+static uint8_t gSaveMap[256][256];
+static uint8_t gSaveFlag[MS_PLANES][8192];
+static int gHaveSave;
+
+int mapstore_save(void)
+{
+	memcpy(gSaveMap, gMap, sizeof(gMap));
+	memcpy(gSaveFlag, gFlag, sizeof(gFlag));
+	gHaveSave = 1;
+	return 0;
+}
+
+int mapstore_resume(void)
+{
+	if (!gHaveSave)
+		return 1;
+	memcpy(gMap, gSaveMap, sizeof(gMap));
+	memcpy(gFlag, gSaveFlag, sizeof(gFlag));
+	return 0;
+}
+
+int mapstore_have_save(void)
+{
+	return gHaveSave;
+}
+
+void mapstore_drop_save(void)
+{
+	gHaveSave = 0;
 }

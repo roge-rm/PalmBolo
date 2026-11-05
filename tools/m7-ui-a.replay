@@ -1,0 +1,24 @@
+# Milestone 7 start screens on a TX: title, Settings, new game, a game with
+# bots that hits its time limit, and the results. Debug build with
+# EXTRA="-DAUTOQUIT_SECONDS=70 -DTEST_TIME_LIMIT=1000". Times are ms after
+# launch and settle.
+0 snapshot "1-title.png"
+1000 pen-down 160 326
+1100 pen-up
+2500 snapshot "2-settings.png"
+3000 pen-down 200 300
+3100 pen-up
+3800 snapshot "2b-title-after-settings.png"
+4500 pen-down 160 246
+4600 pen-up
+5500 snapshot "3-maplist.png"
+5700 pen-down 68 301
+5800 pen-up
+7000 snapshot "4-newgame.png"
+7200 pen-down 68 301
+7300 pen-up
+14000 snapshot "5-game-bots.png"
+36000 snapshot "6-results.png"
+36500 pen-down 160 301
+36600 pen-up
+38000 snapshot "7-title-after.png"

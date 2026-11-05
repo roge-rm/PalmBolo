@@ -4,6 +4,7 @@
 #define PALMBOLO_H
 
 #include <PalmOS.h>
+#include <DLServer.h>
 
 struct GameState;
 
@@ -16,6 +17,7 @@ struct GameState;
 #define SEC_DETECT __attribute__((section("detect")))
 #endif
 #define SEC_UI __attribute__((section("ui")))
+#define SEC_FRONT __attribute__((section("front")))
 
 #define kMinRomVersion  sysMakeROMVersion(3, 0, 0, sysROMStageRelease, 0)
 #define kRom35          sysMakeROMVersion(3, 5, 0, sysROMStageRelease, 0)
@@ -78,6 +80,9 @@ void SEC_UI ScreenExit(void);
 Boolean SEC_UI ScreenHiRes(void);      // drawing in native (double density) pixels
 Boolean SEC_UI ScreenNewWin(void);     // OS 3.5 or later
 UInt16 SEC_UI ScreenDepth(void);
+Boolean SEC_UI ScreenOs40(void);       // OS 4.0 or later
+// The whole display in the current coordinate system.
+void SEC_UI ScreenDisplayRect(RectangleType *r);
 // Palette index closest to a colour. Before OS 3.5: 0 white, 1 black.
 IndexedColorType SEC_UI ScreenIndex(UInt8 r, UInt8 g, UInt8 b);
 
@@ -104,6 +109,9 @@ void SEC_UI ViewClose(void);
 void SEC_UI ViewResized(void);
 void SEC_UI ViewFrame(Boolean full, Boolean ticked);
 Boolean SEC_UI ViewSetInputArea(Boolean closed);
+void SEC_UI ViewPins(Boolean on);
+void SEC_UI ViewFormInputArea(Boolean closed);
+void SEC_UI ViewInputTrigger(void);
 // The builder action shown chosen in the button row (0 tree to 4 mine).
 void SEC_UI ViewSetAction(UInt8 action);
 // Draws an icon cell of the art (a whole cell, no mask) at x, y.
@@ -136,11 +144,11 @@ void SEC_UI PanelDraw(Boolean force, Coord py, Int32 vx, Int32 vy, Coord vw, Coo
 
 // Sound (sound.c). SoundOpen reads the system game volume when the game
 // shows; SoundFrame plays the sounds the rules made since the last frame
-// and moves a playing sound on, for the player viewer.
+// and moves a playing sound on, as heard by the viewer (game_viewer).
 void SEC_UI SoundOpen(UInt16 ticksPerSecond);
 void SEC_UI SoundSetOn(Boolean on);
 Boolean SEC_UI SoundIsOn(void);
-void SEC_UI SoundFrame(const struct GameState *g, UInt8 viewer);
+void SEC_UI SoundFrame(const struct GameState *g);
 void SEC_UI SoundStop(void);
 
 #ifdef DEBUG
@@ -149,7 +157,54 @@ UInt32 SEC_DETECT DetectTableCheck(void);
 #define DETECT_TABLE_CHECK 0x6C70CAF3UL
 #endif
 
-// Called by the map list when a map is chosen.
+// The app's own settings, kept in its preferences (main.c). Settings the
+// host picks for a game and the player's own.
+#define kNameLen        16
+typedef struct AppPrefs {
+	UInt8 sound;        // 1 on
+	UInt8 autoSlow;
+	UInt8 autoSight;
+	UInt8 gameType;     // GAME_OPEN..GAME_STRICT
+	UInt8 hiddenMines;
+	UInt8 timeLimit;    // index of the choices, 0 off
+	UInt8 numBots;      // 0 to 7
+	UInt8 botLevel;     // 0 easy, 1 normal, 2 hard
+	UInt8 teams;        // 1 for teams
+	UInt8 keys[4];      // what hard buttons 1 to 4 do, KEY_* below
+	UInt8 pad;
+	Char name[kNameLen];
+	Char map[kMapNameLen];
+} AppPrefs;
+enum { KEY_NONE, KEY_LEFT, KEY_RIGHT, KEY_FIRE, KEY_MINE, KEY_FASTER, KEY_SLOWER, KEY_KINDS };
+AppPrefs *AppPrefsGet(void);
+void AppPrefsSave(void);
+void AppSetSound(Boolean on);
+
+// Starts a game on map index (named name) with the prefs' settings. Replaces
+// the saved game.
 void AppOpenMap(UInt16 index, const Char *name);
+// Carries on the saved game.
+void AppResume(void);
+// Minutes of the time limit choice (0 off) .
+UInt16 AppTimeMinutes(UInt8 choice);
+
+// The start screens and the saved game (front.c, its own segment). The
+// handler is for the form with that ID, or NULL.
+FormEventHandlerType *SEC_FRONT FrontHandler(UInt16 formId);
+// Shows the results of a game that ended and goes on to the title.
+void SEC_FRONT FrontResults(const struct GameState *g);
+// The saved game: the game state in a database of its own and the map
+// store kept beside it.
+Boolean SEC_FRONT SaveExists(void);
+Boolean SEC_FRONT SaveWrite(const struct GameState *g);
+// Reads the save into g and opens its map as the store; the save is then
+// the game in progress until written again.
+Boolean SEC_FRONT SaveRead(struct GameState *g);
+void SEC_FRONT SaveDrop(void);
+#ifdef DEBUG
+// Plays a game straight through and saved and resumed halfway, and logs
+// whether the checksums match. Replaces any saved game.
+void SEC_FRONT FrontSaveTest(struct GameState *g);
+#endif
 
 #endif

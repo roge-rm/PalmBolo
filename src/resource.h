@@ -1,21 +1,61 @@
 #ifndef RESOURCE_H
 #define RESOURCE_H
 
+// The version, for the VERSION resource, the About alert and the log.
+#define kAppVersion         "0.7.0"
+
 #define MapListForm         1000
 #define MapList             1001
+#define MapNext             1002
+#define MapBack             1003
+#define TitleForm           1020
+#define TitleResume         1021
+#define TitleNew            1022
+#define TitleJoin           1023
+#define TitleSettings       1024
+#define NewGameForm         1030
+#define NgTypeTrig          1031
+#define NgTypeList          1032
+#define NgMines             1033
+#define NgTimeTrig          1034
+#define NgTimeList          1035
+#define NgBotsTrig          1036
+#define NgBotsList          1037
+#define NgLevelTrig         1038
+#define NgLevelList         1039
+#define NgTeamsTrig         1040
+#define NgTeamsList         1041
+#define NgStart             1042
+#define NgBack              1043
+#define SettingsForm        1050
+#define SetName             1051
+#define SetSound            1052
+#define SetSlow             1053
+#define SetSight            1054
+#define SetKey1             1055
+#define SetKey2             1056
+#define SetKey3             1057
+#define SetKey4             1058
+#define SetOK               1059
+#define SetCancel           1060
+#define ResultsForm         1070
+#define ResultsOK           1071
 #define GameForm            1010
 #define EverardMapRes       2000
 #define MainMenu            1000
+#define GameMenu            1001
 #define MainMenuAbout       1001
-#define MainMenuMaps        1003
+#define MainMenuTitle       1003
 #define MainMenuQuit        1002
 #define MainMenuSelfTest    1004
-#define MainMenuSoundOn     1010
-#define MainMenuSoundOff    1011
 
 #define AboutAlert          1100
 #define RomIncompatibleAlert 1101
 #define MapErrorAlert       1102
 #define ViewAlert           1103
+#define JoinAlert           1104
+#define ReplaceAlert        1105
+#define ResumeAlert         1106
+#define SaveFailAlert       1107
 
 #endif

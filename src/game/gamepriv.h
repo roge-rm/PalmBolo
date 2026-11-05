@@ -16,6 +16,8 @@ int8_t g_base_at(const GameState *s, uint8_t x, uint8_t y);
 int8_t g_pill_at(const GameState *s, uint8_t x, uint8_t y);
 // The same, alive only.
 int8_t g_live_pill_at(const GameState *s, uint8_t x, uint8_t y);
+// A pill was put down at x, y during the tick.
+void g_pill_moved(uint8_t x, uint8_t y);
 void g_explosion(GameState *s, uint16_t wx, uint16_t wy);
 uint8_t g_damage(GameState *s, uint8_t kind, uint8_t x, uint8_t y);
 void g_damage_remove(GameState *s, uint8_t kind, uint8_t x, uint8_t y);
@@ -40,8 +42,10 @@ void g_tank_explosion(GameState *s, uint16_t wx, uint16_t wy, uint16_t angle,
 void SEC_TANK tank_create(GameState *s, uint8_t t, uint8_t player);
 void SEC_TANK tank_update(GameState *s, uint8_t t, const GameInput *in);
 void SEC_TANK tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my);
-// tankIsTankHit for a shell at wx, wy: 1 if it hit the tank.
-uint8_t SEC_TANK tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle);
+// tankIsTankHit for a shell of owner (a player, or GAME_NO_PLAYER for a
+// pill) at wx, wy: 1 if it hit the tank.
+uint8_t SEC_TANK tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle,
+	uint8_t owner);
 // mapGetSpeed: the terrain's top speed in world units a tick for a tank of
 // player (on a boat or not); 0 where it can't drive.
 uint8_t SEC_TANK g_speed_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player);
@@ -77,6 +81,12 @@ void SEC_BUILDER lgm_update(GameState *s, uint8_t t);
 void SEC_BUILDER lgm_blast(GameState *s, uint16_t wx, uint16_t wy);
 // lgmIsGoingToBuildAt for any builder.
 uint8_t SEC_BUILDER lgm_building_at(const GameState *s, uint8_t x, uint8_t y);
+
+// bot.c: in has the players' keys for every tank, out gets them with the
+// bots' tanks filled in.
+void SEC_BOTS bots_tick(GameState *s, const GameInput *in, GameInput *out);
+// Starts tank t's bot afresh at level (BOT_OFF to stop it).
+void SEC_BOTS bot_reset(GameState *s, uint8_t t, uint8_t level);
 
 // treegrow.c
 void SEC_BUILDER tree_init(GameState *s);

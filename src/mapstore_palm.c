@@ -15,6 +15,9 @@
 #define kFlagBytes      8192
 #define kAllRecords     (kRecords + MS_PLANES)
 
+#define kSaveName       "PalmBoloSavedMap"
+#define kSaveType       'Save'
+
 static DmOpenRef gDb;
 static UInt8 *gRec[kAllRecords];    // locked record pointers
 static MemHandle gHandle[kAllRecords];
@@ -83,7 +86,8 @@ static DmOpenRef OpenCache(void)
 	return db;
 }
 
-int mapstore_open(uint8_t value)
+// Opens the cache and locks all its records. Non-zero on failure.
+static int OpenLocked(void)
 {
 	UInt16 i;
 
@@ -99,6 +103,13 @@ int mapstore_open(uint8_t value)
 			return 1;
 		}
 	}
+	return 0;
+}
+
+int mapstore_open(uint8_t value)
+{
+	if (OpenLocked() != 0)
+		return 1;
 	mapstore_fill(value);
 	mapstore_clear_flags();
 	return 0;
@@ -154,10 +165,93 @@ void mapstore_set_flag(uint8_t plane, uint8_t x, uint8_t y, uint8_t on)
 		DmWrite(rec, off, &b, 1);
 }
 
+const uint8_t *mapstore_flags(uint8_t plane)
+{
+	return gRec[kRecords + plane];
+}
+
 void mapstore_clear_flags(void)
 {
 	UInt16 i;
 
 	for (i = 0; i < MS_PLANES; i++)
 		DmSet(gRec[kRecords + i], 0, kFlagBytes, 0);
+}
+
+// The saved game keeps the cache database itself: it is renamed and given
+// another type, so nothing is copied and a new game makes a new cache.
+static void DeleteByName(const Char *name)
+{
+	LocalID id = DmFindDatabase(0, (Char *)name);
+
+	if (id)
+		DmDeleteDatabase(0, id);
+}
+
+int mapstore_have_save(void)
+{
+	return DmFindDatabase(0, kSaveName) != 0;
+}
+
+void mapstore_drop_save(void)
+{
+	DeleteByName(kSaveName);
+}
+
+// Renames the live cache to the saved map, replacing the old save. If that
+// fails the live cache is opened again as it was.
+int mapstore_save(void)
+{
+	LocalID id;
+	UInt32 type = kSaveType;
+	Boolean ok;
+
+	if (!gDb)
+		return 1;
+	mapstore_close();
+	id = DmFindDatabase(0, kCacheName);
+	if (!id)
+		return 1;
+	DeleteByName(kSaveName);
+	ok = DmSetDatabaseInfo(0, id, kSaveName, NULL, NULL, NULL, NULL, NULL, NULL,
+		NULL, NULL, &type, NULL) == errNone;
+	if (!ok)
+		OpenLocked();
+	return ok ? 0 : 1;
+}
+
+// Copies the saved map into the live cache and leaves the save as it is, so
+// a crash during the resumed game doesn't lose it.
+int mapstore_resume(void)
+{
+	LocalID id = DmFindDatabase(0, kSaveName);
+	DmOpenRef src;
+	UInt16 i;
+	Boolean ok;
+
+	mapstore_close();
+	if (!id)
+		return 1;
+	src = DmOpenDatabase(0, id, dmModeReadOnly);
+	if (!src)
+		return 1;
+	ok = DmNumRecords(src) == kAllRecords;
+	for (i = 0; ok && i < kAllRecords; i++) {
+		MemHandle h = DmQueryRecord(src, i);
+
+		ok = h && MemHandleSize(h) == (i < kRecords ? kRecordBytes : kFlagBytes);
+	}
+	if (ok && mapstore_open(0) != 0)
+		ok = false;
+	for (i = 0; ok && i < kAllRecords; i++) {
+		MemHandle h = DmQueryRecord(src, i);
+		const void *p = MemHandleLock(h);
+
+		DmWrite(gRec[i], 0, p, i < kRecords ? kRecordBytes : kFlagBytes);
+		MemHandleUnlock(h);
+	}
+	DmCloseDatabase(src);
+	if (!ok)
+		mapstore_close();
+	return ok ? 0 : 1;
 }

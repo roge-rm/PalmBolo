@@ -534,6 +534,7 @@ static void SEC_BUILDER do_work(GameState *s, uint8_t t)
 				m->numTrees = 0;
 				p->x = bmx;
 				p->y = bmy;
+				g_pill_moved(bmx, bmy);
 				p->owner = player_of(s, t);
 				p->armour = R_PILL_MAX_ARMOUR;
 				if (p->speed < R_PILL_ATTACK_MIN)

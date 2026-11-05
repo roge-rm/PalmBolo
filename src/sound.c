@@ -168,8 +168,8 @@ void SEC_UI SoundStop(void)
 	gFx = FX_NONE;
 }
 
-// The sound an event makes for viewer, by its distance from the viewer's
-// tank at vx, vy, or FX_NONE.
+// The sound an event makes for the viewer (a player), by its distance from
+// the viewer's tank at vx, vy, or FX_NONE.
 static UInt8 SEC_UI Effect(const GameSound *e, UInt8 viewer, UInt8 vx, UInt8 vy)
 {
 	UInt8 gx = e->x > vx ? e->x - vx : vx - e->x;
@@ -192,15 +192,15 @@ static UInt8 SEC_UI Effect(const GameSound *e, UInt8 viewer, UInt8 vx, UInt8 vy)
 	return kFar[e->kind];
 }
 
-void SEC_UI SoundFrame(const GameState *g, UInt8 viewer)
+void SEC_UI SoundFrame(const GameState *g)
 {
 	GameSound ev[GAME_MAX_SOUNDS];
-	UInt8 i, n, fx, best = FX_NONE;
+	UInt8 i, n, fx, best = FX_NONE, viewer = game_viewer();
 	UInt32 now = TimGetTicks();
 
 	n = game_take_sounds(ev, GAME_MAX_SOUNDS);
-	if (gOn && gVolume > 0 && n > 0 && viewer < g->numTanks) {
-		const Tank *k = &g->tanks[viewer];
+	if (gOn && gVolume > 0 && n > 0 && g->numTanks > 0) {
+		const Tank *k = &g->tanks[game_viewer_tank(g)];
 		UInt8 vx = (UInt8)(k->x >> 8), vy = (UInt8)(k->y >> 8);
 
 		for (i = 0; i < n; i++) {

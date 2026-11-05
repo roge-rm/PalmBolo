@@ -41,6 +41,7 @@ static UInt32 gBlink[4];                  // tick the icon's flash ends, 0 none
 static IndexedColorType gAmber, gEmpty;
 static UInt8 gPillSig[MAP_MAX_PILLS], gBaseSig[MAP_MAX_BASES];
 static UInt8 gShownPills, gShownBases;
+static UInt32 gShownSec = 0xFFFFFFFFUL;    // time left drawn, in seconds
 static Boolean gStatusDrawn;
 // What the overview showed on screen: the tank's pixel, the view rectangle
 // and a dirty rectangle of window pixels to copy again.
@@ -231,7 +232,7 @@ static void SEC_UI DrawShape(Coord x, Coord y, Coord s, UInt16 shape, IndexedCol
 // shows on any ground: pills two pixels square, bases three.
 static void SEC_UI OvMark(UInt8 x, UInt8 y, UInt8 owner, Boolean base, Boolean dead)
 {
-	UInt8 kind = game_owner_kind(gGame, owner, gGame->tanks[0].player);
+	UInt8 kind = game_owner_kind(gGame, owner, game_viewer());
 	Coord px = x >> 1, py = y >> 1, n = base ? 3 : 2, i, j;
 	IndexedColorType c = gOwn[kind];
 
@@ -455,7 +456,7 @@ void SEC_UI PanelOpen(const DeviceInfo *d, const GameState *game)
 		WinDeleteWindow(gOv, false);
 	gOv = WinCreateOffscreenWindow(kOv, kOv, gHiRes ? nativeFormat : screenFormat, &err);
 #ifdef DEBUG
-	if (gOv && gNewWin) {
+	if (gOv && ScreenOs40()) {
 		BitmapType *bmp = WinGetBitmap(gOv);
 		Coord bw = 0, bh = 0;
 		UInt16 rb = 0;
@@ -532,7 +533,7 @@ static void SEC_UI DrawGauge(UInt8 i, Coord x, Coord y, Coord w, Boolean inv)
 
 static UInt8 SEC_UI PillKind(const MapPill *p)
 {
-	return game_owner_kind(gGame, p->owner, gGame->tanks[0].player);
+	return game_owner_kind(gGame, p->owner, game_viewer());
 }
 
 // One mark for each pill or base in a row rowH high at y. The row is cut
@@ -553,7 +554,7 @@ static void SEC_UI DrawMarks(Boolean base, Coord y, Coord rowH)
 		Boolean dead;
 
 		if (base) {
-			kind = game_owner_kind(gGame, m->bases[i].owner, gGame->tanks[0].player);
+			kind = game_owner_kind(gGame, m->bases[i].owner, game_viewer());
 			dead = m->bases[i].armour <= R_BASE_CAPTURE_ARMOUR;
 		} else {
 			kind = PillKind(&m->pills[i]);
@@ -573,10 +574,40 @@ static void SEC_UI DrawMarks(Boolean base, Coord y, Coord rowH)
 	}
 }
 
+// 3 by 5 digits, a row to a byte (bit 2 is the left pixel), then the colon.
+static const UInt8 kDigit[11][5] = {
+	{7, 5, 5, 5, 7}, {2, 6, 2, 2, 7}, {7, 1, 7, 4, 7}, {7, 1, 7, 1, 7},
+	{5, 5, 7, 1, 1}, {7, 4, 7, 1, 7}, {7, 4, 7, 5, 7}, {7, 1, 1, 1, 1},
+	{7, 5, 7, 5, 7}, {7, 5, 7, 1, 7}, {0, 2, 0, 2, 0}};
+
+// The time left in a timed game as m:ss at the right end of the marks row,
+// in digits drawn from rectangles so they fit the row's height.
+static void SEC_UI DrawTimeLeft(Coord y, Coord rowH, UInt32 sec)
+{
+	Char t[8];
+	Coord sc = gHiRes ? 2 : 1, x, w, ty;
+	UInt16 n, i, r, c;
+
+	StrPrintF(t, "%lu:%02lu", sec / 60, sec % 60);
+	n = StrLen(t);
+	w = (Coord)(n * 4 * sc - sc);
+	x = gW - w - 2 * gU;
+	ty = y + (rowH - 5 * sc) / 2;
+	Erase(x - sc, y, w + 2 * sc, rowH);
+	for (i = 0; i < n; i++) {
+		UInt8 d = t[i] == ':' ? 10 : (UInt8)(t[i] - '0');
+
+		for (r = 0; r < 5; r++)
+			for (c = 0; c < 3; c++)
+				if (kDigit[d][r] & (4 >> c))
+					Fill(x + (Coord)((i * 4 + c) * sc), ty + (Coord)(r * sc), sc, sc, gBlack);
+	}
+}
+
 // The builder: in the tank, going out, coming back or flying in.
 static UInt8 SEC_UI ManState(void)
 {
-	const Builder *m = &gGame->men[0];
+	const Builder *m = &gGame->men[game_viewer_tank(gGame)];
 
 	return m->isDead ? 3 : m->inTank ? 0 : m->state == LGM_STATE_GOING ? 1 : 2;
 }
@@ -613,7 +644,7 @@ static UInt8 SEC_UI Sig(Boolean base, UInt16 i)
 	const MapInfo *m = &gGame->map;
 
 	if (base)
-		return (UInt8)(game_owner_kind(gGame, m->bases[i].owner, gGame->tanks[0].player) |
+		return (UInt8)(game_owner_kind(gGame, m->bases[i].owner, game_viewer()) |
 			(m->bases[i].armour <= R_BASE_CAPTURE_ARMOUR ? 4 : 0) | (m->bases[i].active ? 0 : 8));
 	return (UInt8)(PillKind(&m->pills[i]) | (m->pills[i].armour == 0 ? 4 : 0) |
 		(m->pills[i].inTank ? 8 : 0));
@@ -627,7 +658,7 @@ static void SEC_UI MaybeGauge(UInt8 i, Boolean force, Coord x, Coord y, Coord w)
 	Boolean changed, ended = false;
 
 	{
-		const Tank *k = &gGame->tanks[0];
+		const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
 
 		v = i == 0 ? k->armour : i == 1 ? k->shells : i == 2 ? k->mines : k->trees;
 	}
@@ -649,7 +680,7 @@ static void SEC_UI DrawStatus(Coord py)
 	const MapInfo *m = &gGame->map;
 	Boolean force = !gStatusDrawn, pc = false, bc = false;
 	UInt16 i;
-	UInt8 man = ManState(), v, carry = gGame->tanks[0].numCarry;
+	UInt8 man = ManState(), v, carry = gGame->tanks[game_viewer_tank(gGame)].numCarry;
 	FontID old = FntSetFont(stdFont);
 	Coord y, isz = gTs, rowM;
 
@@ -692,6 +723,14 @@ static void SEC_UI DrawStatus(Coord py)
 		DrawMarks(false, y, rowM - 2);
 	if (force || bc)
 		DrawMarks(true, y, rowM - 2);
+	if (gGame->timeLimit) {
+		UInt32 left = gGame->tick >= gGame->timeLimit ? 0 :
+			(gGame->timeLimit - gGame->tick + GAME_TICKS_PER_SECOND - 1) / GAME_TICKS_PER_SECOND;
+
+		if (force || bc || left != gShownSec)
+			DrawTimeLeft(y, rowM - 2, left);
+		gShownSec = left;
+	}
 	gShownMan = man;
 	gShownCarry = carry;
 	gStatusDrawn = true;
@@ -738,7 +777,7 @@ static void SEC_UI Blit(Coord ox, Coord oy, Coord x0, Coord y0, Coord x1, Coord 
 static void SEC_UI DrawOverview(Coord ox, Coord oy, Boolean force, Int32 vx, Int32 vy,
 	Coord vw, Coord vh, Coord ts)
 {
-	const Tank *k = &gGame->tanks[0];
+	const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
 	Coord tx = (Coord)(k->x >> 9), ty = (Coord)(k->y >> 9);
 	Coord sq = ts * 2, x0 = (Coord)(vx / sq), y0 = (Coord)(vy / sq);
 	Coord w = (Coord)((vx + vw - 1) / sq) - x0 + 1, h = (Coord)((vy + vh - 1) / sq) - y0 + 1;

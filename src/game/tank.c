@@ -225,7 +225,8 @@ void SEC_TANK tank_mine_damage(GameState *s, uint8_t t, uint8_t mx, uint8_t my)
 	}
 }
 
-uint8_t SEC_TANK tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle)
+uint8_t SEC_TANK tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t wy, uint16_t angle,
+	uint8_t owner)
 {
 	Tank *k = &s->tanks[t];
 	int16_t dx = (int16_t)(k->x - wx), dy = (int16_t)(k->y - wy);
@@ -239,9 +240,15 @@ uint8_t SEC_TANK tank_shell_hit(GameState *s, uint8_t t, uint16_t wx, uint16_t w
 		k->speed = 0;
 	}
 	if (damage(k, R_SHELL_DAMAGE)) {
+		int8_t killer = game_tank_of(s, owner);
+
 		g_tank_explosion(s, wx, wy, angle, R_TANK_EXPLOSION_LENGTH, big_wreck(k), k->player);
 		k->deathWait = R_TANK_DEATH_TICKS;
 		pills_drop(s, t);
+		// A kill counts for the shooter's tank, allied or not; a pill's
+		// shell counts for nobody.
+		if (killer >= 0 && owner != k->player)
+			s->tanks[killer].kills++;
 	} else {
 		int16_t bx, by;
 
@@ -603,6 +610,83 @@ static uint8_t SEC_TANK nudge(GameState *s, Tank *k)
 	return hit;
 }
 
+// playersCalcTankCollision as tankCheckGroundClear calls it (with no
+// velocity): each live tank nearer than a square pushes this one straight
+// away from it by half the overlap, at least 1. WinBolo works in floats;
+// here the distance is in 1/256 world units from an integer square root
+// and each push is truncated towards zero the same way. Tanks on the same
+// spot part along x by tank order.
+static void SEC_TANK tank_push(const GameState *s, uint8_t t, int16_t *px, int16_t *py)
+{
+	const Tank *k = &s->tanks[t];
+	uint8_t i;
+
+	*px = 0;
+	*py = 0;
+	for (i = 0; i < s->numTanks; i++) {
+		const Tank *o = &s->tanks[i];
+		int32_t ox, oy, d2, dist, push;
+		int16_t dx, dy;
+
+		if (i == t || o->destroyed)
+			continue;
+		ox = (int32_t)k->x - o->x;
+		oy = (int32_t)k->y - o->y;
+		if (ox <= -R_TANK_COLLIDE || ox >= R_TANK_COLLIDE ||
+		    oy <= -R_TANK_COLLIDE || oy >= R_TANK_COLLIDE)
+			continue;
+		dx = (int16_t)ox;
+		dy = (int16_t)oy;
+		d2 = MUL16(dx, dx) + MUL16(dy, dy);
+		if (d2 >= (int32_t)R_TANK_COLLIDE * R_TANK_COLLIDE)
+			continue;
+		if (d2 == 0) {
+			*px = (int16_t)(*px + (i > t ? R_TANK_COLLIDE / 2 : -R_TANK_COLLIDE / 2));
+			continue;
+		}
+		dist = util_isqrt((uint32_t)d2 << 16);      // 1/256 units
+		push = ((int32_t)R_TANK_COLLIDE * 256 - dist) / 2;
+		if (push < 256)
+			push = 256;
+		*px = (int16_t)(*px + (int16_t)(dx * push / dist));
+		*py = (int16_t)(*py + (int16_t)(dy * push / dist));
+	}
+}
+
+// tankNudgeOtherTanks: up to five pixel steps away from each live tank
+// nearer than a square (by dx + dy), along x when they are more than the
+// threshold apart on x, else along y, snapping to the pixel grid.
+static void SEC_TANK tank_nudge(GameState *s, uint8_t t)
+{
+	Tank *k = &s->tanks[t];
+	uint8_t i, j;
+
+	for (i = 0; i < s->numTanks; i++) {
+		const Tank *o = &s->tanks[i];
+
+		if (i == t || o->destroyed)
+			continue;
+		for (j = 0; j < R_TANK_NUDGE_PASSES; j++) {
+			uint16_t dx = k->x > o->x ? k->x - o->x : o->x - k->x;
+			uint16_t dy = k->y > o->y ? k->y - o->y : o->y - k->y;
+
+			if ((uint32_t)dx + dy >= R_TANK_COLLIDE)
+				break;
+			if (dx > R_TANK_NUDGE_THRESHOLD) {
+				if (k->x < o->x)
+					k->x = (uint16_t)((k->x - R_TANK_NUDGE_STEP) | 0x000F);
+				else
+					k->x = (uint16_t)((k->x + R_TANK_NUDGE_STEP) & 0xFFF0);
+			} else {
+				if (k->y < o->y)
+					k->y = (uint16_t)((k->y - R_TANK_NUDGE_STEP) | 0x000F);
+				else
+					k->y = (uint16_t)((k->y + R_TANK_NUDGE_STEP) & 0xFFF0);
+			}
+		}
+	}
+}
+
 // tankCheckGroundClear's test: a live pill, a base of another side or a
 // building under the tank.
 static uint8_t SEC_TANK ground_blocked(const GameState *s, const Tank *k, uint8_t x, uint8_t y)
@@ -706,16 +790,32 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 	int8_t b;
 
 	// tankCheckGroundClear: a tank on something solid is pushed towards
-	// the nearer edge and slowed.
+	// the nearer edge and slowed; otherwise tanks on top of it push it
+	// away.
 	if (ground_blocked(s, k, mx, my)) {
+		k->obstructed = 1;
 		k->x = (uint16_t)(k->x + ((k->x & 0xFF) < 128 ? -1 : 1));
 		k->y = (uint16_t)(k->y + ((k->y & 0xFF) < 128 ? -1 : 1));
 		k->speed = (int16_t)(k->speed - 4);
 		if (k->speed < 0)
 			k->speed = 0;
+	} else {
+		tank_push(s, t, &dx, &dy);
+		if (dx || dy) {
+			k->x = (uint16_t)(k->x + dx);
+			k->y = (uint16_t)(k->y + dy);
+			k->obstructed = 1;
+		}
 	}
 	turn(k, turn_at(s, mx, my, k->boat, k->player), in->keys);
 	accel(k, (int16_t)(g_speed_at(s, mx, my, k->boat, k->player) * 4), in->keys);
+	{
+		uint16_t nx = k->x, ny = k->y;
+
+		tank_nudge(s, t);
+		if (k->x != nx || k->y != ny)
+			k->obstructed = 1;
+	}
 
 	// Moves by whole world units in one of 16 directions once enough speed
 	// has built up.
@@ -743,8 +843,12 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 		if (k->bumpY > -2 && k->bumpY < 2)
 			k->bumpY = 0;
 	}
-	if (nudge(s, k) && moved && ((k->x ^ ox) & 0xFFF0) == 0 && ((k->y ^ oy) & 0xFFF0) == 0)
-		k->obstructed = 1;
+	// Stuck only if it moved but the buildings held it in the same
+	// pixel since the start of the tick.
+	if (nudge(s, k) && moved)
+		k->obstructed = ((k->x ^ ox) & 0xFFF0) == 0 && ((k->y ^ oy) & 0xFFF0) == 0;
+	else if (moved)
+		k->obstructed = 0;
 	pills_pickup(s, t);
 
 	if (k->boat) {

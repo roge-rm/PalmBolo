@@ -9,6 +9,10 @@
 # EXTRA="-DDEMO_START" puts the tank west of the first base for replays,
 # EXTRA="-DKEEP_INPUT_AREA" leaves the input area open on a TX, and
 # EXTRA="-DDEMO_BUILDER" by a forest on Everard Island with no trees.
+# EXTRA="-DTEST_TIME_LIMIT=1000" ends a debug game after that many ticks.
+# EXTRA="-DTEST_LEAVE_AT=500" leaves a debug game for the title at that tick.
+# EXTRA="-DBOT_COUNT=3 -DBOT_LEVEL=2" sets the bots in a new game (level
+# 1 easy, 2 normal, 3 hard; 3 normal bots by default).
 
 SDK      = ../palm-os-sdk/sdk-5r3
 PRC      = PalmBolo.prc
@@ -27,8 +31,8 @@ ART      = build/art
 CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES) -I$(ART) -Isrc
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
-SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound
-GAMESRCS = game tank shells pills lgm treegrow util map
+SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound front
+GAMESRCS = game tank shells pills lgm treegrow util map bot
 # The scripted games are for the debug self-test only.
 ifdef DEBUG
 GAMESRCS += script
@@ -71,7 +75,7 @@ $(BUILD)/palmbolo: $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sectio
 	python3 tools/segcheck.py $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(BUILD)/palmbolo-sections.o $(BUILD)/palmbolo-sections.ld -o $@
 
-$(BUILD)/palmbolo.ro: src/palmbolo.rcp src/resource.h res/icon.bmp res/smallicon.bmp res/everard.map $(ART)/art.rcp | $(BUILD)
+$(BUILD)/palmbolo.ro: src/palmbolo.rcp src/resource.h res/everard.map $(ART)/art.rcp | $(BUILD)
 	pilrc -q -ro $(if $(DEBUG),-D DEBUG) -I src -I $(ART) src/palmbolo.rcp $@
 
 # The PRC is always written to build/PalmBolo.prc, so build one flavour at a time.
@@ -81,7 +85,7 @@ build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
 host-test: build/hosttest
 	build/hosttest
 
-HOSTSRC  = src/game/game.c src/game/tank.c src/game/shells.c src/game/pills.c src/game/lgm.c src/game/treegrow.c src/game/script.c src/game/util.c src/game/map.c host/mapstore_host.c
+HOSTSRC  = src/game/game.c src/game/bot.c src/game/tank.c src/game/shells.c src/game/pills.c src/game/lgm.c src/game/treegrow.c src/game/script.c src/game/util.c src/game/map.c host/mapstore_host.c
 
 build/hosttest: host/hosttest.c $(HOSTSRC) src/game/*.h | $(BUILD)
 	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) -lm -o $@
