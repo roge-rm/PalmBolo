@@ -724,9 +724,16 @@ static void save_resume(const uint8_t *ev, uint32_t len)
 
 // ---- bots ----
 
+static int gSoakGame;   // the soak game running, for debug prints
+
 typedef struct BotStats {
 	int captures, pickups, placed, drowned, sunk, kills, deaths, firstCapture;
 	int pillHits, tankHits, byPill, byTank, byOther, pillsDown, noPath, botTicks, allyHits;
+	// Ticks wading in a river off a boat, on a boat, boats boarded on land,
+	// builder out of the tank alive and flying in, outings over 300 ticks, ticks out on a river,
+	// squares entered.
+	int wading, onBoat, boarded, manOut, manDead, manLong, manRiver, squares;
+	int outFor[GAME_MAX_TANKS];
 	int basesOwned[GAME_MAX_TANKS], pillsOwned[GAME_MAX_TANKS];
 } BotStats;
 
@@ -738,6 +745,7 @@ static void bot_tick(GameState *g, BotStats *st)
 	GameSound snd[GAME_MAX_SOUNDS];
 	uint8_t alive[GAME_MAX_TANKS], carry[GAME_MAX_TANKS], boat[GAME_MAX_TANKS], bump[GAME_MAX_TANKS], i, n;
 	uint8_t near[GAME_MAX_TANKS], arm[GAME_MAX_TANKS], parm[MAP_MAX_PILLS], ally[GAME_MAX_TANKS];
+	uint16_t sq[GAME_MAX_TANKS];
 
 	memset(in, 0, sizeof(in));
 	for (i = 0; i < g->map.numPills; i++)
@@ -767,6 +775,37 @@ static void bot_tick(GameState *g, BotStats *st)
 			st->noPath += g->bots[i].goal != 0 && g->bots[i].wayN == 0 && g->bots[i].mode == 0;
 		}
 		carry[i] = g->tanks[i].numCarry;
+		if (alive[i]) {
+			const Tank *k = &g->tanks[i];
+
+			if (k->boat)
+				st->onBoat++;
+			else if (game_terrain(k->x >> 8, k->y >> 8) == TERRAIN_RIVER) {
+				st->wading++;
+				if (getenv("WADEDBG") && g->tick % 20 == 0)
+					printf("  wade g%d %d %u,%u spd %d goal %u at %u,%u w%u mode %u man %u\n", gSoakGame, i, k->x >> 8, k->y >> 8, k->speed,
+						g->bots[i].goal, g->bots[i].goalX, g->bots[i].goalY, g->bots[i].wayN, g->bots[i].mode, g->men[i].inTank);
+			}
+		}
+		if (!g->men[i].inTank && g->men[i].isDead) {
+			st->manDead++;
+			st->outFor[i] = 0;
+		} else if (!g->men[i].inTank) {
+			st->manOut++;
+			if (++st->outFor[i] == 300)
+				st->manLong++;
+			if (getenv("MANDBG") && st->outFor[i] % 300 == 0)
+				printf("  man %d out %d: at %u,%u (%u) state %u dead %u ob %u act %u, tank at %u,%u boat %u dead %u goal %u at %u,%u w%u fails %u\n",
+					i, st->outFor[i], g->men[i].x >> 8, g->men[i].y >> 8, game_terrain(g->men[i].x >> 8, g->men[i].y >> 8),
+					g->men[i].state, g->men[i].isDead, g->men[i].obstructed, g->men[i].action,
+					g->tanks[i].x >> 8, g->tanks[i].y >> 8, g->tanks[i].boat, g->tanks[i].destroyed || g->tanks[i].deathWait,
+					g->bots[i].goal, g->bots[i].goalX, g->bots[i].goalY, g->bots[i].wayN, g->bots[i].fails);
+			if (game_terrain(g->men[i].x >> 8, g->men[i].y >> 8) == TERRAIN_RIVER)
+				st->manRiver++;
+		} else {
+			st->outFor[i] = 0;
+		}
+		sq[i] = (uint16_t)((g->tanks[i].x >> 8) | (g->tanks[i].y & 0xFF00));
 		boat[i] = g->tanks[i].boat;
 		bump[i] = g->tanks[i].bumpX || g->tanks[i].bumpY;
 	}
@@ -785,6 +824,10 @@ static void bot_tick(GameState *g, BotStats *st)
 	for (i = 0; i < g->numTanks; i++) {
 		const Tank *k = &g->tanks[i];
 
+		if (alive[i] && !k->destroyed && !k->deathWait) {
+			st->boarded += k->boat && !boat[i];
+			st->squares += sq[i] != (uint16_t)((k->x >> 8) | (k->y & 0xFF00));
+		}
 		if (k->numCarry > carry[i])
 			st->pickups += k->numCarry - carry[i];
 		else if (k->numCarry < carry[i] && !k->destroyed && !k->deathWait)
@@ -810,6 +853,8 @@ static void bot_tick(GameState *g, BotStats *st)
 		    game_terrain(k->x >> 8, k->y >> 8) == TERRAIN_DEEP_SEA) {
 			if (boat[i] || bump[i]) {
 				st->sunk++;
+				if (getenv("SUNKDBG"))
+					printf("  sunk g%d tank %u at %u,%u boat %u bump %u near %u tick %u\n", gSoakGame, i, k->x >> 8, k->y >> 8, boat[i], bump[i], near[i], (unsigned)g->tick);
 			} else {
 				st->drowned++;
 				printf("  drowned: tank %u at %u,%u tick %u\n", i, k->x >> 8, k->y >> 8,
@@ -866,7 +911,7 @@ static void bot_checks(const uint8_t *ev, uint32_t len)
 	game_set_bot(&g, 0, BOT_NORMAL);
 	for (t = 0; t < 5000 && st.firstCapture < 0; t++) {
 		if (getenv("BT1") && t % (getenv("BT2") ? 10 : 50) == 0 && t >= (getenv("BT2") ? atoi(getenv("BT2")) : 0))
-			printf("  t%d spd %d ang %u way %u,%u who %u ph %u cur %u %u,%u arm %u goal %u tgt %u at %u,%u mode %u w%u fails %u skip %u\n", t, g.tanks[0].speed, g.tanks[0].angle, g.bots[0].way[0][0], g.bots[0].way[0][1], g.search.who, g.search.phase, g.search.cur, g.tanks[0].x >> 8,
+			printf("  t%d man %u st %u ob %u at %u,%u spd %d ang %u way %u,%u who %u ph %u cur %u %u,%u arm %u goal %u tgt %u at %u,%u mode %u w%u fails %u skip %u\n", t, g.men[0].inTank, g.men[0].state, g.men[0].obstructed, g.men[0].x >> 8, g.men[0].y >> 8, g.tanks[0].speed, g.tanks[0].angle, g.bots[0].way[0][0], g.bots[0].way[0][1], g.search.who, g.search.phase, g.search.cur, g.tanks[0].x >> 8,
 				g.tanks[0].y >> 8, g.tanks[0].armour, g.bots[0].goal, g.bots[0].target, g.bots[0].goalX,
 				g.bots[0].goalY, g.bots[0].mode, g.bots[0].wayN, g.bots[0].fails, g.bots[0].skip);
 		bot_tick(&g, &st);
@@ -893,6 +938,46 @@ static void bot_checks(const uint8_t *ev, uint32_t len)
 	CHECK(onBase && g.tanks[0].deaths == deaths0 && g.tanks[0].armour == 40,
 		"bot: refuels at an own base when low");
 	CHECK(st.drowned == 0, "bot: no drowning");
+
+	// A far base across open ground: the bot drives at it all the way and
+	// doesn't turn back at the edge of a search window.
+	memset(&st, 0, sizeof(st));
+	st.firstCapture = -1;
+	bot_new(&g, ev, len, 99, 1, 0, 0);
+	{
+		int x, y, i, d, dMin = 255, back = 0;
+
+		for (y = 40; y < 216; y++)
+			for (x = 40; x < 216; x++)
+				game_set_terrain((uint8_t)x, (uint8_t)y, TERRAIN_GRASS);
+		for (i = 0; i < g.map.numPills; i++)
+			g.map.pills[i].active = 0;
+		for (i = 1; i < g.map.numBases; i++)
+			g.map.bases[i].active = 0;
+		g.map.bases[0].x = 190;
+		g.map.bases[0].y = 140;
+		g.map.bases[0].owner = MAP_NEUTRAL;
+		g.tanks[0].x = (60 << 8) + 128;
+		g.tanks[0].y = (120 << 8) + 128;
+		game_set_bot(&g, 0, BOT_NORMAL);
+		for (t = 0; t < 4000 && st.firstCapture < 0; t++) {
+			bot_tick(&g, &st);
+			if (getenv("FARDBG") && t % 100 == 0)
+				printf("  t%d at %u,%u goal %u %u,%u w%u spd %d man %u\n", t, g.tanks[0].x >> 8,
+					g.tanks[0].y >> 8, g.bots[0].goal, g.bots[0].goalX, g.bots[0].goalY,
+					g.bots[0].wayN, g.tanks[0].speed, g.men[0].inTank);
+			x = g.tanks[0].x >> 8;
+			y = g.tanks[0].y >> 8;
+			d = abs(x - 190) > abs(y - 140) ? abs(x - 190) : abs(y - 140);
+			if (d < dMin)
+				dMin = d;
+			else if (d - dMin > back)
+				back = d - dMin;
+		}
+		printf("bot: far base 130 squares off taken at tick %d, most lost ground %d squares\n",
+			st.firstCapture, back);
+		CHECK(st.firstCapture >= 0 && back <= 3, "bot: drives straight at a far goal in open ground");
+	}
 
 	// A player's tank is handed to a bot mid-game.
 	memset(&st, 0, sizeof(st));
@@ -921,11 +1006,15 @@ static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
 	static GameState g;
 	int n, i, totalDrowned = 0;
 	static const int kBots[] = { 4, 8, 3, 6, 2, 5 };
+	BotStats tot;
+
+	memset(&tot, 0, sizeof(tot));
 
 	for (n = 0; n < games; n++) {
 		BotStats st;
 		int bots = kBots[n % 6], level = 1 + n % 3;
 
+		gSoakGame = n;
 		memset(&st, 0, sizeof(st));
 		st.firstCapture = -1;
 		bot_new(&g, ev, len, 1000 + n * 77, 1, bots - 1, level);
@@ -934,9 +1023,9 @@ static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
 			int x0, y0, x, y;
 
 			sscanf(getenv("MD"), "%d,%d", &x0, &y0);
-			for (y = y0; y < y0 + 40; y++) {
+			for (y = y0; y < y0 + (getenv("MH") ? atoi(getenv("MH")) : 40); y++) {
 				printf("%3d ", y);
-				for (x = x0; x < x0 + 60; x++) {
+				for (x = x0; x < x0 + (getenv("MW") ? atoi(getenv("MW")) : 60); x++) {
 					int t = game_terrain(x, y);
 					char c = "#rs=.Tu,hb" [t < 10 ? t : 0];
 
@@ -955,8 +1044,8 @@ static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
 				const Tank *k = &g.tanks[tk];
 				const Bot *b = &g.bots[tk];
 
-				printf("  t%d %u,%u arm %u sh %u spd %d ang %u goal %u tgt %u (pa %u) at %u,%u mode %u w%u fails %u\n",
-					i, k->x >> 8, k->y >> 8, k->armour, k->shells, k->speed, k->angle >> 8, b->goal, b->target,
+				printf("  t%d %u,%u b%u arm %u sh %u spd %d ang %u goal %u tgt %u (pa %u) at %u,%u mode %u w%u fails %u\n",
+					i, k->x >> 8, k->y >> 8, k->boat, k->armour, k->shells, k->speed, k->angle >> 8, b->goal, b->target,
 					b->goal == 2 ? g.map.pills[b->target].armour : 0, b->goalX, b->goalY, b->mode, b->wayN, k->numCarry); if (b->wayN) printf("     way %u,%u %u,%u x %u y %u search %u\n", b->way[0][0], b->way[0][1], b->way[1][0], b->way[1][1], k->x & 255, k->y & 255, g.search.who);
 			}
 			bot_tick(&g, &st);
@@ -980,8 +1069,50 @@ static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
 		printf("\n   pills down %d, hits by pills %d by tanks %d, deaths by pills %d tanks %d other %d,"
 			" ally hits %d, no path %d%%\n", st.pillsDown, st.pillHits, st.tankHits, st.byPill, st.byTank,
 			st.byOther, st.allyHits, st.botTicks ? st.noPath * 100 / st.botTicks : 0);
+		printf("   wading %d%%, on a boat %d%%, boarded %d, builder out %d%% (on a river %d%%), outings over 300 ticks %d,"
+			" squares a tick %d.%03d\n", st.botTicks ? st.wading * 100 / st.botTicks : 0,
+			st.botTicks ? st.onBoat * 100 / st.botTicks : 0, st.boarded,
+			st.botTicks ? st.manOut * 100 / st.botTicks : 0, st.botTicks ? st.manRiver * 100 / st.botTicks : 0,
+			st.manLong, st.squares / (st.botTicks ? st.botTicks : 1),
+			(int)((long)st.squares * 1000 / (st.botTicks ? st.botTicks : 1) % 1000));
 		totalDrowned += st.drowned;
+		tot.captures += st.captures;
+		tot.pickups += st.pickups;
+		tot.placed += st.placed;
+		tot.kills += st.kills;
+		tot.deaths += st.deaths;
+		tot.sunk += st.sunk;
+		tot.pillsDown += st.pillsDown;
+		tot.byPill += st.byPill;
+		tot.byTank += st.byTank;
+		tot.byOther += st.byOther;
+		tot.noPath += st.noPath;
+		tot.botTicks += st.botTicks;
+		tot.wading += st.wading;
+		tot.onBoat += st.onBoat;
+		tot.boarded += st.boarded;
+		tot.manOut += st.manOut;
+		tot.manDead += st.manDead;
+		tot.manRiver += st.manRiver;
+		tot.manLong += st.manLong;
+		tot.squares += st.squares;
+		tot.firstCapture += st.firstCapture < 0 ? ticks : st.firstCapture;
 	}
+	if (games > 0)
+		printf("total over %d games: captures %d (first at %d on average) pickups %d placed %d kills %d deaths %d"
+			" sunk %d pills down %d, deaths by pills %d tanks %d other %d\n"
+			"   no path %d.%d%%, wading %d.%d%%, on a boat %d.%d%%, boarded %d, builder out %d.%d%% (on a river %d.%d%%, flying in %d.%d%%),"
+			" outings over 300 ticks %d, squares per 1000 ticks %d\n",
+			games, tot.captures, tot.firstCapture / games, tot.pickups, tot.placed, tot.kills, tot.deaths, tot.sunk,
+			tot.pillsDown, tot.byPill, tot.byTank, tot.byOther,
+			(int)((long)tot.noPath * 100 / tot.botTicks), (int)((long)tot.noPath * 1000 / tot.botTicks % 10),
+			(int)((long)tot.wading * 100 / tot.botTicks), (int)((long)tot.wading * 1000 / tot.botTicks % 10),
+			(int)((long)tot.onBoat * 100 / tot.botTicks), (int)((long)tot.onBoat * 1000 / tot.botTicks % 10),
+			tot.boarded,
+			(int)((long)tot.manOut * 100 / tot.botTicks), (int)((long)tot.manOut * 1000 / tot.botTicks % 10),
+			(int)((long)tot.manRiver * 100 / tot.botTicks), (int)((long)tot.manRiver * 1000 / tot.botTicks % 10),
+			(int)((long)tot.manDead * 100 / tot.botTicks), (int)((long)tot.manDead * 1000 / tot.botTicks % 10),
+			tot.manLong, (int)((long)tot.squares * 1000 / tot.botTicks));
 	CHECK(totalDrowned == 0, "soak: no drowning");
 }
 

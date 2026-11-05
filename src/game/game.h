@@ -194,17 +194,22 @@ typedef struct Bot {
 	uint8_t way[BOT_WAYS][2];
 } Bot;
 
-// The one path search running, shared by all bots in turn: a breadth
-// first search over a window of BOT_WIN squares, a few cells a tick for
-// each bot.
+// The one path search running, shared by all bots in turn: a search by
+// cost over a window of BOT_WIN squares, a few cells a tick for each bot.
+// Cells wait in buckets by the round they spread in, BOT_BUCKETS rounds
+// ahead at most; a bucket is a list through link.
 #define BOT_WIN     32
 #define BOT_QUEUE   128
+#define BOT_BUCKETS 32
+#define BOT_NO_SLOT 255
 typedef struct BotSearch {
 	uint8_t who;            // tank searched for, plus 1; 0 when idle
 	uint8_t phase;          // 2 marking pill zones, 0 searching, 1 tracing the path back
 	uint8_t ox, oy;         // window's top left square
 	uint8_t goalX, goalY;
-	uint8_t head, tail;     // queue ring
+	uint8_t round;          // bucket being spread
+	uint8_t free;           // first free queue slot
+	uint8_t count;          // cells queued
 	uint8_t boat;           // searching as a boat
 	uint8_t next;           // round robin: the tank after the last served
 	uint8_t bestH, wayN;
@@ -215,7 +220,9 @@ typedef struct BotSearch {
 	uint8_t way[BOT_WAYS][2];       // turning points found, a ring
 	uint8_t cell[BOT_WIN * BOT_WIN / 2];  // a nibble a cell: 0 new, 1-8 from, 9 start,
 	                                      // 10 new in a hostile pill's reach, 15 blocked
-	uint16_t queue[BOT_QUEUE];      // cell | wait << 10
+	uint16_t queue[BOT_QUEUE];      // window cell in each slot
+	uint8_t link[BOT_QUEUE];        // next slot in its bucket or the free list
+	uint8_t bhead[BOT_BUCKETS], btail[BOT_BUCKETS]; // each bucket's first and last slot
 } BotSearch;
 
 typedef struct GameState {

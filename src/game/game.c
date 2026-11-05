@@ -945,17 +945,18 @@ uint32_t game_checksum(const GameState *s)
 		for (i = 0; i < s->numTanks; i++)
 			if (s->bots[i].level)
 				crc = util_crc(crc, &s->bots[i].level, sizeof(Bot));
-		crc = util_crc(crc, &q->who, 14);
+		crc = util_crc(crc, &q->who, 15);
 		if (q->who) {
-			uint8_t j;
+			uint8_t j, k;
 
 			crc = c16(crc, q->best);
 			crc = c16(crc, q->cur);
 			crc = c8(crc, q->lastDir);
 			crc = util_crc(crc, &q->way[0][0], sizeof(q->way));
 			crc = util_crc(crc, q->cell, sizeof(q->cell));
-			for (j = q->head; j != q->tail; j = (uint8_t)((j + 1) % BOT_QUEUE))
-				crc = c16(crc, q->queue[j]);
+			for (k = 0; k < BOT_BUCKETS; k++)
+				for (j = q->bhead[k]; j != BOT_NO_SLOT; j = q->link[j])
+					crc = c16(crc, q->queue[j]);
 		}
 	}
 	return ~crc;

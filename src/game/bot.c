@@ -7,9 +7,9 @@
 // A bot looks round every few ticks (think) and picks a goal: refuel at an
 // own base when low, fight a tank it sees, else take the nearest base or
 // pill worth having, shooting down the pills that guard it first. Paths
-// come from one shared breadth first search over a 32 square window that
-// runs a few cells a tick for each bot (search_step), so the cost of a bot
-// stays bounded however many there are. Live pills are shot in runs: drive
+// come from one shared search by cost over a 32 square window that runs a
+// few cells a tick for each bot (search_step), so the cost of a bot stays
+// bounded however many there are. Live pills are shot in runs: drive
 // at it firing, veer off when close, come round again.
 //
 // PalmBolo's own code, Copyright (c) 2026 the PalmBolo authors, GPLv3.
@@ -17,20 +17,20 @@
 #include "mapstore.h"
 #include "util.h"
 
-enum { BG_NONE, BG_BASE, BG_PILL, BG_REFUEL, BG_TANK, BG_PATROL };
+enum { BG_NONE, BG_BASE, BG_PILL, BG_REFUEL, BG_TANK, BG_PATROL, BG_MAN };
 enum { BM_NAV, BM_RUN, BM_VEER, BM_ESCAPE };
 enum { BK_BASE = 1, BK_PILL = 2, BK_TANK = 3 };     // kinds for Bot.skip
 
 #define NO_TANK         255
-#define BOT_BUDGET      16      // search cells expanded a tick, all bots together, at least
-#define BOT_BUDGET_EACH 5       // or this many for each bot, if more
+#define BOT_BUDGET      12      // search cells expanded a tick, all bots together, at least
+#define BOT_BUDGET_EACH 3       // or this many for each bot, if more
 #define BOT_MAX_CELLS   600     // a search gives up and takes the best so far after this many
 #define GUN_RANGE       1600    // world units a bot shoots at a tank from
 #define PILL_RUN_RANGE  1700    // starts a run at a pill this near
 #define PILL_VEER_RANGE 1024    // turns away from a pill this near
 #define BASE_SHOOT_RANGE 1500
 #define FULL_SPEED      64      // quarters a tick, the road's top speed
-#define MINE_COST       40
+#define MINE_COST       24
 
 // Per level: ticks between looks round, ticks before firing at a new
 // foe, most aim error (4/32 bradians), lead on a moving tank (halves),
@@ -146,21 +146,22 @@ static uint8_t SEC_BOTS cost(const GameState *s, uint8_t x, uint8_t y, uint8_t b
 	}
 	if (is_wall(t))
 		return 0;
+	// A boat is fast on water and leaves the boat behind on land.
 	if (boat)
-		return 1;
+		return t == TERRAIN_RIVER || t == TERRAIN_DEEP_SEA || t == TERRAIN_BOAT ? 1 : 2;
 	if (t == TERRAIN_DEEP_SEA || row[x - 1] == TERRAIN_DEEP_SEA || row[x + 1] == TERRAIN_DEEP_SEA ||
 	    mapstore_row((uint8_t)(y - 1))[x] == TERRAIN_DEEP_SEA ||
 	    mapstore_row((uint8_t)(y + 1))[x] == TERRAIN_DEEP_SEA)
 		return 0;
 	switch (t) {
 	case TERRAIN_RIVER:
-		return 4;
+		return 6;
 	case TERRAIN_SWAMP:
 	case TERRAIN_CRATER:
 	case TERRAIN_RUBBLE:
-		return 3;
+		return 5;
 	case TERRAIN_FOREST:
-		return 2;
+		return 3;
 	default:
 		return 1;
 	}
@@ -187,7 +188,7 @@ static uint8_t SEC_BOTS window_origin(uint8_t from, uint8_t to)
 
 // Half the width of a pill's reach, 8 squares, on each row from its own.
 static const uint8_t kReach[9] = { 8, 7, 7, 7, 6, 6, 5, 3, 0 };
-#define ZONE_WAIT 12    // extra queue ticks a square in a pill's reach costs
+#define ZONE_WAIT 8    // extra queue ticks a square in a pill's reach costs
 
 // Marks the squares in reach of live hostile pill i in the window as
 // costly, leaving ones already marked. Returns 1 if it marked any.
@@ -219,19 +220,40 @@ static uint8_t SEC_BOTS mark_zone(GameState *s, uint8_t i)
 	return 1;
 }
 
+// How far a window cell is from the goal. With the goal out of the window
+// only a cell on an edge facing it is taken at its distance, the rest come
+// 32 later, so a partial path stops where the next window can go on from.
 static uint8_t SEC_BOTS cell_h(const BotSearch *q, uint16_t i)
 {
-	return cheb((uint8_t)(q->ox + (i & (BOT_WIN - 1))), (uint8_t)(q->oy + (i >> 5)), q->goalX, q->goalY);
+	uint8_t lx = (uint8_t)(i & (BOT_WIN - 1)), ly = (uint8_t)(i >> 5);
+	uint8_t gx = (uint8_t)(q->goalX - q->ox), gy = (uint8_t)(q->goalY - q->oy);
+	uint8_t h = cheb((uint8_t)(q->ox + lx), (uint8_t)(q->oy + ly), q->goalX, q->goalY);
+
+	// gx, gy of 32 to 143 are past the high edge, 144 to 255 past the low one.
+	if ((gx >= BOT_WIN || gy >= BOT_WIN) &&
+	    !(gx >= BOT_WIN && lx == (gx < 144 ? BOT_WIN - 1 : 0)) &&
+	    !(gy >= BOT_WIN && ly == (gy < 144 ? BOT_WIN - 1 : 0)))
+		h = (uint8_t)(h > 255 - 32 ? 255 : h + 32);
+	return h;
 }
 
-static uint8_t SEC_BOTS q_push(BotSearch *q, uint16_t v)
+// Queues window cell v to spread c rounds from now (0 to BOT_BUCKETS - 1).
+// 0 if the queue is full.
+static uint8_t SEC_BOTS q_push(BotSearch *q, uint16_t v, uint8_t c)
 {
-	uint8_t n = (uint8_t)((q->tail + 1) % BOT_QUEUE);
+	uint8_t sl = q->free, k = (uint8_t)((q->round + c) & (BOT_BUCKETS - 1));
 
-	if (n == q->head)
+	if (sl == BOT_NO_SLOT)
 		return 0;
-	q->queue[q->tail] = v;
-	q->tail = n;
+	q->free = q->link[sl];
+	q->queue[sl] = v;
+	q->link[sl] = BOT_NO_SLOT;
+	if (q->bhead[k] == BOT_NO_SLOT)
+		q->bhead[k] = sl;
+	else
+		q->link[q->btail[k]] = sl;
+	q->btail[k] = sl;
+	q->count++;
 	return 1;
 }
 
@@ -270,9 +292,15 @@ static void SEC_BOTS search_begin(GameState *s, uint8_t t)
 	}
 	start = (uint16_t)((tx - q->ox) + (ty - q->oy) * BOT_WIN);
 	set_nib(q, start, 9);
-	q->head = 0;
-	q->tail = 0;
-	q_push(q, start);
+	for (j = 0; j < BOT_QUEUE; j++)
+		q->link[j] = (uint8_t)(j + 1);
+	q->link[BOT_QUEUE - 1] = BOT_NO_SLOT;
+	for (i = 0; i < BOT_BUCKETS; i++)
+		q->bhead[i] = BOT_NO_SLOT;
+	q->free = 0;
+	q->round = 0;
+	q->count = 0;
+	q_push(q, start, 0);
 	q->best = start;
 	q->bestH = cell_h(q, start);
 	q->cur = 0;
@@ -321,7 +349,9 @@ static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 		ok[d] = 1;
 		if (v == 10)
 			c = (uint8_t)(c + ZONE_WAIT);
-		if (!q_push(q, (uint16_t)(n | ((uint16_t)(c - 1) << 10))))
+		if (c > BOT_BUCKETS - 1)
+			c = BOT_BUCKETS - 1;
+		if (!q_push(q, n, c))
 			continue;
 		set_nib(q, n, (uint8_t)(d + 1));
 		h = cell_h(q, n);
@@ -374,42 +404,46 @@ static void SEC_BOTS search_end(GameState *s)
 		b->fails = 0;
 }
 
-// Runs the search on by budget cells (a trace step counts a quarter).
+// Runs the search on by budget, in quarters: a cell expanded costs 5, an
+// empty round and a trace step 1, a pill zone 16.
 static void SEC_BOTS search_step(GameState *s, uint8_t budget)
 {
 	BotSearch *q = &s->search;
-	uint16_t steps;
+	uint16_t units = (uint16_t)budget * 4;
 
-	while (budget && q->who) {
+	while (units && q->who) {
 		if (q->phase == 2) {
-			// Pill zones: one costs 4 cells' budget, a pill out of the
-			// window nothing.
+			// A pill out of the window costs nothing.
 			if (q->zone >= s->map.numPills)
 				q->phase = 0;
 			else if (mark_zone(s, q->zone++))
-				budget = (uint8_t)(budget > 4 ? budget - 4 : 0);
+				units = (uint16_t)(units > 16 ? units - 16 : 0);
 			continue;
 		}
 		if (q->phase == 0) {
-			uint16_t e, idx, wait;
+			uint8_t sl;
 
-			if (q->head == q->tail) {
+			if (q->count == 0) {
 				trace_begin(q);
 				continue;
 			}
-			budget--;
-			e = q->queue[q->head];
-			q->head = (uint8_t)((q->head + 1) % BOT_QUEUE);
-			idx = (uint16_t)(e & 1023);
-			wait = (uint16_t)(e >> 10);
-			// Slow squares go round the queue again before they spread.
-			if (wait && q_push(q, (uint16_t)(idx | ((wait - 1) << 10))))
+			sl = q->bhead[q->round];
+			if (sl == BOT_NO_SLOT) {
+				// Nothing left this round: on to the next.
+				q->round = (uint8_t)((q->round + 1) & (BOT_BUCKETS - 1));
+				units--;
 				continue;
-			if (expand(s, idx) || ++q->cur >= BOT_MAX_CELLS)
+			}
+			q->bhead[q->round] = q->link[sl];
+			q->link[sl] = q->free;
+			q->free = sl;
+			q->count--;
+			units = (uint16_t)(units > 5 ? units - 5 : 0);
+			if (expand(s, q->queue[sl]) || ++q->cur >= BOT_MAX_CELLS)
 				trace_begin(q);
 			continue;
 		}
-		for (steps = (uint16_t)budget * 4; steps; steps--) {
+		for (; units; units--) {
 			uint8_t v = nib(q, q->cur), d;
 
 			if (v == 0 || v > 8) {
@@ -427,7 +461,6 @@ static void SEC_BOTS search_step(GameState *s, uint8_t budget)
 			q->lastDir = d;
 			q->cur = (uint16_t)(q->cur - kDX[d] - kDY[d] * BOT_WIN);
 		}
-		budget = 0;
 	}
 }
 
@@ -453,7 +486,8 @@ static uint8_t SEC_BOTS run_ready(const Tank *k, const Bot *b)
 
 static void SEC_BOTS set_goal(Bot *b, uint8_t goal, uint8_t target, uint8_t x, uint8_t y)
 {
-	if (b->goal == goal && b->target == target && cheb(x, y, b->goalX, b->goalY) <= (goal == BG_TANK ? 3 : 0))
+	if (b->goal == goal && b->target == target &&
+	    cheb(x, y, b->goalX, b->goalY) <= (goal == BG_TANK ? 3 : goal == BG_MAN ? 1 : 0))
 		return;
 	if (goal != b->goal || target != b->target) {
 		b->mode = BM_NAV;
@@ -951,6 +985,27 @@ order:
 	b->buildWait = 100;
 }
 
+// The builder is on his way back but blocked, or far off: the tank goes to
+// get him, unless it is about to take what it is after. Once it has set
+// out it keeps on until he is in.
+static uint8_t SEC_BOTS man_lost(const GameState *s, uint8_t t)
+{
+	const Builder *m = &s->men[t];
+	const Tank *k = &s->tanks[t];
+	const Bot *b = &s->bots[t];
+	uint8_t tx = (uint8_t)(k->x >> 8), ty = (uint8_t)(k->y >> 8);
+
+	if (m->inTank || m->isDead || m->state != LGM_STATE_RETURN)
+		return 0;
+	if (b->goal == BG_MAN)
+		return 1;
+	// A base or pill nearly reached comes first.
+	if ((b->goal == BG_BASE || b->goal == BG_PILL || b->goal == BG_REFUEL) &&
+	    cheb(tx, ty, b->goalX, b->goalY) <= 3)
+		return 0;
+	return m->obstructed || cheb(tx, ty, (uint8_t)(m->x >> 8), (uint8_t)(m->y >> 8)) > 6;
+}
+
 static void SEC_BOTS think(GameState *s, uint8_t t, GameInput *in)
 {
 	const Tank *k = &s->tanks[t];
@@ -1003,8 +1058,14 @@ static void SEC_BOTS think(GameState *s, uint8_t t, GameInput *in)
 			return;
 		}
 	}
+	if (man_lost(s, t)) {
+		set_goal(b, BG_MAN, 0, (uint8_t)(s->men[t].x >> 8), (uint8_t)(s->men[t].y >> 8));
+		return;
+	}
+	if (b->goal == BG_MAN)
+		b->goal = BG_NONE;
 	// Chases a foe it can drive to.
-	if (foe != NO_TANK && lv->chase && k->shells >= 5 && b->skip != ((BK_TANK << 5) | foe) &&
+	if (foe != NO_TANK && lv->chase && !k->boat && k->shells >= 5 && b->skip != ((BK_TANK << 5) | foe) &&
 	    cost(s, (uint8_t)(s->tanks[foe].x >> 8), (uint8_t)(s->tanks[foe].y >> 8), k->boat)) {
 		set_goal(b, BG_TANK, foe, (uint8_t)(s->tanks[foe].x >> 8), (uint8_t)(s->tanks[foe].y >> 8));
 		return;
@@ -1223,6 +1284,9 @@ static void SEC_BOTS bridge(GameState *s, uint8_t t, GameInput *in)
 	if (((s->tick + t) & 7) || k->boat || k->trees < R_LGM_COST_ROAD || b->buildWait || !builder_free(s, t) ||
 	    in->build)
 		return;
+	// Not from in the river: he couldn't walk back to the tank.
+	if (game_terrain((uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8)) == TERRAIN_RIVER)
+		return;
 	util_distance(&dx, &dy, (uint16_t)(util_dir16(k->angle) * 16 * ANGLE_ONE), 256);
 	x = (uint8_t)((uint16_t)(k->x + dx) >> 8);
 	y = (uint8_t)((uint16_t)(k->y + dy) >> 8);
@@ -1274,7 +1338,7 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 		return;
 	}
 	gd = cheb(tx, ty, b->goalX, b->goalY);
-	stopAt = b->goal == BG_REFUEL || b->goal == BG_PATROL;
+	stopAt = b->goal == BG_REFUEL || b->goal == BG_PATROL || b->goal == BG_MAN;
 	if (gd == 0 && (stopAt || b->goal == BG_BASE || b->goal == BG_PILL)) {
 		// Waiting at a pill's stage with no clear shot counts as failing.
 		if (b->goal == BG_PILL && (s->tick + t) % 25 == 0)
@@ -1324,9 +1388,14 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	}
 	if (gd <= 2 && px == b->goalX && py == b->goalY)
 		tsp = stopAt ? 12 : 20;
-	if (k->boat)
-		tsp = FULL_SPEED;   // a boat must be fast to run aground
 	next_square(s, k, &px, &py);
+	// A boat must be fast to run aground, and slow keeps it off the bank
+	// while there is no path.
+	if (k->boat)
+		tsp = b->wayN || cost(s, px, py, 1) == 1 ? FULL_SPEED : 12;
+	else if (!s->men[t].inTank && !s->men[t].isDead && b->goal != BG_MAN &&
+	    game_terrain(px, py) == TERRAIN_RIVER && game_terrain(tx, ty) != TERRAIN_RIVER)
+		tsp = 0;    // waits on the bank for the builder, who may be bridging it
 	if (!b->wayN && !cost(s, px, py, k->boat))
 		tsp = 0;
 	want = util_angle(k->x, k->y, mid(px), mid(py));
@@ -1439,6 +1508,8 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 		b->buildWait--;
 	if (b->skipTime && --b->skipTime == 0)
 		b->skip = 0;
+	if (b->goal == BG_MAN && s->men[t].inTank)
+		b->think = 0;
 	if (b->think) {
 		b->think--;
 	} else {
@@ -1479,8 +1550,22 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 		return;
 	}
 	aim = (uint16_t)((util_angle(k->x, k->y, ax, ay) + (int8_t)b->aimErr * 4) & (ANGLE_MAX - 1));
+	// Not stood still by the sea, where a shell's knock could push it in:
+	// it goes on its way, shooting when it faces the target.
+	if (!k->boat && !cost(s, (uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8), 0)) {
+		navigate(s, t, in);
+		fire(s, t, aim, range, in);
+		return;
+	}
 	switch (what) {
 	case AIM_TANK:
+		// On a boat one hit sinks it: it goes on its way, shooting when
+		// it faces the foe.
+		if (k->boat) {
+			navigate(s, t, in);
+			fire(s, t, aim, range, in);
+			break;
+		}
 		// Closes in when far, else holds and shoots; stays put on a base
 		// it is refuelling at.
 		steer(k, aim, range > 1024 && b->goal != BG_REFUEL ? 24 : 0, 8, 0, in);
