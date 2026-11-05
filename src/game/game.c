@@ -760,7 +760,8 @@ uint16_t game_random_below(GameState *s, uint16_t n)
 
 	if (n <= 1)
 		return 0;
-	lim = (uint16_t)(65536UL - 65536UL % n);
+	// 65536 % n as (65536 - n) % n, a 16-bit divide on a 68k.
+	lim = (uint16_t)(0 - (uint16_t)((uint16_t)(0 - n) % n));
 	do
 		r = (uint16_t)game_random(s);
 	while (lim != 0 && r >= lim);

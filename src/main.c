@@ -429,38 +429,115 @@ static GameInput ReadInputs(void)
 
 #ifdef DEBUG
 // Times the bots apart from the rules over BENCH_TICKS ticks of the game
-// the script left: the sys ticks seen to pass while the bots make their
-// keys add up to their share, on average, though each call is much shorter
-// than a sys tick.
+// the script left. The sys ticks seen to pass while the bots make their
+// keys add up to their share, roughly, though each call is much shorter
+// than a sys tick. Closer: the same ticks again with the keys the bots
+// made, the bots' time being the difference, the least of three. Then the worst tick of the
+// first BENCH_WORST: each tick's bots run BENCH_REPS times on copies of
+// the state, less the copying. Lives in ui to keep code 1 small.
 #define BENCH_TICKS 1000
-static void BenchBots(void)
-{
-	GameState *c = (GameState *)MemPtrNew(sizeof(GameState));
-	GameInput none[GAME_MAX_TANKS], keys[GAME_MAX_TANKS];
-	UInt32 t0, t1, a, bots = 0;
-	UInt16 i, n = 0;
-	UInt8 mask;
+#define BENCH_WORST 300
+#define BENCH_REPS 50
 
-	if (!c)
-		return;
+// Runs ticks with the bots, or with the keys in rec if play. Returns sys
+// ticks taken, the bots' share seen in *bots.
+static UInt32 SEC_UI BenchRun(GameState *c, GameInput *rec, UInt8 play, UInt32 *bots)
+{
+	GameInput none[GAME_MAX_TANKS], keys[GAME_MAX_TANKS];
+	UInt8 mask = c->botMask, nt = c->numTanks;
+	UInt32 t0 = TimGetTicks(), a;
+	UInt16 i;
+
 	MemSet(none, sizeof(none), 0);
-	MemMove(c, &gGame, sizeof(GameState));
-	mask = c->botMask;
-	for (i = 0; i < GAME_MAX_TANKS; i++)
-		n += (mask >> i) & 1;
-	t0 = TimGetTicks();
+	*bots = 0;
 	for (i = 0; i < BENCH_TICKS; i++) {
-		a = TimGetTicks();
-		game_bot_inputs(c, none, keys);
-		bots += TimGetTicks() - a;
+		if (play) {
+			MemMove(keys, &rec[i * nt], nt * sizeof(GameInput));
+		} else {
+			a = TimGetTicks();
+			game_bot_inputs(c, none, keys);
+			*bots += TimGetTicks() - a;
+			MemMove(&rec[i * nt], keys, nt * sizeof(GameInput));
+		}
 		c->botMask = 0;
 		game_tick(c, keys);
 		c->botMask = mask;
 	}
-	t1 = TimGetTicks();
-	LOG(("bench %d tanks %d bots x%d: %lu sys ticks, bots %lu", (Int16)c->numTanks, (Int16)n, BENCH_TICKS,
-		t1 - t0, bots));
-	MemPtrFree(c);
+	return TimGetTicks() - t0;
+}
+
+static void SEC_UI BenchBots(void)
+{
+	GameState *c = (GameState *)MemPtrNew(sizeof(GameState));
+	GameState *w = (GameState *)MemPtrNew(sizeof(GameState));
+	GameInput *rec = (GameInput *)MemPtrNew(BENCH_TICKS * gGame.numTanks * sizeof(GameInput));
+	GameInput none[GAME_MAX_TANKS], keys[GAME_MAX_TANKS];
+	UInt32 a, d, bots, seen = 0, copy, worst = 0, sum = 0;
+	UInt16 i, r, n = 0, at = 0;
+	UInt8 mask = gGame.botMask;
+
+	if (!c || !w || !rec) {
+		LOG(("bench: no memory"));
+		goto done;
+	}
+	MemSet(none, sizeof(none), 0);
+	for (i = 0; i < GAME_MAX_TANKS; i++)
+		n += (mask >> i) & 1;
+	// Each way three times, the least of each, as the emulator's timing
+	// varies a little.
+	a = d = 0xFFFFFFFFUL;
+	for (r = 0; r < 3; r++) {
+		UInt32 t;
+
+		MemMove(c, &gGame, sizeof(GameState));
+		t = BenchRun(c, rec, 0, &bots);
+		if (t < a) {
+			a = t;
+			seen = bots;
+		}
+		MemMove(c, &gGame, sizeof(GameState));
+		t = BenchRun(c, rec, 1, &bots);
+		if (t < d)
+			d = t;
+	}
+	bots = a > d ? a - d : 0;
+	LOG(("bench %d tanks %d bots x%d: %lu sys ticks, bots seen %lu, bots %lu (%lu.%02lu ms a bot a tick)",
+		(Int16)c->numTanks, (Int16)n, BENCH_TICKS, a, seen, bots,
+		bots * 10 / n / BENCH_TICKS, bots * 1000 / n / BENCH_TICKS % 100));
+	// The worst tick, in hundredths of a sys tick for all the bots.
+	MemMove(c, &gGame, sizeof(GameState));
+	a = TimGetTicks();
+	for (r = 0; r < BENCH_REPS * 20; r++)
+		MemMove(w, c, sizeof(GameState));
+	copy = (TimGetTicks() - a) * 100 / 20;
+	for (i = 0; i < BENCH_WORST; i++) {
+		a = TimGetTicks();
+		for (r = 0; r < BENCH_REPS; r++) {
+			MemMove(w, c, sizeof(GameState));
+			game_bot_inputs(w, none, keys);
+		}
+		d = (TimGetTicks() - a) * 100;
+		d = d > copy ? (d - copy) / BENCH_REPS : 0;
+		sum += d;
+		if (d > worst) {
+			worst = d;
+			at = i;
+		}
+		game_bot_inputs(c, none, keys);
+		c->botMask = 0;
+		game_tick(c, keys);
+		c->botMask = mask;
+	}
+	// sum is in hundredths of a sys tick of 10 ms over BENCH_WORST ticks.
+	LOG(("bench worst x%d reps %d: sum %lu (%lu us a bot a tick), worst %lu at %d (%lu us all bots), copy %lu",
+		BENCH_WORST, BENCH_REPS, sum, sum * 100 / BENCH_WORST / n, worst, at, worst * 100, copy));
+done:
+	if (rec)
+		MemPtrFree(rec);
+	if (w)
+		MemPtrFree(w);
+	if (c)
+		MemPtrFree(c);
 }
 
 // Checks the const tables read back right from both code segments, then

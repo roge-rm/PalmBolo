@@ -72,10 +72,20 @@ uint8_t util_dir16(uint16_t angle)
 // between entries. max is not 0.
 static uint16_t atan_ratio(uint16_t mn, uint16_t mx)
 {
-	uint16_t r = (uint16_t)(((uint32_t)mn << 14) / mx);   // 0..16384
-	uint16_t i = (uint16_t)(r >> 6), f = (uint16_t)(r & 63);
-	uint16_t v = kAtan[i];
+	uint32_t n = (uint32_t)mn << 14;
+	uint16_t r, i, f, v;    // r 0..16384
 
+#ifdef __m68k__
+	// The quotient fits in 16 bits as mn <= mx, so one divu does it
+	// rather than gcc's 32-bit divide routine.
+	__asm__("divu %2,%0" : "=d" (n) : "0" (n), "dm" (mx));
+	r = (uint16_t)n;
+#else
+	r = (uint16_t)(n / mx);
+#endif
+	i = (uint16_t)(r >> 6);
+	f = (uint16_t)(r & 63);
+	v = kAtan[i];
 	if (f)
 		v = (uint16_t)(v + (((uint16_t)(kAtan[i + 1] - v) * f) >> 6));
 	return (uint16_t)((v + 8) >> 4);

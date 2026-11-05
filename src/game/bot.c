@@ -49,17 +49,16 @@ static const Level kLevel[BOT_LEVELS] = {
 // Directions N, NE, E, SE, S, SW, W, NW.
 static const int8_t kDX[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
 static const int8_t kDY[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
-static const uint8_t kOrder[8] = { 0, 2, 4, 6, 1, 3, 5, 7 };   // straight before diagonal
 
-static uint8_t SEC_BOTS level_think(uint8_t l) { return kLevel[l].think; }
+static inline uint8_t SEC_BOTS level_think(uint8_t l) { return kLevel[l].think; }
 
-static uint8_t SEC_BOTS udiff8(uint8_t a, uint8_t b)
+static inline uint8_t SEC_BOTS udiff8(uint8_t a, uint8_t b)
 {
 	return a > b ? (uint8_t)(a - b) : (uint8_t)(b - a);
 }
 
 // Squares apart, the larger of the two axes.
-static uint8_t SEC_BOTS cheb(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by)
+static inline uint8_t SEC_BOTS cheb(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by)
 {
 	uint8_t dx = udiff8(ax, bx), dy = udiff8(ay, by);
 
@@ -67,69 +66,174 @@ static uint8_t SEC_BOTS cheb(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by)
 }
 
 // World units apart, near enough: the larger axis plus half the smaller.
-static uint16_t SEC_BOTS wdist(uint16_t ax, uint16_t ay, uint16_t bx, uint16_t by)
+static inline uint16_t SEC_BOTS wdist(uint16_t ax, uint16_t ay, uint16_t bx, uint16_t by)
 {
 	uint16_t dx = ax > bx ? ax - bx : bx - ax, dy = ay > by ? ay - by : by - ay;
 
 	return dx > dy ? (uint16_t)(dx + (dy >> 1)) : (uint16_t)(dy + (dx >> 1));
 }
 
-static uint16_t SEC_BOTS mid(uint8_t sq)
+static inline uint16_t SEC_BOTS mid(uint8_t sq)
 {
 	return (uint16_t)(((uint16_t)sq << 8) + 128U);
 }
 
 // Signed turn from have to want, -4096..4095.
-static int16_t SEC_BOTS turn_to(uint16_t want, uint16_t have)
+static inline int16_t SEC_BOTS turn_to(uint16_t want, uint16_t have)
 {
 	int16_t d = (int16_t)((want - have) & (ANGLE_MAX - 1));
 
 	return d >= ANGLE_MAX / 2 ? (int16_t)(d - ANGLE_MAX) : d;
 }
 
-static uint8_t SEC_BOTS is_wall(uint8_t t)
+// x / d and x % d for a 16-bit d, with divu on a 68k rather than gcc's
+// 32-bit divide routines. div32_16 needs the quotient to fit in 16 bits.
+static inline uint16_t SEC_BOTS div32_16(uint32_t x, uint16_t d)
+{
+#ifdef __m68k__
+	__asm__("divu %2,%0" : "=d" (x) : "0" (x), "dm" (d));
+	return (uint16_t)x;
+#else
+	return (uint16_t)(x / d);
+#endif
+}
+
+static inline uint16_t SEC_BOTS mod32_16(uint32_t x, uint16_t d)
+{
+#ifdef __m68k__
+	uint32_t h = x >> 16;
+
+	// The high word's remainder, then that and the low word.
+	__asm__("divu %2,%0" : "=d" (h) : "0" (h), "dm" (d));
+	h = (h & 0xFFFF0000UL) | (x & 0xFFFF);
+	__asm__("divu %2,%0" : "=d" (h) : "0" (h), "dm" (d));
+	return (uint16_t)(h >> 16);
+#else
+	return (uint16_t)(x % d);
+#endif
+}
+
+static inline uint8_t SEC_BOTS is_wall(uint8_t t)
 {
 	return t == TERRAIN_BUILDING || t == TERRAIN_HALFBUILDING;
 }
 
-static uint8_t SEC_BOTS plain(uint8_t t)
+static inline uint8_t SEC_BOTS plain(uint8_t t)
 {
 	return t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST ? (uint8_t)(t - TERRAIN_MINE_ADD) : t;
 }
 
-static uint8_t SEC_BOTS builder_free(const GameState *s, uint8_t t)
+static inline uint8_t SEC_BOTS builder_free(const GameState *s, uint8_t t)
 {
 	const Builder *m = &s->men[t];
 
 	return m->inTank && !m->isDead && m->action == LGM_IDLE && m->nextAction == LGM_IDLE;
 }
 
-// ---- path search ----
-
-static uint8_t SEC_BOTS pill_hostile(const GameState *s, const MapPill *p, uint8_t player)
+// game_allied and game_terrain, here so the hot loops make no calls into
+// code segment 1, which cost a lot on a 68k.
+static inline uint8_t SEC_BOTS allied(const GameState *s, uint8_t a, uint8_t b)
 {
-	return p->active && !p->inTank && (p->owner == MAP_NEUTRAL || !game_allied(s, p->owner, player));
+	if (a == b)
+		return 1;
+	if (a >= GAME_MAX_PLAYERS || b >= GAME_MAX_PLAYERS || !s->players[a].inUse)
+		return 0;
+	return (uint8_t)((s->players[a].allies >> b) & 1);
 }
 
-static uint8_t SEC_BOTS nib(const BotSearch *q, uint16_t i)
+static inline uint8_t SEC_BOTS terrain(uint8_t x, uint8_t y)
+{
+	if (x > MAP_EDGE_LOW && x < MAP_EDGE_HIGH && y > MAP_EDGE_LOW && y < MAP_EDGE_HIGH)
+		return mapstore_row(y)[x];
+	return TERRAIN_DEEP_SEA;
+}
+
+// terrain, keeping the last row fetched, for lines across the map.
+typedef struct Row1 {
+	uint8_t y;
+	const uint8_t *r;
+} Row1;
+
+static inline uint8_t SEC_BOTS terrain_c(Row1 *c, uint8_t x, uint8_t y)
+{
+	if (x > MAP_EDGE_LOW && x < MAP_EDGE_HIGH && y > MAP_EDGE_LOW && y < MAP_EDGE_HIGH) {
+		if (!c->r || c->y != y) {
+			c->r = mapstore_row(y);
+			c->y = y;
+		}
+		return c->r[x];
+	}
+	return TERRAIN_DEEP_SEA;
+}
+
+// ---- path search ----
+
+static inline uint8_t SEC_BOTS pill_hostile(const GameState *s, const MapPill *p, uint8_t player)
+{
+	return p->active && !p->inTank && (p->owner == MAP_NEUTRAL || !allied(s, p->owner, player));
+}
+
+static inline uint8_t SEC_BOTS nib(const BotSearch *q, uint16_t i)
 {
 	uint8_t v = q->cell[i >> 1];
 
 	return (uint8_t)((i & 1) ? v >> 4 : v & 15);
 }
 
-static void SEC_BOTS set_nib(BotSearch *q, uint16_t i, uint8_t v)
+static inline void SEC_BOTS set_nib(BotSearch *q, uint16_t i, uint8_t v)
 {
 	uint8_t *p = &q->cell[i >> 1];
 
 	*p = (uint8_t)((i & 1) ? (*p & 0x0F) | (v << 4) : (*p & 0xF0) | v);
 }
 
+// Map rows fetched as needed, five from y0 on, so a cell's neighbours cost
+// few calls into code segment 1.
+typedef struct Rows {
+	uint8_t y0;
+	const uint8_t *r[5];
+} Rows;
+
+static inline void SEC_BOTS rows_init(Rows *c, uint8_t y0)
+{
+	c->y0 = y0;
+	c->r[0] = c->r[1] = c->r[2] = c->r[3] = c->r[4] = 0;
+}
+
+static inline const uint8_t *SEC_BOTS row_of(Rows *c, uint8_t y)
+{
+	uint8_t i = (uint8_t)(y - c->y0);
+
+	if (!c->r[i])
+		c->r[i] = mapstore_row(y);
+	return c->r[i];
+}
+
+// The same for 16 rows round a pill, terrain as game_terrain gives it.
+typedef struct Rows16 {
+	uint8_t y0;
+	const uint8_t *r[16];
+} Rows16;
+
+static inline uint8_t SEC_BOTS terrain16(Rows16 *c, uint8_t x, uint8_t y)
+{
+	uint8_t i = (uint8_t)(y - c->y0);
+
+	if (x <= MAP_EDGE_LOW || x >= MAP_EDGE_HIGH || y <= MAP_EDGE_LOW || y >= MAP_EDGE_HIGH)
+		return TERRAIN_DEEP_SEA;
+	if (i >= 16)
+		return mapstore_row(y)[x];
+	if (!c->r[i])
+		c->r[i] = mapstore_row(y);
+	return c->r[i][x];
+}
+
 // What a square costs to cross: 0 it can't be, else 1 plus the ticks it
 // waits in the queue. Walls are out, and off a boat so is deep sea and
 // anything beside it, as a fast tank can't stop short. A known mine costs
-// a lot, so a tank shut in by mines still gets out.
-static uint8_t SEC_BOTS cost(const GameState *s, uint8_t x, uint8_t y, uint8_t boat)
+// a lot, so a tank shut in by mines still gets out. c holds rows y - 1 to
+// y + 1 at least.
+static inline uint8_t SEC_BOTS cost_rows(const GameState *s, Rows *c, uint8_t x, uint8_t y, uint8_t boat)
 {
 	const uint8_t *row;
 	uint8_t t;
@@ -137,7 +241,7 @@ static uint8_t SEC_BOTS cost(const GameState *s, uint8_t x, uint8_t y, uint8_t b
 	if (x <= MAP_EDGE_LOW + 1 || x >= MAP_EDGE_HIGH - 1 || y <= MAP_EDGE_LOW + 1 ||
 	    y >= MAP_EDGE_HIGH - 1)
 		return 0;
-	row = mapstore_row(y);
+	row = row_of(c, y);
 	t = row[x];
 	if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST) {
 		if (!s->hiddenMines || mapstore_flag(MS_KNOWN, x, y))
@@ -150,8 +254,8 @@ static uint8_t SEC_BOTS cost(const GameState *s, uint8_t x, uint8_t y, uint8_t b
 	if (boat)
 		return t == TERRAIN_RIVER || t == TERRAIN_DEEP_SEA || t == TERRAIN_BOAT ? 1 : 2;
 	if (t == TERRAIN_DEEP_SEA || row[x - 1] == TERRAIN_DEEP_SEA || row[x + 1] == TERRAIN_DEEP_SEA ||
-	    mapstore_row((uint8_t)(y - 1))[x] == TERRAIN_DEEP_SEA ||
-	    mapstore_row((uint8_t)(y + 1))[x] == TERRAIN_DEEP_SEA)
+	    row_of(c, (uint8_t)(y - 1))[x] == TERRAIN_DEEP_SEA ||
+	    row_of(c, (uint8_t)(y + 1))[x] == TERRAIN_DEEP_SEA)
 		return 0;
 	switch (t) {
 	case TERRAIN_RIVER:
@@ -165,6 +269,14 @@ static uint8_t SEC_BOTS cost(const GameState *s, uint8_t x, uint8_t y, uint8_t b
 	default:
 		return 1;
 	}
+}
+
+static uint8_t SEC_BOTS cost(const GameState *s, uint8_t x, uint8_t y, uint8_t boat)
+{
+	Rows c;
+
+	rows_init(&c, (uint8_t)(y - 1));
+	return cost_rows(s, &c, x, y, boat);
 }
 
 // The window's first square on one axis: both ends in it when they are
@@ -196,7 +308,7 @@ static uint8_t SEC_BOTS mark_zone(GameState *s, uint8_t i)
 {
 	BotSearch *q = &s->search;
 	const MapPill *p = &s->map.pills[i];
-	int16_t px, py, y, x, x0, x1;
+	int16_t px, py, y, y0, y1, x0, x1;
 
 	if (!pill_hostile(s, p, s->tanks[q->who - 1].player) || p->armour == 0)
 		return 0;
@@ -204,18 +316,38 @@ static uint8_t SEC_BOTS mark_zone(GameState *s, uint8_t i)
 	py = (int16_t)(p->y - q->oy);
 	if (px < -8 || px >= BOT_WIN + 8 || py < -8 || py >= BOT_WIN + 8)
 		return 0;
-	for (y = (int16_t)(py - 8); y <= py + 8; y++) {
-		if (y < 0 || y >= BOT_WIN)
-			continue;
-		x0 = (int16_t)(px - kReach[y > py ? y - py : py - y]);
-		x1 = (int16_t)(px + kReach[y > py ? y - py : py - y]);
+	y0 = py < 8 ? 0 : (int16_t)(py - 8);
+	y1 = py + 8 >= BOT_WIN ? BOT_WIN - 1 : (int16_t)(py + 8);
+	for (y = y0; y <= y1; y++) {
+		uint8_t r = kReach[y > py ? y - py : py - y], x, *row = &q->cell[y * (BOT_WIN / 2)];
+
+		x0 = (int16_t)(px - r);
+		x1 = (int16_t)(px + r);
 		if (x0 < 0)
 			x0 = 0;
 		if (x1 >= BOT_WIN)
 			x1 = BOT_WIN - 1;
-		for (x = x0; x <= x1; x++)
-			if (nib(q, (uint16_t)(x + y * BOT_WIN)) == 0)
-				set_nib(q, (uint16_t)(x + y * BOT_WIN), 10);
+		if (x0 > x1)
+			continue;
+		// Nibbles of new cells set to 10, odd cells in the high half, a
+		// byte at a time between the ends.
+		x = (uint8_t)x0;
+		if (x & 1) {
+			if (!(row[x >> 1] & 0xF0))
+				row[x >> 1] |= 0xA0;
+			x++;
+		}
+		for (; x < (uint8_t)x1; x += 2) {
+			uint8_t *c = &row[x >> 1], v = *c;
+
+			if (!(v & 0x0F))
+				v |= 0x0A;
+			if (!(v & 0xF0))
+				v |= 0xA0;
+			*c = v;
+		}
+		if (x == (uint8_t)x1 && !(row[x >> 1] & 0x0F))
+			row[x >> 1] |= 0x0A;
 	}
 	return 1;
 }
@@ -223,7 +355,7 @@ static uint8_t SEC_BOTS mark_zone(GameState *s, uint8_t i)
 // How far a window cell is from the goal. With the goal out of the window
 // only a cell on an edge facing it is taken at its distance, the rest come
 // 32 later, so a partial path stops where the next window can go on from.
-static uint8_t SEC_BOTS cell_h(const BotSearch *q, uint16_t i)
+static inline uint8_t SEC_BOTS cell_h(const BotSearch *q, uint16_t i)
 {
 	uint8_t lx = (uint8_t)(i & (BOT_WIN - 1)), ly = (uint8_t)(i >> 5);
 	uint8_t gx = (uint8_t)(q->goalX - q->ox), gy = (uint8_t)(q->goalY - q->oy);
@@ -239,7 +371,7 @@ static uint8_t SEC_BOTS cell_h(const BotSearch *q, uint16_t i)
 
 // Queues window cell v to spread c rounds from now (0 to BOT_BUCKETS - 1).
 // 0 if the queue is full.
-static uint8_t SEC_BOTS q_push(BotSearch *q, uint16_t v, uint8_t c)
+static inline uint8_t SEC_BOTS q_push(BotSearch *q, uint16_t v, uint8_t c)
 {
 	uint8_t sl = q->free, k = (uint8_t)((q->round + c) & (BOT_BUCKETS - 1));
 
@@ -262,7 +394,7 @@ static void SEC_BOTS search_begin(GameState *s, uint8_t t)
 	BotSearch *q = &s->search;
 	Bot *b = &s->bots[t];
 	const Tank *k = &s->tanks[t];
-	uint8_t tx = (uint8_t)(k->x >> 8), ty = (uint8_t)(k->y >> 8), i;
+	uint8_t tx = (uint8_t)(k->x >> 8), ty = (uint8_t)(k->y >> 8), i, *c;
 	uint16_t j, start;
 
 	q->who = (uint8_t)(t + 1);
@@ -273,8 +405,13 @@ static void SEC_BOTS search_begin(GameState *s, uint8_t t)
 	q->boat = k->boat;
 	q->ox = window_origin(tx, b->goalX);
 	q->oy = window_origin(ty, b->goalY);
-	for (j = 0; j < sizeof(q->cell); j++)
-		q->cell[j] = 0;
+	// Four bytes a pass, a quarter of the loop overhead on a 68k.
+	for (j = 0, c = q->cell; j < sizeof(q->cell) / 4; j++, c += 4) {
+		c[0] = 0;
+		c[1] = 0;
+		c[2] = 0;
+		c[3] = 0;
+	}
 	// Live pills, and bases it can't drive over, are solid.
 	for (i = 0; i < s->map.numPills; i++) {
 		const MapPill *p = &s->map.pills[i];
@@ -315,54 +452,102 @@ static void SEC_BOTS search_begin(GameState *s, uint8_t t)
 	b->want = 0;
 }
 
-// Expands one cell. Returns 1 when the goal is reached.
+// One cell being expanded, the search's fields copied out, as gcc reloads
+// them after every byte store otherwise.
+typedef struct Expand {
+	GameState *s;
+	BotSearch *q;
+	uint8_t *cell;
+	Rows rc;
+	int8_t lx, ly;
+	uint8_t ox, oy, goalX, goalY, boat, far, ex, ey, bestH;
+} Expand;
+
+// A new or zone cell n (v its nibble at p) seen from the cell being
+// expanded: queued if it can be crossed. Returns as expand_dir.
+static uint8_t SEC_BOTS expand_new(Expand *e, uint16_t n, int8_t nx, int8_t ny, uint8_t d, uint8_t v,
+	uint8_t *p)
+{
+	uint8_t c, h;
+
+	c = cost_rows(e->s, &e->rc, (uint8_t)(e->ox + nx), (uint8_t)(e->oy + ny), e->boat);
+	if (c == 0) {
+		*p |= (uint8_t)((n & 1) ? 0xF0 : 0x0F);
+		return 0;
+	}
+	if (v == 10)
+		c = (uint8_t)(c + ZONE_WAIT);
+	if (c > BOT_BUCKETS - 1)
+		c = BOT_BUCKETS - 1;
+	if (!q_push(e->q, n, c))
+		return 1;
+	*p = (uint8_t)((n & 1) ? (*p & 0x0F) | ((d + 1) << 4) : (*p & 0xF0) | (d + 1));
+	// As cell_h: with the goal out of the window, only cells on the edge
+	// facing it (ex, ey; 255 for none) are taken at their distance.
+	h = cheb((uint8_t)(e->ox + nx), (uint8_t)(e->oy + ny), e->goalX, e->goalY);
+	if (e->far && nx != e->ex && ny != e->ey)
+		h = (uint8_t)(h > 255 - 32 ? 255 : h + 32);
+	if (h < e->bestH) {
+		e->bestH = h;
+		e->q->bestH = h;
+		e->q->best = n;
+		if (h <= e->q->near)
+			return 2;
+	}
+	return 1;
+}
+
+// Tries the neighbour in direction d, dx, dy from the cell. 0 if it is
+// solid or off the window, 1 if not, 2 when it reaches the goal.
+static inline uint8_t SEC_BOTS expand_dir(Expand *e, uint8_t d, int8_t dx, int8_t dy)
+{
+	int8_t nx = (int8_t)(e->lx + dx), ny = (int8_t)(e->ly + dy);
+	uint8_t v, *p;
+	uint16_t n;
+
+	if ((dx < 0 && e->lx == 0) || (dx > 0 && e->lx == BOT_WIN - 1) ||
+	    (dy < 0 && e->ly == 0) || (dy > 0 && e->ly == BOT_WIN - 1))
+		return 0;
+	n = (uint16_t)(nx + ny * BOT_WIN);
+	p = &e->cell[n >> 1];
+	v = (uint8_t)((n & 1) ? *p >> 4 : *p & 15);
+	if (v == 15)
+		return 0;
+	if (v != 0 && v != 10)
+		return 1;
+	return expand_new(e, n, nx, ny, d, v, p);
+}
+
+// Expands one cell, straight neighbours first, then each diagonal with
+// both corners beside it open. Returns 1 when the goal is reached. The
+// directions are written out, so each has its offsets as constants.
 static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 {
-	BotSearch *q = &s->search;
-	int8_t lx = (int8_t)(idx & (BOT_WIN - 1)), ly = (int8_t)(idx >> 5);
-	uint8_t ok[8], i;
+	Expand e;
+	uint8_t gx, gy, o0, o2, o4, o6;
 
-	for (i = 0; i < 8; i++) {
-		uint8_t d = kOrder[i], v, c, h;
-		int8_t nx = (int8_t)(lx + kDX[d]), ny = (int8_t)(ly + kDY[d]);
-		uint16_t n;
-
-		ok[d] = 0;
-		if (nx < 0 || nx >= BOT_WIN || ny < 0 || ny >= BOT_WIN)
-			continue;
-		// No cutting a corner past something solid.
-		if ((d & 1) && (!ok[d - 1] || !ok[(d + 1) & 7]))
-			continue;
-		n = (uint16_t)(nx + ny * BOT_WIN);
-		v = nib(q, n);
-		if (v == 15)
-			continue;
-		if (v != 0 && v != 10) {
-			ok[d] = 1;
-			continue;
-		}
-		c = cost(s, (uint8_t)(q->ox + nx), (uint8_t)(q->oy + ny), q->boat);
-		if (c == 0) {
-			set_nib(q, n, 15);
-			continue;
-		}
-		ok[d] = 1;
-		if (v == 10)
-			c = (uint8_t)(c + ZONE_WAIT);
-		if (c > BOT_BUCKETS - 1)
-			c = BOT_BUCKETS - 1;
-		if (!q_push(q, n, c))
-			continue;
-		set_nib(q, n, (uint8_t)(d + 1));
-		h = cell_h(q, n);
-		if (h < q->bestH) {
-			q->bestH = h;
-			q->best = n;
-			if (h <= q->near)
-				return 1;
-		}
-	}
-	return 0;
+	e.s = s;
+	e.q = &s->search;
+	e.cell = e.q->cell;
+	e.lx = (int8_t)(idx & (BOT_WIN - 1));
+	e.ly = (int8_t)(idx >> 5);
+	e.ox = e.q->ox;
+	e.oy = e.q->oy;
+	e.goalX = e.q->goalX;
+	e.goalY = e.q->goalY;
+	e.boat = e.q->boat;
+	e.bestH = e.q->bestH;
+	gx = (uint8_t)(e.goalX - e.ox);
+	gy = (uint8_t)(e.goalY - e.oy);
+	e.far = gx >= BOT_WIN || gy >= BOT_WIN;
+	e.ex = gx >= BOT_WIN ? (gx < 144 ? BOT_WIN - 1 : 0) : 255;
+	e.ey = gy >= BOT_WIN ? (gy < 144 ? BOT_WIN - 1 : 0) : 255;
+	rows_init(&e.rc, (uint8_t)(e.oy + e.ly - 2));
+	if ((o0 = expand_dir(&e, 0, 0, -1)) == 2 || (o2 = expand_dir(&e, 2, 1, 0)) == 2 ||
+	    (o4 = expand_dir(&e, 4, 0, 1)) == 2 || (o6 = expand_dir(&e, 6, -1, 0)) == 2)
+		return 1;
+	return (o0 && o2 && expand_dir(&e, 1, 1, -1) == 2) || (o2 && o4 && expand_dir(&e, 3, 1, 1) == 2) ||
+		(o4 && o6 && expand_dir(&e, 5, -1, 1) == 2) || (o6 && o0 && expand_dir(&e, 7, -1, -1) == 2);
 }
 
 static void SEC_BOTS trace_begin(BotSearch *q)
@@ -512,12 +697,12 @@ static uint8_t SEC_BOTS find_foe(const GameState *s, uint8_t t, uint8_t range)
 		const Tank *o = &s->tanks[i];
 		uint8_t ox = (uint8_t)(o->x >> 8), oy = (uint8_t)(o->y >> 8), d;
 
-		if (i == t || o->destroyed || o->deathWait || game_allied(s, o->player, k->player))
+		if (i == t || o->destroyed || o->deathWait || allied(s, o->player, k->player))
 			continue;
 		d = cheb(tx, ty, ox, oy);
 		if (d > range || d >= bd)
 			continue;
-		if (d > 3 && plain(game_terrain(ox, oy)) == TERRAIN_FOREST)
+		if (d > 3 && plain(terrain(ox, oy)) == TERRAIN_FOREST)
 			continue;
 		bd = d;
 		best = i;
@@ -536,7 +721,7 @@ static int8_t SEC_BOTS fuel_base(const GameState *s, uint8_t t)
 		const MapBase *mb = &s->map.bases[i];
 		uint8_t d;
 
-		if (!mb->active || mb->owner == MAP_NEUTRAL || !game_allied(s, mb->owner, k->player))
+		if (!mb->active || mb->owner == MAP_NEUTRAL || !allied(s, mb->owner, k->player))
 			continue;
 		if (mb->armour < R_BASE_MIN_ARMOUR + R_BASE_ARMOUR_GIVE && mb->shells == 0)
 			continue;
@@ -589,17 +774,36 @@ static int8_t SEC_BOTS guard_pill(const GameState *s, uint8_t t, uint8_t x, uint
 	return best;
 }
 
-// Live hostile pills within reach of x, y.
-static uint8_t SEC_BOTS guards(const GameState *s, uint8_t player, uint8_t x, uint8_t y)
-{
-	uint8_t i, n = 0;
+// Where the live hostile pills are, for guards.
+typedef struct Hostile {
+	uint8_t n, x[MAP_MAX_PILLS], y[MAP_MAX_PILLS];
+} Hostile;
 
+static void SEC_BOTS hostile_pills(const GameState *s, uint8_t player, Hostile *h)
+{
+	uint8_t i;
+
+	h->n = 0;
 	for (i = 0; i < s->map.numPills; i++) {
 		const MapPill *p = &s->map.pills[i];
 
-		if (p->armour > 0 && pill_hostile(s, p, player) && cheb(x, y, p->x, p->y) <= 8)
-			n++;
+		if (p->armour > 0 && pill_hostile(s, p, player)) {
+			h->x[h->n] = p->x;
+			h->y[h->n] = p->y;
+			h->n++;
+		}
 	}
+}
+
+// Live hostile pills within reach of x, y.
+static uint8_t SEC_BOTS guards(const Hostile *h, uint8_t x, uint8_t y)
+{
+	uint8_t i, n = 0;
+
+	// Within 8 squares on both axes, without the wrap of 8-bit sums.
+	for (i = 0; i < h->n; i++)
+		if ((uint16_t)(x - h->x[i] + 8) <= 16 && (uint16_t)(y - h->y[i] + 8) <= 16)
+			n++;
 	return n;
 }
 
@@ -611,7 +815,7 @@ static uint8_t SEC_BOTS own_guards(const GameState *s, uint8_t player, uint8_t x
 	for (i = 0; i < s->map.numPills; i++) {
 		const MapPill *p = &s->map.pills[i];
 
-		if (p->active && !p->inTank && p->owner != MAP_NEUTRAL && game_allied(s, p->owner, player) &&
+		if (p->active && !p->inTank && p->owner != MAP_NEUTRAL && allied(s, p->owner, player) &&
 		    cheb(x, y, p->x, p->y) <= 6)
 			n++;
 	}
@@ -630,7 +834,7 @@ static int8_t SEC_BOTS guard_base(const GameState *s, uint8_t t)
 	for (i = 0; i < s->map.numBases; i++) {
 		const MapBase *mb = &s->map.bases[i];
 
-		if (!mb->active || mb->owner == MAP_NEUTRAL || !game_allied(s, mb->owner, k->player))
+		if (!mb->active || mb->owner == MAP_NEUTRAL || !allied(s, mb->owner, k->player))
 			continue;
 		d = (uint16_t)(cheb(tx, ty, mb->x, mb->y) + own_guards(s, k->player, mb->x, mb->y) * 24);
 		if (d < bd) {
@@ -651,7 +855,7 @@ static uint8_t SEC_BOTS goal_ok(const GameState *s, uint8_t t)
 	case BG_BASE: {
 		const MapBase *mb = &s->map.bases[b->target];
 
-		if (!mb->active || game_allied(s, mb->owner, k->player))
+		if (!mb->active || allied(s, mb->owner, k->player))
 			return 0;
 		return mb->owner == MAP_NEUTRAL || mb->armour <= R_BASE_CAPTURE_ARMOUR || k->shells > 0;
 	}
@@ -674,7 +878,9 @@ static uint8_t SEC_BOTS line_open(uint16_t x0, uint16_t y0, uint16_t x, uint16_t
 	uint16_t n = (uint16_t)(wdist(x0, y0, x, y) >> 7), i;
 	int32_t ax = x0, ay = y0, sx, sy;
 	uint8_t ex = (uint8_t)(x >> 8), ey = (uint8_t)(y >> 8);
+	Row1 rc;
 
+	rc.r = 0;
 	if (n == 0)
 		return 1;
 	if (n > 16)
@@ -690,7 +896,7 @@ static uint8_t SEC_BOTS line_open(uint16_t x0, uint16_t y0, uint16_t x, uint16_t
 		my = (uint8_t)((uint16_t)ay >> 8);
 		if (mx == ex && my == ey)
 			break;
-		t = plain(game_terrain(mx, my));
+		t = plain(terrain_c(&rc, mx, my));
 		if (is_wall(t) || t == TERRAIN_FOREST)
 			return 0;
 	}
@@ -704,14 +910,16 @@ static uint8_t SEC_BOTS man_line(const GameState *s, const Tank *k, uint8_t x, u
 	uint16_t ex = mid(x), ey = mid(y);
 	int16_t dx = (int16_t)(ex - k->x), dy = (int16_t)(ey - k->y);
 	uint8_t n = (uint8_t)((wdist(k->x, k->y, ex, ey) >> 7) + 1), i;
+	Row1 rc;
 
+	rc.r = 0;
 	for (i = 1; i < n; i++) {
 		uint8_t mx = (uint8_t)((uint16_t)(k->x + (int16_t)((int32_t)dx * i / n)) >> 8);
 		uint8_t my = (uint8_t)((uint16_t)(k->y + (int16_t)((int32_t)dy * i / n)) >> 8), t;
 
 		if (mx == x && my == y)
 			break;
-		t = plain(game_terrain(mx, my));
+		t = plain(terrain_c(&rc, mx, my));
 		if (is_wall(t) || t == TERRAIN_RIVER || t == TERRAIN_DEEP_SEA || g_live_pill_at(s, mx, my) >= 0)
 			return 0;
 	}
@@ -728,7 +936,7 @@ static const int8_t kSY[STAGES] = { 0, 0, -4, -4, 4, 4, -6, -6, 6, 6 };
 // wall is in the way, else 1 plus a penalty for each tree to shoot through
 // and each square of the first half of the run that is slow to cross
 // (river is fast on a boat).
-static uint8_t SEC_BOTS run_line(uint8_t x, uint8_t y, uint8_t px, uint8_t py, uint8_t boat)
+static uint8_t SEC_BOTS run_line(Rows16 *rc, uint8_t x, uint8_t y, uint8_t px, uint8_t py, uint8_t boat)
 {
 	int16_t sx = (int16_t)(((int16_t)px - x) * 16), sy = (int16_t)(((int16_t)py - y) * 16);
 	uint16_t ax = mid(x), ay = mid(y);
@@ -741,7 +949,7 @@ static uint8_t SEC_BOTS run_line(uint8_t x, uint8_t y, uint8_t px, uint8_t py, u
 		ay = (uint16_t)(ay + sy);
 		if ((ax >> 8) == px && (ay >> 8) == py)
 			break;
-		t = plain(game_terrain((uint8_t)(ax >> 8), (uint8_t)(ay >> 8)));
+		t = plain(terrain16(rc, (uint8_t)(ax >> 8), (uint8_t)(ay >> 8)));
 		if (is_wall(t))
 			return 0;
 		if (t == TERRAIN_FOREST)
@@ -765,16 +973,21 @@ static uint8_t SEC_BOTS pill_stage(const GameState *s, uint8_t t, uint8_t p, uin
 	uint8_t i, tx = (uint8_t)(k->x >> 8), ty = (uint8_t)(k->y >> 8);
 	uint16_t bd = 0xFFFF, d;
 	uint8_t skip = (uint8_t)(s->bots[t].fails % STAGES);
+	Rows16 rc;
 
+	// The stages and their run lines are within 7 rows of the pill.
+	rc.y0 = (uint8_t)(mp->y - 8);
+	for (i = 0; i < 16; i++)
+		rc.r[i] = 0;
 	for (i = 0; i < STAGES; i++) {
 		uint8_t x = (uint8_t)(mp->x + kSX[i]), y = (uint8_t)(mp->y + kSY[i]), r, c;
 
 		// Not at sea, or in a river off a boat, where waiting loses shells.
 		c = cost(s, x, y, k->boat);
-		r = plain(game_terrain(x, y));
+		r = plain(terrain16(&rc, x, y));
 		if (c == 0 || c == MINE_COST || r == TERRAIN_DEEP_SEA || (!k->boat && r == TERRAIN_RIVER))
 			continue;
-		r = run_line(x, y, mp->x, mp->y, k->boat);
+		r = run_line(&rc, x, y, mp->x, mp->y, k->boat);
 		if (r == 0 || r > 40)
 			continue;
 		d = (uint16_t)(cheb(tx, ty, x, y) + r * 2 + c * 4 + (skip && i == skip - 1 ? 40 : 0));
@@ -805,16 +1018,18 @@ static void SEC_BOTS choose(GameState *s, uint8_t t)
 	uint8_t i, tx = (uint8_t)(k->x >> 8), ty = (uint8_t)(k->y >> 8), kind = 0, idx = 0, gx = 0, gy = 0;
 	int16_t best = 0x7FFF, sc;
 	int8_t g;
+	Hostile h;
 
+	hostile_pills(s, k->player, &h);
 	for (i = 0; i < s->map.numBases; i++) {
 		const MapBase *mb = &s->map.bases[i];
 		uint8_t hostile = mb->owner != MAP_NEUTRAL;
 
-		if (!mb->active || game_allied(s, mb->owner, k->player) || b->skip == ((BK_BASE << 5) | i))
+		if (!mb->active || allied(s, mb->owner, k->player) || b->skip == ((BK_BASE << 5) | i))
 			continue;
 		if (hostile && mb->armour > R_BASE_CAPTURE_ARMOUR && k->shells < 10)
 			continue;
-		sc = (int16_t)(cheb(tx, ty, mb->x, mb->y) * 4 + rnd(s, 8) + guards(s, k->player, mb->x, mb->y) * 48);
+		sc = (int16_t)(cheb(tx, ty, mb->x, mb->y) * 4 + rnd(s, 8) + guards(&h, mb->x, mb->y) * 48);
 		if (!hostile)
 			sc = (int16_t)(sc - 16);
 		else if (mb->armour > R_BASE_CAPTURE_ARMOUR)
@@ -888,7 +1103,7 @@ static uint8_t SEC_BOTS spot_near(GameState *s, uint8_t t, uint8_t x, uint8_t y,
 	if (cheb(sx, sy, x, y) < 2 || g_is_mine(sx, sy) || g_pill_at(s, sx, sy) >= 0 ||
 	    g_base_at(s, sx, sy) >= 0 || (sx == (k->x >> 8) && sy == (k->y >> 8)))
 		return 0;
-	ter = game_terrain(sx, sy);
+	ter = terrain(sx, sy);
 	if (ter != TERRAIN_GRASS && ter != TERRAIN_ROAD && ter != TERRAIN_SWAMP && ter != TERRAIN_RUBBLE)
 		return 0;
 	// Only in the open, so it can't shut a way: no mine beside it and at
@@ -919,7 +1134,7 @@ static void SEC_BOTS use_builder(GameState *s, uint8_t t, GameInput *in)
 	for (i = 0; i < s->map.numBases; i++) {
 		const MapBase *mb = &s->map.bases[i];
 
-		if (mb->active && mb->owner != MAP_NEUTRAL && game_allied(s, mb->owner, k->player) &&
+		if (mb->active && mb->owner != MAP_NEUTRAL && allied(s, mb->owner, k->player) &&
 		    cheb(tx, ty, mb->x, mb->y) <= 5) {
 			nearHome = 1;
 			home = (int8_t)i;
@@ -938,7 +1153,7 @@ static void SEC_BOTS use_builder(GameState *s, uint8_t t, GameInput *in)
 	for (i = 0; i < s->map.numPills; i++) {
 		const MapPill *p = &s->map.pills[i];
 
-		if (p->active && !p->inTank && p->owner != MAP_NEUTRAL && game_allied(s, p->owner, k->player) &&
+		if (p->active && !p->inTank && p->owner != MAP_NEUTRAL && allied(s, p->owner, k->player) &&
 		    p->armour <= R_PILL_MAX_ARMOUR - 5 && k->trees >= 2 && cheb(tx, ty, p->x, p->y) <= 6 &&
 		    !(p->x == tx && p->y == ty)) {
 			in->build = BUILD_PILL;
@@ -959,7 +1174,7 @@ static void SEC_BOTS use_builder(GameState *s, uint8_t t, GameInput *in)
 						continue;
 					x = (uint8_t)(tx + dx);
 					y = (uint8_t)(ty + dy);
-					if (game_terrain(x, y) == TERRAIN_FOREST && g_pill_at(s, x, y) < 0) {
+					if (terrain(x, y) == TERRAIN_FOREST && g_pill_at(s, x, y) < 0) {
 						in->build = BUILD_TREE;
 						goto order;
 					}
@@ -1038,7 +1253,7 @@ static void SEC_BOTS think(GameState *s, uint8_t t, GameInput *in)
 		const MapBase *mb = &s->map.bases[b->target];
 		uint8_t on = (k->x >> 8) == mb->x && (k->y >> 8) == mb->y;
 
-		if (mb->owner != MAP_NEUTRAL && game_allied(s, mb->owner, k->player) &&
+		if (mb->owner != MAP_NEUTRAL && allied(s, mb->owner, k->player) &&
 		    (k->armour < R_TANK_FULL_ARMOUR || k->shells < R_TANK_FULL_SHELLS - 4) &&
 		    !(on && mb->armour < R_BASE_MIN_ARMOUR + R_BASE_ARMOUR_GIVE && mb->shells == 0))
 			return;
@@ -1115,11 +1330,11 @@ static uint8_t SEC_BOTS sea_ahead(const Tank *k)
 	if (stop > 1023)
 		stop = 1023;
 	util_distance(&dx, &dy, a, stop);
-	if (game_terrain((uint8_t)((uint16_t)(k->x + dx) >> 8), (uint8_t)((uint16_t)(k->y + dy) >> 8)) ==
+	if (terrain((uint8_t)((uint16_t)(k->x + dx) >> 8), (uint8_t)((uint16_t)(k->y + dy) >> 8)) ==
 	    TERRAIN_DEEP_SEA)
 		return 1;
 	util_distance(&dx, &dy, a, (uint16_t)(stop >> 1));
-	return game_terrain((uint8_t)((uint16_t)(k->x + dx) >> 8), (uint8_t)((uint16_t)(k->y + dy) >> 8)) ==
+	return terrain((uint8_t)((uint16_t)(k->x + dx) >> 8), (uint8_t)((uint16_t)(k->y + dy) >> 8)) ==
 		TERRAIN_DEEP_SEA;
 }
 
@@ -1144,7 +1359,7 @@ static void SEC_BOTS steer(const Tank *k, uint16_t want, int16_t tsp, int16_t de
 	} else if (ad > 2048 && tsp > 16) {
 		tsp = 16;
 	}
-	if (sea_ahead(k))
+	if (tsp && sea_ahead(k))
 		tsp = 0;
 	if (k->speed < tsp)
 		in->keys |= IN_FASTER;
@@ -1156,14 +1371,26 @@ static void SEC_BOTS steer(const Tank *k, uint16_t want, int16_t tsp, int16_t de
 // tank and dx, dy and within w units of the line.
 static uint8_t SEC_BOTS on_line(int16_t dx, int16_t dy, uint16_t len, int32_t px, int32_t py, int16_t w)
 {
-	int32_t dot = (int32_t)dx * px + (int32_t)dy * py, cross;
+	int32_t dot, cross;
 
-	if (dot <= 0 || dot >= (int32_t)dx * dx + (int32_t)dy * dy)
-		return 0;
-	cross = (int32_t)dx * py - (int32_t)dy * px;
+	// A point within 16 bits takes 16-bit multiplies, muls on a 68k.
+	if (px >= -32768L && px <= 32767 && py >= -32768L && py <= 32767) {
+		int16_t x = (int16_t)px, y = (int16_t)py;
+
+		dot = (int32_t)dx * x + (int32_t)dy * y;
+		if (dot <= 0 || dot >= (int32_t)dx * dx + (int32_t)dy * dy)
+			return 0;
+		cross = (int32_t)dx * y - (int32_t)dy * x;
+	} else {
+		dot = (int32_t)dx * px + (int32_t)dy * py;
+		if (dot <= 0 || dot >= (int32_t)dx * dx + (int32_t)dy * dy)
+			return 0;
+		cross = (int32_t)dx * py - (int32_t)dy * px;
+	}
 	if (cross < 0)
 		cross = -cross;
-	return cross < (int32_t)w * len;
+	// w is above 0.
+	return cross < (int32_t)((uint32_t)(uint16_t)w * len);
 }
 
 // The line from the tank to x, y has no wall, forest or other live pill
@@ -1206,7 +1433,7 @@ static void SEC_BOTS fire(GameState *s, uint8_t t, uint16_t aim, uint16_t range,
 	const Tank *k = &s->tanks[t];
 	Bot *b = &s->bots[t];
 	int16_t d = turn_to(aim, k->angle);
-	uint16_t tol = (uint16_t)(100UL * 1304UL / (range < 256 ? 256 : range));
+	uint16_t tol = div32_16(100UL * 1304UL, range < 256 ? 256 : range);
 	int16_t dx, dy;
 	uint8_t i;
 
@@ -1219,7 +1446,7 @@ static void SEC_BOTS fire(GameState *s, uint8_t t, uint16_t aim, uint16_t range,
 	for (i = 0; i < s->numTanks; i++) {
 		const Tank *o = &s->tanks[i];
 
-		if (i != t && !o->destroyed && !o->deathWait && game_allied(s, o->player, k->player) &&
+		if (i != t && !o->destroyed && !o->deathWait && allied(s, o->player, k->player) &&
 		    on_line(dx, dy, range, (int32_t)o->x - k->x, (int32_t)o->y - k->y, 224))
 			return;
 	}
@@ -1285,12 +1512,12 @@ static void SEC_BOTS bridge(GameState *s, uint8_t t, GameInput *in)
 	    in->build)
 		return;
 	// Not from in the river: he couldn't walk back to the tank.
-	if (game_terrain((uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8)) == TERRAIN_RIVER)
+	if (terrain((uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8)) == TERRAIN_RIVER)
 		return;
 	util_distance(&dx, &dy, (uint16_t)(util_dir16(k->angle) * 16 * ANGLE_ONE), 256);
 	x = (uint8_t)((uint16_t)(k->x + dx) >> 8);
 	y = (uint8_t)((uint16_t)(k->y + dy) >> 8);
-	if (game_terrain(x, y) != TERRAIN_RIVER || g_base_at(s, x, y) >= 0 || !cost(s, x, y, 0))
+	if (terrain(x, y) != TERRAIN_RIVER || g_base_at(s, x, y) >= 0 || !cost(s, x, y, 0))
 		return;
 	in->build = BUILD_ROAD;
 	in->buildX = x;
@@ -1306,7 +1533,12 @@ static void SEC_BOTS next_square(const GameState *s, const Tank *k, uint8_t *x, 
 	int8_t sx = *x > tx ? 1 : *x < tx ? -1 : 0, sy = *y > ty ? 1 : *y < ty ? -1 : 0;
 
 	if (sx && sy) {
-		uint8_t a = cost(s, (uint8_t)(tx + sx), ty, k->boat), c = cost(s, tx, (uint8_t)(ty + sy), k->boat);
+		Rows rc;
+		uint8_t a, c;
+
+		rows_init(&rc, (uint8_t)(ty - 2));
+		a = cost_rows(s, &rc, (uint8_t)(tx + sx), ty, k->boat);
+		c = cost_rows(s, &rc, tx, (uint8_t)(ty + sy), k->boat);
 
 		if (!a && c)
 			sx = 0;
@@ -1341,7 +1573,7 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	stopAt = b->goal == BG_REFUEL || b->goal == BG_PATROL || b->goal == BG_MAN;
 	if (gd == 0 && (stopAt || b->goal == BG_BASE || b->goal == BG_PILL)) {
 		// Waiting at a pill's stage with no clear shot counts as failing.
-		if (b->goal == BG_PILL && (s->tick + t) % 25 == 0)
+		if (b->goal == BG_PILL && mod32_16(s->tick + t, 25) == 0)
 			b->fails++;
 		steer(k, k->angle, 0, 128, 0, in);
 		return;
@@ -1394,14 +1626,14 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	if (k->boat)
 		tsp = b->wayN || cost(s, px, py, 1) == 1 ? FULL_SPEED : 12;
 	else if (!s->men[t].inTank && !s->men[t].isDead && b->goal != BG_MAN &&
-	    game_terrain(px, py) == TERRAIN_RIVER && game_terrain(tx, ty) != TERRAIN_RIVER)
+	    terrain(px, py) == TERRAIN_RIVER && terrain(tx, ty) != TERRAIN_RIVER)
 		tsp = 0;    // waits on the bank for the builder, who may be bridging it
 	if (!b->wayN && !cost(s, px, py, k->boat))
 		tsp = 0;
 	want = util_angle(k->x, k->y, mid(px), mid(py));
 	turn = turn_to(want, k->angle);
 	// Stuck: no new square in 75 ticks while facing where it means to go.
-	if ((s->tick + t) % 25 == 0 && tsp > 0) {
+	if (tsp > 0 && mod32_16(s->tick + t, 25) == 0) {
 		if (tx != b->lastX || ty != b->lastY) {
 			b->stuck = 0;
 		} else if (turn < 1024 && turn > -1024 && ++b->stuck >= 3) {
@@ -1541,7 +1773,7 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 	what = aim_at(s, t, &ax, &ay);
 	if (what != AIM_NONE) {
 		range = wdist(k->x, k->y, ax, ay);
-		if ((s->tick + t) % 5 == 0)
+		if (mod32_16(s->tick + t, 5) == 0)
 			b->clear = line_clear(s, k, ax, ay);
 	}
 	sight(k, range, in);
