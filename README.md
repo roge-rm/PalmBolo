@@ -37,4 +37,4 @@ Needs prc-tools-remix, PilRC, Python 3 and the Palm OS SDK 5r3 in `../palm-os-sd
 
 ## Licence
 
-GPLv3. The game rules come from WinBolo 2 (https://github.com/john-winbolo/winbolo), also GPLv3.
+GPLv3, see LICENSE. The game rules come from WinBolo 2 (https://github.com/john-winbolo/winbolo), also GPLv3.
