@@ -88,6 +88,7 @@ void SEC_DRAW BlitCell(const BlitWin *src, Coord sx, Coord sy, const BlitWin *ds
 	UInt32 m;
 	const UInt8 *s;
 	UInt16 *o;
+	UInt8 *db = dst->bits;
 
 	if (clip->topLeft.x > x)
 		c0 = clip->topLeft.x - x;
@@ -99,11 +100,17 @@ void SEC_DRAW BlitCell(const BlitWin *src, Coord sx, Coord sy, const BlitWin *ds
 		r1 = clip->topLeft.y + clip->extent.y - y;
 	if (c0 >= c1 || r0 >= r1)
 		return;
+	// The words below need an even address: an odd dst starts a byte
+	// early, 8 bits further in.
+	if ((UInt32)db & 1) {
+		db--;
+		xb += 8;
+	}
 	s = src->bits + Row(sy + r0, src->rowBytes) + ((UInt16)(sx * d) >> 3);
 	// Whole rows at 2 bits that start a byte, the view's usual case: two
 	// bytes a row.
 	if (d == 2 && c0 == 0 && c1 == 8 && !(xb & 7)) {
-		UInt8 *b = dst->bits + Row(y + r0, dst->rowBytes) + (xb >> 3);
+		UInt8 *b = db + Row(y + r0, dst->rowBytes) + (xb >> 3);
 		UInt16 srb = src->rowBytes, drb = dst->rowBytes;
 
 		for (r = r0; r < r1; r++) {
@@ -117,7 +124,7 @@ void SEC_DRAW BlitCell(const BlitWin *src, Coord sx, Coord sy, const BlitWin *ds
 	// At 2 bits, columns clipped at the cell's middle (the strip a 4 pixel
 	// sideways scroll uncovers): one whole byte a row.
 	if (d == 2 && !(xb & 7) && !(c0 & 3) && !(c1 & 3)) {
-		UInt8 *b = dst->bits + Row(y + r0, dst->rowBytes) + (xb >> 3);
+		UInt8 *b = db + Row(y + r0, dst->rowBytes) + (xb >> 3);
 		UInt16 srb = src->rowBytes, drb = dst->rowBytes;
 
 		if (c0) {
@@ -138,7 +145,7 @@ void SEC_DRAW BlitCell(const BlitWin *src, Coord sx, Coord sy, const BlitWin *ds
 	m <<= 16 - shift;
 	mhi = (UInt16)(m >> 16);
 	mlo = (UInt16)m;
-	o = (UInt16 *)(dst->bits + Row(y + r0, dst->rowBytes) + (Int32)(xb >> 4) * 2);
+	o = (UInt16 *)(db + Row(y + r0, dst->rowBytes) + (Int32)(xb >> 4) * 2);
 	for (r = r0; r < r1; r++) {
 		UInt32 v = (d == 2 ? ((UInt32)s[0] << 8 | s[1]) : (UInt32)s[0] << 8) << (16 - shift);
 
@@ -163,6 +170,7 @@ void SEC_DRAW BlitSprite(const BlitWin *mask, Coord mx, Coord my, const BlitWin 
 	UInt32 m;
 	const UInt8 *s, *k;
 	UInt16 *o;
+	UInt8 *db = dst->bits;
 
 	if (clip->topLeft.x > x)
 		c0 = clip->topLeft.x - x;
@@ -174,10 +182,16 @@ void SEC_DRAW BlitSprite(const BlitWin *mask, Coord mx, Coord my, const BlitWin 
 		r1 = clip->topLeft.y + clip->extent.y - y;
 	if (c0 >= c1 || r0 >= r1)
 		return;
+	// The words below need an even address: an odd dst starts a byte
+	// early, 8 bits further in.
+	if ((UInt32)db & 1) {
+		db--;
+		xb += 8;
+	}
 	shift = (UInt16)(xb & 15);
 	s = spr->bits + Row(sy + r0, spr->rowBytes) + ((UInt16)(sx * d) >> 3);
 	k = mask->bits + Row(my + r0, mask->rowBytes) + ((UInt16)(mx * d) >> 3);
-	o = (UInt16 *)(dst->bits + Row(y + r0, dst->rowBytes) + (Int32)(xb >> 4) * 2);
+	o = (UInt16 *)(db + Row(y + r0, dst->rowBytes) + (Int32)(xb >> 4) * 2);
 	// Whole rows at 2 bits from word aligned cells, the usual case: a row
 	// is one word of sprite and mask, shifted across one or two words.
 	// Unclipped, the shifted bits all fall inside the columns, so no
@@ -297,4 +311,34 @@ void SEC_DRAW BlitMove(UInt8 *d, const UInt8 *s, UInt32 n)
 	}
 	while (n--)
 		*--d = *--s;
+}
+
+// Copies rows of n bytes from s to d, which don't overlap, stepping srb and
+// drb bytes a row: by longs when s and d have the same parity, else by
+// bytes.
+void SEC_DRAW BlitRows(UInt8 *d, UInt16 drb, const UInt8 *s, UInt16 srb, UInt16 n, UInt16 rows)
+{
+	for (; rows; rows--, d += drb, s += srb) {
+		UInt8 *dd = d;
+		const UInt8 *ss = s;
+		UInt16 k, m = n;
+
+		if (!(((UInt32)dd ^ (UInt32)ss) & 1)) {
+			if (((UInt32)dd & 1) && m) {
+				*dd++ = *ss++;
+				m--;
+			}
+			if ((k = (UInt16)(m >> 5)) != 0)
+				UP_LONGS(dd, ss, k);
+			m &= 31;
+			for (; m >= 4; m -= 4, dd += 4, ss += 4)
+				*(UInt32 *)dd = *(const UInt32 *)ss;
+		} else {
+			if ((k = (UInt16)(m >> 4)) != 0)
+				UP_BYTES(dd, ss, k);
+			m &= 15;
+		}
+		while (m--)
+			*dd++ = *ss++;
+	}
 }

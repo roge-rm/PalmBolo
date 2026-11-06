@@ -22,7 +22,7 @@ IndexedColorType SEC_UI ScreenIndex(UInt8 r, UInt8 g, UInt8 b)
 	return WinRGBToIndex(&c);
 }
 
-void SEC_UI ScreenInit(const DeviceInfo *d)
+void SEC_COLD ScreenInit(const DeviceInfo *d)
 {
 	UInt32 depth;
 	UInt16 i;
@@ -55,7 +55,7 @@ void SEC_UI ScreenInit(const DeviceInfo *d)
 	}
 }
 
-void SEC_UI ScreenExit(void)
+void SEC_COLD ScreenExit(void)
 {
 	if (gDepthSet) {
 		UInt32 depth = gOldDepth;
@@ -69,7 +69,7 @@ void SEC_UI ScreenExit(void)
 // first is reached through A5 and reads garbage.
 static const Char digits[] = "0123456789ABCDEF";
 
-void SEC_UI HexStr(UInt32 v, Char *out)
+void SEC_COLD HexStr(UInt32 v, Char *out)
 {
 	Int16 i;
 

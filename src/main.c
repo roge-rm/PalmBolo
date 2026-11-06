@@ -52,7 +52,7 @@ AppPrefs *AppPrefsGet(void)
 	return &gPrefs;
 }
 
-static void Defaults(void)
+static void SEC_COLD Defaults(void)
 {
 	Char user[dlkUserNameBufSize];
 
@@ -74,7 +74,7 @@ static void Defaults(void)
 	}
 }
 
-static void LoadPrefs(void)
+static void SEC_COLD LoadPrefs(void)
 {
 	UInt16 size = sizeof(gPrefs);
 	Int16 v;
@@ -85,7 +85,7 @@ static void LoadPrefs(void)
 	SoundSetOn(gPrefs.sound != 0);
 }
 
-void AppPrefsSave(void)
+void SEC_COLD AppPrefsSave(void)
 {
 	PrefSetAppPreferences(kAppCreator, kPrefsId, kPrefsVersion, &gPrefs, sizeof(gPrefs), true);
 }
@@ -127,18 +127,18 @@ static Boolean IsGameKey(WChar chr)
 	return false;
 }
 
-static void ShowAbout(void)
+static void SEC_COLD ShowAbout(void)
 {
 	FrmCustomAlert(AboutAlert, kAppVersion, "", "");
 	gDirty = gFull = true;
 }
 
 #ifdef DEBUG
-static void SelfTest(void);
+static void SEC_COLD SelfTest(void);
 #endif
 
 // Leaves a game in progress for the title, saving it unless it is over.
-static void LeaveGame(void)
+static void SEC_COLD LeaveGame(void)
 {
 	if (gInGame && gForm == GameForm) {
 		if (!gGame.over && !SaveWrite(&gGame)) {
@@ -152,7 +152,7 @@ static void LeaveGame(void)
 	}
 }
 
-static Boolean HandleMenu(UInt16 id)
+static Boolean SEC_COLD HandleMenu(UInt16 id)
 {
 	switch (id) {
 	case MainMenuAbout:
@@ -179,7 +179,7 @@ static Boolean HandleMenu(UInt16 id)
 	return false;
 }
 
-void AppOpenMap(UInt16 index, const Char *name)
+void SEC_COLD AppOpenMap(UInt16 index, const Char *name)
 {
 	Int16 err;
 
@@ -264,7 +264,7 @@ void AppOpenMap(UInt16 index, const Char *name)
 	FrmGotoForm(GameForm);
 }
 
-void AppResume(void)
+void SEC_COLD AppResume(void)
 {
 #ifdef DEBUG
 	gStartTicks = TimGetTicks();
@@ -505,14 +505,14 @@ static GameInput ReadInputs(void)
 // than a sys tick. Closer: the same ticks again with the keys the bots
 // made, the bots' time being the difference, the least of three. Then the worst tick of the
 // first BENCH_WORST: each tick's bots run BENCH_REPS times on copies of
-// the state, less the copying. Lives in ui to keep code 1 small.
+// the state, less the copying. Lives in cold to keep code 1 small.
 #define BENCH_TICKS 1000
 #define BENCH_WORST 300
 #define BENCH_REPS 50
 
 // Runs ticks with the bots, or with the keys in rec if play. Returns sys
 // ticks taken, the bots' share seen in *bots.
-static UInt32 SEC_UI BenchRun(GameState *c, GameInput *rec, UInt8 play, UInt32 *bots)
+static UInt32 SEC_COLD BenchRun(GameState *c, GameInput *rec, UInt8 play, UInt32 *bots)
 {
 	GameInput none[GAME_MAX_TANKS], keys[GAME_MAX_TANKS];
 	UInt8 mask = c->botMask, nt = c->numTanks;
@@ -537,7 +537,7 @@ static UInt32 SEC_UI BenchRun(GameState *c, GameInput *rec, UInt8 play, UInt32 *
 	return TimGetTicks() - t0;
 }
 
-static void SEC_UI BenchBots(void)
+static void SEC_COLD BenchBots(void)
 {
 	GameState *c = (GameState *)MemPtrNew(sizeof(GameState));
 	GameState *w = (GameState *)MemPtrNew(sizeof(GameState));
@@ -644,7 +644,7 @@ done:
 // Checks the const tables read back right from both code segments, then
 // runs the scripted games on Everard Island and logs their checksums for
 // comparing with the host test.
-static void SelfTest(void)
+static void SEC_COLD SelfTest(void)
 {
 	Char hex[9], name[] = "Everard Island";
 	UInt32 v, t0, t1;
@@ -681,20 +681,76 @@ static void SelfTest(void)
 #endif
 
 #ifdef DRAW_BENCH
-static void DrawBench(void);
+static void SEC_COLD DrawBench(void);
 #endif
 #ifdef TICK_PARTS
-// Debug: sys ticks spent in each part of game_tick, part n ending at
-// tick_part(n).
-static UInt32 gTickPart[9], gTickPartT;
+// Debug: time spent in each part of game_tick, part n ending at
+// tick_part(n); parts 10 and up split the tanks. A mark reads only the
+// DragonBall's timer 1 counter, which counts up to the compare value once
+// a system tick (OS 3 and 4), so a part over a system tick reads short;
+// the whole tick is also timed in system ticks to show that.
+#define kTpParts 20
+#define kTpCounter ((volatile UInt16 *)0xFFFFF608UL)
+#define kTpCompare ((volatile UInt16 *)0xFFFFF604UL)
+static UInt32 gTickPartC[kTpParts], gTickPartN, gTickPartAll, gTickPartT;
+static UInt16 gTickPartLC, gTickPartDiv;    // div: timer counts a system tick, 0 if none
+
+static void SEC_COLD TickPartInit(void)
+{
+	UInt32 rom = 0;
+
+	FtrGet(sysFtrCreator, sysFtrNumROMVersion, &rom);
+	if (rom < 0x05000000UL && *kTpCompare > 100)
+		gTickPartDiv = *kTpCompare;
+}
 
 void tick_part(uint8_t n)
 {
-	UInt32 now = TimGetTicks();
+	UInt16 c = gTickPartDiv ? *kTpCounter : 0;
+	Int16 d;
 
-	if (n)
-		gTickPart[n] += now - gTickPartT;
-	gTickPartT = now;
+	if (n) {
+		d = (Int16)(c - gTickPartLC);
+		if (d < 0)
+			d = (Int16)(d + gTickPartDiv);
+		gTickPartC[n] += (UInt16)d;
+		if (n == 8) {
+			gTickPartAll += TimGetTicks() - gTickPartT;
+			gTickPartN++;
+		}
+	} else {
+		gTickPartT = TimGetTicks();
+		c = gTickPartDiv ? *kTpCounter : 0;
+	}
+	gTickPartLC = c;
+}
+
+// Part n in microseconds a tick.
+static UInt16 SEC_COLD TickPartUs(UInt8 n)
+{
+	UInt32 div = gTickPartDiv, c = gTickPartC[n];
+
+	if (!gTickPartN || !div)
+		return 0;
+	c /= gTickPartN;
+	return (UInt16)(c * 10000UL / div);
+}
+
+static void SEC_COLD TickPartsLog(void)
+{
+	UInt8 i;
+
+	LOG(("tick parts us a tick over %lu: all %lu occ %u bots %u tanks %u men %u pills %u bases %u shells etc %u trees %u",
+		gTickPartN, gTickPartN ? gTickPartAll * 10000UL / gTickPartN : 0, TickPartUs(1), TickPartUs(2),
+		(UInt16)(TickPartUs(3) + TickPartUs(10) + TickPartUs(11) + TickPartUs(12) + TickPartUs(13) +
+		TickPartUs(14) + TickPartUs(15) + TickPartUs(16) + TickPartUs(17) + TickPartUs(18)),
+		TickPartUs(4), TickPartUs(5), TickPartUs(6), TickPartUs(7), TickPartUs(8)));
+	LOG(("tank parts us a tick: pre %u push %u speed %u tnudge %u move %u nudge %u pick %u after %u near %u rest %u",
+		TickPartUs(10), TickPartUs(11), TickPartUs(12), TickPartUs(13), TickPartUs(14),
+		TickPartUs(15), TickPartUs(16), TickPartUs(17), TickPartUs(18), TickPartUs(3)));
+	for (i = 0; i < kTpParts; i++)
+		gTickPartC[i] = 0;
+	gTickPartN = gTickPartAll = 0;
 }
 #endif
 
@@ -1003,6 +1059,9 @@ static void EventLoop(void)
 				gDropped = 0;
 			}
 			TimingMaybeLog();
+#ifdef TICK_PARTS
+			TickPartsLog();
+#endif
 			gPaceSkip += TimGetTicks() - t1;
 			gPaceSlow = kPaceTicks / 4;
 		}
@@ -1014,7 +1073,7 @@ static void EventLoop(void)
 #ifdef DRAW_BENCH
 // Debug: 200 frames of 5 ticks each from a fixed seed and fixed keys, the
 // same on every run, timing the drawing and the ticks apart.
-static void DrawBench(void)
+static void SEC_COLD DrawBench(void)
 {
 	UInt32 draw = 0, ticks = 0, t0;
 	UInt16 f, t;
@@ -1024,8 +1083,10 @@ static void DrawBench(void)
 			GameInput all[GAME_MAX_TANKS];
 
 			MemSet(all, sizeof(all), 0);
+#ifndef BENCH_STILL
 			all[game_viewer_tank(&gGame)].keys = (UInt8)(IN_FASTER | (f % 40 < 6 ? IN_LEFT : 0) |
 				(f % 10 == 0 && t == 0 ? IN_FIRE : 0));
+#endif
 			t0 = TimGetTicks();
 			game_tick(&gGame, all);
 			ticks += TimGetTicks() - t0;
@@ -1036,16 +1097,14 @@ static void DrawBench(void)
 	}
 	LOG(("draw bench check: %u view bytes differ from a full redraw", ViewCheck()));
 #ifdef TICK_PARTS
-	LOG(("tick parts: occ %lu bots %lu tanks %lu men %lu pills %lu bases %lu shells etc %lu trees %lu",
-		gTickPart[1], gTickPart[2], gTickPart[3], gTickPart[4], gTickPart[5], gTickPart[6],
-		gTickPart[7], gTickPart[8]));
+	TickPartsLog();
 #endif
 	LOG(("draw bench %u frames x5 ticks: draw %lu sys ticks (%lu ms a frame), ticks %lu sys ticks",
 		f, draw, draw * 10 / f, ticks));
 }
 #endif
 
-static void AppStart(void)
+static void SEC_COLD AppStart(void)
 {
 	DeviceDetect(&gDev);
 #ifdef DEBUG
@@ -1057,6 +1116,9 @@ static void AppStart(void)
 #endif
 #endif
 	TimingInit(gDev.ticksPerSecond);
+#ifdef TICK_PARTS
+	TickPartInit();
+#endif
 	LoadPrefs();
 	ScreenInit(&gDev);
 	ViewPins(gDev.pins);
@@ -1065,7 +1127,7 @@ static void AppStart(void)
 	FrmGotoForm(TitleForm);
 }
 
-static void AppStop(void)
+static void SEC_COLD AppStop(void)
 {
 	// Leaving the app in the middle of a game saves it.
 	if (gInGame && !gGame.over) {

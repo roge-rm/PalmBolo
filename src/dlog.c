@@ -10,7 +10,7 @@
 #define kLogLine    160
 
 // Opens the database, creating it with the backup bit set if it is missing.
-static DmOpenRef SEC_UI LogOpen(void)
+static DmOpenRef SEC_COLD LogOpen(void)
 {
 	DmOpenRef db = DmOpenDatabaseByTypeCreator(kLogType, kLogCreator, dmModeReadWrite);
 	LocalID id;
@@ -33,7 +33,7 @@ static DmOpenRef SEC_UI LogOpen(void)
 
 // Appends c to the line unless it is full; the line always keeps room for
 // the closing zero.
-static void SEC_UI Put(Char *line, UInt16 *len, Char c)
+static void SEC_COLD Put(Char *line, UInt16 *len, Char c)
 {
 	if (*len < kLogLine - 1)
 		line[(*len)++] = c;
@@ -42,7 +42,7 @@ static void SEC_UI Put(Char *line, UInt16 *len, Char c)
 // A small vsprintf that never writes past the line: %d %u %x %lx %ld %lu
 // %s %c and %%, with a width and a 0 flag. A long line is cut short. Int16
 // and UInt16 arguments arrive as 16-bit ints, as with StrPrintF.
-static void SEC_UI Format(Char *line, UInt16 *len, const Char *fmt, va_list ap)
+static void SEC_COLD Format(Char *line, UInt16 *len, const Char *fmt, va_list ap)
 {
 	Char num[12];
 	const Char *p;
@@ -120,7 +120,7 @@ static void SEC_UI Format(Char *line, UInt16 *len, const Char *fmt, va_list ap)
 	}
 }
 
-static void SEC_UI Append(Char *line, UInt16 *len, const Char *fmt, ...)
+static void SEC_COLD Append(Char *line, UInt16 *len, const Char *fmt, ...)
 {
 	va_list ap;
 
@@ -129,7 +129,7 @@ static void SEC_UI Append(Char *line, UInt16 *len, const Char *fmt, ...)
 	va_end(ap);
 }
 
-void SEC_UI LogF(const Char *fmt, ...)
+void SEC_COLD LogF(const Char *fmt, ...)
 {
 	Char line[kLogLine];
 	DmOpenRef db;
@@ -158,7 +158,7 @@ void SEC_UI LogF(const Char *fmt, ...)
 	DmCloseDatabase(db);
 }
 
-void SEC_UI LogClear(void)
+void SEC_COLD LogClear(void)
 {
 	DmOpenRef db = LogOpen();
 
@@ -169,7 +169,7 @@ void SEC_UI LogClear(void)
 	DmCloseDatabase(db);
 }
 
-void SEC_UI LogDevice(const DeviceInfo *d)
+void SEC_COLD LogDevice(const DeviceInfo *d)
 {
 	LogF("rom %lx cpu %lx winver %lu tps %u", d->rom, d->cpu, d->winVersion,
 		(UInt16)d->ticksPerSecond);

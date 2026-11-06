@@ -15,7 +15,7 @@
 #include "mapstore.h"
 #include "rules.h"
 
-static uint32_t memory_fill(void *ctx, uint8_t *dst, uint32_t max)
+static uint32_t SEC_COLD memory_fill(void *ctx, uint8_t *dst, uint32_t max)
 {
 	MapMemory *mm = (MapMemory *)ctx;
 	uint32_t n = mm->len - mm->pos;
@@ -29,7 +29,7 @@ static uint32_t memory_fill(void *ctx, uint8_t *dst, uint32_t max)
 	return n;
 }
 
-void map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32_t len)
+void SEC_COLD map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32_t len)
 {
 	mm->data = data;
 	mm->len = len;
@@ -41,7 +41,7 @@ void map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32
 }
 
 // Next byte, or -1 at the end of the file.
-static int get_byte(MapSource *ms)
+static int SEC_COLD get_byte(MapSource *ms)
 {
 	if (ms->pos >= ms->n) {
 		if (ms->eof)
@@ -56,7 +56,7 @@ static int get_byte(MapSource *ms)
 	return ms->buf[ms->pos++];
 }
 
-static int get_bytes(MapSource *ms, uint8_t *dst, int n)
+static int SEC_COLD get_bytes(MapSource *ms, uint8_t *dst, int n)
 {
 	int i, c;
 
@@ -73,7 +73,7 @@ static int get_bytes(MapSource *ms, uint8_t *dst, int n)
 static uint8_t row[MAP_SIZE];
 
 // Decodes the data bytes of one run into row y, squares startx..endx-1.
-static int read_run(MapSource *ms, int elems, uint8_t y, int startx, int endx)
+static int SEC_COLD read_run(MapSource *ms, int elems, uint8_t y, int startx, int endx)
 {
 	enum { LEN, DIFF, SAME };
 	int state = LEN, remain = 0, x = startx, i, c, half, lenLast = 0;
@@ -119,7 +119,7 @@ static int read_run(MapSource *ms, int elems, uint8_t y, int startx, int endx)
 	return MAP_OK;
 }
 
-static int read_runs(MapSource *ms)
+static int SEC_COLD read_runs(MapSource *ms)
 {
 	uint8_t h[4];
 	int err, c;
@@ -143,12 +143,12 @@ static int read_runs(MapSource *ms)
 	}
 }
 
-static uint8_t in_bounds(uint8_t x, uint8_t y)
+static uint8_t SEC_COLD in_bounds(uint8_t x, uint8_t y)
 {
 	return x > MAP_EDGE_LOW && x < MAP_EDGE_HIGH && y > MAP_EDGE_LOW && y < MAP_EDGE_HIGH;
 }
 
-static void box_add(int16_t *l, int16_t *r, int16_t *t, int16_t *b,
+static void SEC_COLD box_add(int16_t *l, int16_t *r, int16_t *t, int16_t *b,
 	int16_t il, int16_t ir, int16_t it, int16_t ib)
 {
 	// WinBolo's mapCenter tests right and bottom with < too, so items never
@@ -160,7 +160,7 @@ static void box_add(int16_t *l, int16_t *r, int16_t *t, int16_t *b,
 }
 
 // Rotates row y right by n squares, wrapping.
-static void rotate_row(uint8_t y, uint8_t n, uint8_t *tmp)
+static void SEC_COLD rotate_row(uint8_t y, uint8_t n, uint8_t *tmp)
 {
 	const uint8_t *row = mapstore_row(y);
 	uint16_t x;
@@ -174,7 +174,7 @@ static void rotate_row(uint8_t y, uint8_t n, uint8_t *tmp)
 // sits in the middle of the map. Squares wrap at 256 as WinBolo's BYTE
 // sums do; everything outside the box is deep sea, so a cyclic shift of
 // the whole map is the same thing.
-static void map_center(MapInfo *info)
+static void SEC_COLD map_center(MapInfo *info)
 {
 	int16_t l = 256, r = -1, t = 256, b = -1, il, ir, it, ib;
 	int16_t addX, addY;
@@ -279,23 +279,26 @@ static void map_center(MapInfo *info)
 			if (!in_bounds((arr)[k].x, (arr)[k].y)) (arr)[k].active = 0; \
 } while (0)
 
-static void remove_border(MapInfo *info)
+static void SEC_COLD remove_border(MapInfo *info)
 {
 	REMOVE_BORDER(info->pills, info->numPills);
 	REMOVE_BORDER(info->bases, info->numBases);
 	REMOVE_BORDER(info->starts, info->numStarts);
 }
 
-static int parse(MapInfo *info, MapSource *ms)
+// File-static, as a function-local one would sit in the cold segment and be
+// read through A5.
+static const char kMagic[8] = { 'B', 'M', 'A', 'P', 'B', 'O', 'L', 'O' };
+
+static int SEC_COLD parse(MapInfo *info, MapSource *ms)
 {
-	static const char magic[8] = { 'B', 'M', 'A', 'P', 'B', 'O', 'L', 'O' };
 	uint8_t b[8];
 	int i, err;
 
 	if (!get_bytes(ms, b, 8))
 		return MAP_ERR_SHORT;
 	for (i = 0; i < 8; i++)
-		if (b[i] != (uint8_t)magic[i])
+		if (b[i] != (uint8_t)kMagic[i])
 			return MAP_ERR_HEADER;
 	if (!get_bytes(ms, b, 4))
 		return MAP_ERR_SHORT;
@@ -370,7 +373,7 @@ static int parse(MapInfo *info, MapSource *ms)
 	return MAP_OK;
 }
 
-int map_parse(MapInfo *info, MapSource *ms)
+int SEC_COLD map_parse(MapInfo *info, MapSource *ms)
 {
 	int err;
 	uint8_t *p = (uint8_t *)info;
@@ -386,7 +389,7 @@ int map_parse(MapInfo *info, MapSource *ms)
 	return err;
 }
 
-const char *map_error_text(int err)
+const char *SEC_COLD map_error_text(int err)
 {
 	switch (err) {
 	case MAP_OK: return "ok";

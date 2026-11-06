@@ -105,7 +105,7 @@ void SEC_UI TimingWait(Int32 wait, Boolean nil)
 		gEvents++;
 }
 
-static void SEC_UI FineInit(void)
+static void SEC_COLD FineInit(void)
 {
 	UInt32 rom = 0, t0;
 	UInt16 i;
@@ -129,7 +129,7 @@ static void SEC_UI FineInit(void)
 }
 
 // Logs the parts in thousandths of the period.
-static void SEC_UI PartsLog(void)
+static void SEC_COLD PartsLog(void)
 {
 	const Char *names = "sleep\0poll\0sys\0handle\0input\0tick\0ticklog\0"
 		"sound\0view\0panel\0debug\0log\0other\0";
@@ -160,7 +160,7 @@ static void SEC_UI PartsLog(void)
 }
 #endif
 
-void SEC_UI TimingInit(UInt16 tps)
+void SEC_COLD TimingInit(UInt16 tps)
 {
 	gTps = tps ? tps : 100;
 	gLastLogTicks = TimGetTicks();
@@ -170,12 +170,12 @@ void SEC_UI TimingInit(UInt16 tps)
 }
 
 // sum system ticks over count to 1/100 ms.
-static UInt32 SEC_UI Avg(UInt32 sum, UInt32 count)
+static UInt32 SEC_COLD Avg(UInt32 sum, UInt32 count)
 {
 	return count ? (sum * 100000UL / gTps) / count : 0;
 }
 
-static UInt32 SEC_UI Ms100(UInt32 ticks)
+static UInt32 SEC_COLD Ms100(UInt32 ticks)
 {
 	return ticks * 100000UL / gTps;
 }
@@ -217,7 +217,7 @@ void SEC_UI TimingFrame(UInt16 ticks)
 }
 
 // Appends the counts in bins to buf as " a b c", each at most 9999.
-static void SEC_UI Bins(Char *buf, UInt16 *bins, UInt16 n)
+static void SEC_COLD Bins(Char *buf, UInt16 *bins, UInt16 n)
 {
 	UInt16 i;
 
@@ -231,7 +231,7 @@ static void SEC_UI Bins(Char *buf, UInt16 *bins, UInt16 n)
 
 // Logs the free dynamic heap and the free storage heap, and keeps the
 // least dynamic heap seen.
-void SEC_UI TimingHeap(const Char *where)
+void SEC_COLD TimingHeap(const Char *where)
 {
 	UInt32 dynFree = 0, dynMax = 0, stFree = 0, stMax = 0;
 
@@ -248,7 +248,7 @@ Boolean SEC_UI TimingDue(void)
 	return TimGetTicks() - gLastLogTicks >= (UInt32)kLogEvery * gTps;
 }
 
-void SEC_UI TimingMaybeLog(void)
+void SEC_COLD TimingMaybeLog(void)
 {
 	UInt32 ticks, a, w, d, dw, per;
 

@@ -24,7 +24,12 @@
 #define SEC_BOTS    __attribute__((section("bots")))
 // The scripted games, debug builds only.
 #define SEC_SCRIPT  __attribute__((section("detect")))
+// Setup, map parsing and the checksum: run rarely.
+#ifndef SEC_COLD
+#define SEC_COLD    __attribute__((section("cold")))
+#endif
 #else
+#define SEC_COLD
 #define SEC_SCRIPT
 #define SEC_TANK
 #define SEC_SHELLS
@@ -273,7 +278,7 @@ typedef struct GameState {
 // start. A seed of 0 is replaced so the generator never sticks. setup may
 // be NULL for an open game with one player. The map info must be filled in
 // (map_parse) before this.
-void game_init(GameState *s, uint32_t seed, const GameSetup *setup);
+void SEC_COLD game_init(GameState *s, uint32_t seed, const GameSetup *setup);
 
 // Whether players a and b are the same or allied (WinBolo's
 // playersIsAllie). GAME_NO_PLAYER is nobody's ally.
@@ -304,7 +309,7 @@ uint16_t game_random_below(GameState *s, uint16_t n);
 // CRC-32 over the state's fields in big-endian order, and over the terrain
 // with the plane of mines known to the rules (MS_KNOWN). The viewer's seen
 // mines are left out, as they differ from screen to screen.
-uint32_t game_checksum(const GameState *s);
+uint32_t SEC_COLD game_checksum(const GameState *s);
 uint32_t game_terrain_checksum(void);
 
 // Squares whose terrain changed since the last call, for the view. Returns

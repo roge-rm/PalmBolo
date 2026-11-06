@@ -697,7 +697,7 @@ static void tk_explosions_update(GameState *s)
 }
 
 // mapClampToRules: map values past what the rules allow are cut back.
-static void clamp_map(MapInfo *m)
+static void SEC_COLD clamp_map(MapInfo *m)
 {
 	uint8_t i;
 
@@ -727,7 +727,7 @@ static void clamp_map(MapInfo *m)
 	}
 }
 
-void game_init(GameState *s, uint32_t seed, const GameSetup *setup)
+void SEC_COLD game_init(GameState *s, uint32_t seed, const GameSetup *setup)
 {
 	uint8_t *p = (uint8_t *)s;
 	uint16_t i;
@@ -875,12 +875,12 @@ void game_tick(GameState *s, const GameInput *in)
 	g_occ_on = 0;
 }
 
-static uint32_t c8(uint32_t crc, uint8_t v)
+static uint32_t SEC_COLD c8(uint32_t crc, uint8_t v)
 {
 	return util_crc(crc, &v, 1);
 }
 
-static uint32_t c16(uint32_t crc, uint16_t v)
+static uint32_t SEC_COLD c16(uint32_t crc, uint16_t v)
 {
 	uint8_t b[2];
 
@@ -889,13 +889,13 @@ static uint32_t c16(uint32_t crc, uint16_t v)
 	return util_crc(crc, b, 2);
 }
 
-static uint32_t c32(uint32_t crc, uint32_t v)
+static uint32_t SEC_COLD c32(uint32_t crc, uint32_t v)
 {
 	crc = c16(crc, (uint16_t)(v >> 16));
 	return c16(crc, (uint16_t)v);
 }
 
-static uint32_t c_squares(uint32_t crc, const Square *q, uint8_t n)
+static uint32_t SEC_COLD c_squares(uint32_t crc, const Square *q, uint8_t n)
 {
 	uint8_t i;
 
@@ -908,7 +908,7 @@ static uint32_t c_squares(uint32_t crc, const Square *q, uint8_t n)
 	return crc;
 }
 
-uint32_t game_checksum(const GameState *s)
+uint32_t SEC_COLD game_checksum(const GameState *s)
 {
 	uint32_t crc = 0xFFFFFFFFUL;
 	uint8_t i;

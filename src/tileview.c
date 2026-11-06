@@ -80,7 +80,7 @@ static void SEC_UI Fill(Coord x, Coord y, Coord w, Coord h, IndexedColorType c)
 // offscreen window may not have the screen's palette.
 static IndexedColorType gWhite, gBlack;
 
-static void SEC_UI LookupColours(void)
+static void SEC_COLD LookupColours(void)
 {
 	gWhite = ScreenIndex(255, 255, 255);
 	gBlack = ScreenIndex(0, 0, 0);
@@ -115,7 +115,7 @@ static void SEC_UI FreeMask1(WinHandle win)
 
 // A 1-bit offscreen window w by ht native pixels, at double density on a
 // hi-res screen. NULL if there is no memory.
-static WinHandle SEC_UI NewWindow1(Coord w, Coord ht)
+static WinHandle SEC_COLD NewWindow1(Coord w, Coord ht)
 {
 	UInt16 err = 0;
 	WinHandle win = NULL;
@@ -145,7 +145,18 @@ static const RectangleType *gClipB; // DrawRegion's clip while it draws
 // at 2 bits: tiles are drawn into it and copied to the view, and a sprite
 // is erased by copying back what was under it. gDstB is where tiles and
 // mines go, gBgB or the view.
+// gBgB.bits is the view's top left inside gBgMem, which has room for
+// kBgMargin rows more above and below (none if that didn't fit). Rows run
+// on into each other, so a scroll moves gBgB.bits rather than the pixels,
+// a byte for 4 pixels sideways or a row, until it runs out of room and the
+// pixels move back to the middle.
+#ifndef kBgMargin
+#define kBgMargin 32
+#endif
 static BlitWin gBgB;
+static UInt8 *gBgMem;
+static UInt16 gBgRoom;              // gBgB.bits can be up to this far into gBgMem
+static UInt16 gBgO;                 // and is this far
 static BlitWin *gDstB = &gViewB;
 static Boolean gBgValid;
 // The scroll moved gBgB only: DrawRegion leaves the view alone and the
@@ -156,7 +167,7 @@ static Boolean gBgMoved;
 static Boolean gComposing, gCompValid;
 
 // b, if not NULL, gets the sheet's pixels for BlitCell.
-static WinHandle SEC_UI LoadSheet(UInt16 id, UInt16 cells, Boolean oneBit, BlitWin *b)
+static WinHandle SEC_COLD LoadSheet(UInt16 id, UInt16 cells, Boolean oneBit, BlitWin *b)
 {
 	UInt16 err = 0;
 	WinHandle win, old;
@@ -209,7 +220,7 @@ static WinHandle SEC_UI LoadSheet(UInt16 id, UInt16 cells, Boolean oneBit, BlitW
 	return win;
 }
 
-static void SEC_UI FreeSheets(void)
+static void SEC_COLD FreeSheets(void)
 {
 	if (gSheet)
 		WinDeleteWindow(gSheet, false);
@@ -222,9 +233,9 @@ static void SEC_UI FreeSheets(void)
 	gSheet = gSprites = gMasks = NULL;
 	gMask1 = false;
 	gSheetB.bits = gSprB.bits = gMaskB.bits = gViewB.bits = NULL;
-	if (gBgB.bits)
-		MemPtrFree(gBgB.bits);
-	gBgB.bits = NULL;
+	if (gBgMem)
+		MemPtrFree(gBgMem);
+	gBgMem = gBgB.bits = NULL;
 	gBgValid = false;
 	CompFree();
 	gCompValid = false;
@@ -234,7 +245,7 @@ static void SEC_UI FreeSheets(void)
 // with AllOnes, as DrawSprite does, and checks a set mask pixel came out 0
 // and a clear one stayed. Says whether this OS converts a 1-bit source by
 // the fore and back colours.
-static Boolean SEC_UI Mask1Works(void)
+static Boolean SEC_COLD Mask1Works(void)
 {
 	UInt16 err;
 	WinHandle tmp = WinCreateOffscreenWindow(gTs, gTs, gHiRes ? nativeFormat : screenFormat, &err);
@@ -270,7 +281,7 @@ static Boolean SEC_UI Mask1Works(void)
 }
 
 // Returns false if a sheet couldn't be made.
-static Boolean SEC_UI LoadSheets(void)
+static Boolean SEC_COLD LoadSheets(void)
 {
 	FreeSheets();
 	LookupColours();
@@ -363,7 +374,7 @@ Boolean SEC_UI ViewSetInputArea(Boolean closed)
 }
 
 // Takes the window size after the input area changed and keeps the centre.
-void SEC_UI ViewResized(void)
+void SEC_COLD ViewResized(void)
 {
 	FormType *frm = FrmGetActiveForm();
 	RectangleType r;
@@ -410,7 +421,7 @@ static void SEC_UI ClampView(void)
 		gVy = 0;
 }
 
-Boolean SEC_UI ViewOpen(const DeviceInfo *d, const GameState *game)
+Boolean SEC_COLD ViewOpen(const DeviceInfo *d, const GameState *game)
 {
 	Boolean ok;
 
@@ -461,7 +472,7 @@ Boolean SEC_UI ViewOpen(const DeviceInfo *d, const GameState *game)
 	return true;
 }
 
-void SEC_UI ViewClose(void)
+void SEC_COLD ViewClose(void)
 {
 	ViewSetInputArea(false);
 	FreeSheets();
@@ -480,6 +491,43 @@ static void SEC_UI CellRect(UInt16 cell, RectangleType *r)
 static Boolean gSkipBlit;       // ViewTimeFull: time the tile picking alone
 #endif
 
+// Set by DrawRegion when cells can be copied a byte at a time: drawn
+// directly at 2 bits from a 2-bit sheet, 8 pixel tiles, and the clip's
+// left and right on 4 pixel steps.
+static Boolean gFastClip;
+
+// CopyTile for gFastClip and x on a 4 pixel step: the bytes BlitCell
+// would copy, without the call into the draw segment.
+static void SEC_UI FastCell(UInt16 cell, Coord x, Coord y)
+{
+	const RectangleType *c = gClipB;
+	Int16 r0 = 0, r1 = 8, b0 = 0, b1 = 2, r;
+	UInt16 srb = gSheetB.rowBytes, drb = gDstB->rowBytes;
+	const UInt8 *s;
+	UInt8 *d;
+
+	if (c->topLeft.y > y)
+		r0 = c->topLeft.y - y;
+	if (c->topLeft.y + c->extent.y < y + 8)
+		r1 = c->topLeft.y + c->extent.y - y;
+	if (c->topLeft.x > x)
+		b0 = (c->topLeft.x - x) >> 2;
+	if (c->topLeft.x + c->extent.x < x + 8)
+		b1 = (c->topLeft.x + c->extent.x - x) >> 2;
+	if (b0 >= b1 || r0 >= r1)
+		return;
+	s = gSheetB.bits + (UInt16)(((cell >> 4) << 3) + r0) * srb + ((cell & 15) << 1) + b0;
+	d = gDstB->bits + (UInt16)(y + r0) * drb + (x >> 2) + b0;
+	if (b1 - b0 == 2)
+		for (r = r0; r < r1; r++, s += srb, d += drb) {
+			d[0] = s[0];
+			d[1] = s[1];
+		}
+	else
+		for (r = r0; r < r1; r++, s += srb, d += drb)
+			d[0] = s[0];
+}
+
 static void SEC_UI CopyTile(UInt16 cell, Int32 tx, Int32 ty)
 {
 	RectangleType src;
@@ -494,6 +542,10 @@ static void SEC_UI CopyTile(UInt16 cell, Int32 tx, Int32 ty)
 	// does; a 32-bit one is a library call on the 68000.
 	x = (Coord)((Int16)tx * gTs - (Int16)gVx);
 	y = (Coord)((Int16)ty * gTs - (Int16)gVy);
+	if (gFastClip && !(x & 3)) {
+		FastCell(cell, x, y);
+		return;
+	}
 	CellRect(cell, &src);
 	if (gClipB && gSheetB.bits) {
 		BlitCell(&gSheetB, src.topLeft.x, src.topLeft.y, gDstB, x, y, gClipB);
@@ -614,16 +666,16 @@ static Boolean SEC_UI BgUse(void)
 // Makes gBgB for the view's size if the view, the tiles and the sprites
 // are all drawn directly at 2 bits. Its contents are only good once the
 // whole view has been drawn into it. The width is a multiple of 8 so rows
-// stay word aligned for the 68000.
+// stay word aligned for the 68000 while gBgO is even.
 static void SEC_UI BgFit(void)
 {
 	UInt16 rb = (UInt16)gW >> 2;
 
 	if (gBgB.bits && gBgB.w == gW && gBgB.h == gH)
 		return;
-	if (gBgB.bits)
-		MemPtrFree(gBgB.bits);
-	gBgB.bits = NULL;
+	if (gBgMem)
+		MemPtrFree(gBgMem);
+	gBgMem = gBgB.bits = NULL;
 	gBgValid = false;
 #ifdef NO_BG
 	return;
@@ -631,19 +683,64 @@ static void SEC_UI BgFit(void)
 	if (!gViewB.bits || gViewB.depth != 2 || !gSheetB.bits || !gSprB.bits || !gMaskB.bits ||
 	    gMask1 || (gW & 7) || gW > gViewB.w || gH > gViewB.h || gW <= 0 || gH <= 0)
 		return;
-	gBgB.bits = MemPtrNew((UInt32)rb * gH);
+	gBgRoom = (UInt16)(2 * kBgMargin * rb);
+	gBgMem = MemPtrNew((UInt32)rb * gH + gBgRoom);
+	if (!gBgMem) {
+		gBgRoom = 0;
+		gBgMem = MemPtrNew((UInt32)rb * gH);
+		if (!gBgMem)
+			return;
+	}
+	gBgO = gBgRoom / 2;
 	gBgB.rowBytes = rb;
+	gBgB.bits = gBgMem + gBgO;
 	gBgB.depth = 2;
 	gBgB.w = gW;
 	gBgB.h = gH;
 	gBgB.win = NULL;
 }
 
+// Moves gBgB's top left d bytes on in gBgMem (a byte is 4 pixels, a row
+// rowBytes), as ShiftBits would move the pixels back. gBgO stays even so
+// copies from gBgB move longs: past the room, or when the move would make
+// it odd, the pixels move instead. What the move uncovers is left for the caller to draw.
+static void SEC_UI BgMove(Int32 d)
+{
+	// The view is under 64 KB, so a 16-bit multiply does (a 32-bit one is
+	// a library call).
+	Int32 size = (Int32)(UInt16)(gBgB.rowBytes * (UInt16)gH);
+	Int32 o = (Int32)gBgO + d, to, n = size, from = gBgO;
+
+	if (o >= 0 && o <= (Int32)gBgRoom && (o & 1))
+		o += o > (Int32)(gBgRoom / 2) ? -1 : 1;
+	if (o < 0 || o > (Int32)gBgRoom || (o - d) != (Int32)gBgO) {
+		// The old pixels go where the new top left lands: in the middle
+		// when out of room, else a byte off to keep it even.
+		// Bytes that would land outside gBgMem are outside the new view.
+		if (o < 0 || o > (Int32)gBgRoom)
+			o = (Int32)(gBgRoom / 2);
+		if (o > (Int32)gBgRoom)
+			o = gBgRoom;
+		to = o - d;
+		if (to < 0) {
+			from -= to;
+			n += to;
+			to = 0;
+		}
+		if (to + n > (Int32)gBgRoom + size)
+			n = (Int32)gBgRoom + size - to;
+		if (n > 0)
+			BlitMove(gBgMem + to, gBgMem + from, (UInt32)n);
+	}
+	gBgO = (UInt16)o;
+	gBgB.bits = gBgMem + gBgO;
+}
+
 // Copies r (view pixels, inside the view) from gBgB to the view, in whole
 // bytes.
 static void SEC_UI BgToView(const RectangleType *r)
 {
-	UInt16 b0, n, y, vrb = gViewB.rowBytes, brb = gBgB.rowBytes, i;
+	UInt16 b0, n, vrb = gViewB.rowBytes, brb = gBgB.rowBytes;
 	const UInt8 *s;
 	UInt8 *d;
 
@@ -657,12 +754,7 @@ static void SEC_UI BgToView(const RectangleType *r)
 		BlitMove(d, s, (UInt32)n * r->extent.y);
 		return;
 	}
-	for (y = 0; y < (UInt16)r->extent.y; y++, s += brb, d += vrb)
-		if (n > 8)
-			BlitMove(d, s, n);
-		else
-			for (i = 0; i < n; i++)
-				d[i] = s[i];
+	BlitRows(d, vrb, s, brb, n, (UInt16)r->extent.y);
 }
 
 // The art cell picked for each map square drawn lately, by square modulo
@@ -756,6 +848,8 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 		WinSetClip(r);
 	if (bg)
 		gDstB = &gBgB;
+	gFastClip = gClipB && gSheetB.bits && gSheetB.depth == 2 && gDstB->depth == 2 && gTs == 8 &&
+		!(r->topLeft.x & 3) && !(r->extent.x & 3);
 	for (ty = ty0; ty <= ty1; ty++) {
 		up = mapstore_row((uint8_t)(ty - 1));
 		row = mapstore_row((uint8_t)ty);
@@ -780,6 +874,7 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 		CopyTile(PillTile(p), p->x, p->y);
 	}
 	gClipB = NULL;
+	gFastClip = false;
 	if (osClip)
 		WinResetClip();
 	if (bg) {
@@ -905,15 +1000,21 @@ static void SEC_UI ScrollAxis(Int32 d, Boolean horizontal)
 			if (d > 0)
 				vacated.topLeft.y = gH - dist;
 		}
-		// With a whole gBgB only it moves, and the frame copies it to the
-		// view after both axes, which costs less than moving both.
-		if (BgUse() && gBgValid) {
-			ShiftBits(&gBgB, horizontal, d > 0, dist);
-			gBgMoved = true;
+		// gBgB moves by its top left. With a whole gBgB, after a sideways
+		// move the frame copies all of it to the view once both axes are
+		// done (gBgMoved), which costs less than moving the view's bits a
+		// byte; an up or down move alone moves the view's rows and
+		// DrawRegion copies the strip.
+		if (BgUse()) {
+			Int32 rows = (Int32)(UInt16)((UInt16)dist * gBgB.rowBytes);
+
+			BgMove(horizontal ? (d > 0 ? dist >> 2 : -(dist >> 2)) : (d > 0 ? rows : -rows));
+			if (gBgValid && (horizontal || gBgMoved))
+				gBgMoved = true;
+			else
+				ShiftBits(&gViewB, horizontal, d > 0, dist);
 		} else {
 			ShiftBits(&gViewB, horizontal, d > 0, dist);
-			if (BgUse())
-				ShiftBits(&gBgB, horizontal, d > 0, dist);
 		}
 		DrawRegion(&vacated);
 		return;
@@ -1493,7 +1594,7 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 // Debug: redraws the whole frame and counts the view bytes that changed,
 // which a correct partial frame leaves at 0. 0xFFFF if the view isn't
 // drawn directly.
-UInt16 SEC_UI ViewCheck(void)
+UInt16 SEC_COLD ViewCheck(void)
 {
 	UInt16 wb = (UInt16)(((UInt16)gW * gViewB.depth) >> 3), y, x, diff = 0;
 	UInt8 *keep, *p;
@@ -1520,7 +1621,7 @@ UInt16 SEC_UI ViewCheck(void)
 
 #if defined(DEBUG) && defined(SCROLL_BENCH)
 // Debug: times the parts of a scroll 50 times each, then redraws.
-void SEC_UI ViewScrollBench(void)
+void SEC_COLD ViewScrollBench(void)
 {
 	UInt32 t[16], t0;
 	UInt16 i, j, rb = gViewB.rowBytes;
@@ -1547,7 +1648,12 @@ void SEC_UI ViewScrollBench(void)
 	for (j = 0; j < 16; j++) {
 		gSkipBlit = j == 10 || j == 11;
 		t0 = TimGetTicks();
+#ifdef SCROLL_BENCH_ONE
+		// For the PC sampler: only part SCROLL_BENCH_ONE, 20000 times.
+		for (i = 0; i < (j == SCROLL_BENCH_ONE ? 20000U : 0); i++)
+#else
 		for (i = 0; i < 50; i++)
+#endif
 			switch (j) {
 			case 10: DrawRegion(&col); break;
 			case 11: DrawRegion(&row); break;
@@ -1583,7 +1689,7 @@ void SEC_UI ViewScrollBench(void)
 #ifdef DEBUG
 // Draws the whole view count times and logs the average, since one redraw
 // is shorter than a system tick.
-void SEC_UI ViewTimeFull(UInt16 count)
+void SEC_COLD ViewTimeFull(UInt16 count)
 {
 	UInt16 i;
 	UInt32 t0, t1;

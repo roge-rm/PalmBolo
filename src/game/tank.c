@@ -8,6 +8,14 @@
 #include "mapstore.h"
 #include "util.h"
 
+#ifdef TICK_PARTS
+// Debug: the Palm build times the parts of a tank's update.
+extern void tick_part(uint8_t n);
+#define TP(n) tick_part(n)
+#else
+#define TP(n) ((void)0)
+#endif
+
 // mapGetSpeed and mapGetTurnRate by terrain 0..15; deep sea is separate.
 // On a boat every square counts as boat.
 static const uint8_t kSpeed[16] = {
@@ -936,6 +944,7 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 	int16_t dx, dy;
 	int8_t b;
 
+	TP(10);
 	// tankCheckGroundClear: a tank on something solid is pushed towards
 	// the nearer edge and slowed; otherwise tanks on top of it push it
 	// away.
@@ -954,6 +963,7 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 			k->obstructed = 1;
 		}
 	}
+	TP(11);
 	{
 		uint8_t sp, tr;
 
@@ -961,6 +971,7 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 		turn(k, tr, in->keys);
 		accel(k, (int16_t)(sp * 4), in->keys);
 	}
+	TP(12);
 	{
 		uint16_t nx = k->x, ny = k->y;
 
@@ -968,6 +979,7 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 		if (k->x != nx || k->y != ny)
 			k->obstructed = 1;
 	}
+	TP(13);
 
 	// Moves by whole world units in one of 16 directions once enough speed
 	// has built up.
@@ -995,13 +1007,16 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 		if (k->bumpY > -2 && k->bumpY < 2)
 			k->bumpY = 0;
 	}
+	TP(14);
 	// Stuck only if it moved but the buildings held it in the same
 	// pixel since the start of the tick.
 	if (nudge(s, k) && moved)
 		k->obstructed = ((k->x ^ ox) & 0xFFF0) == 0 && ((k->y ^ oy) & 0xFFF0) == 0;
 	else if (moved)
 		k->obstructed = 0;
+	TP(15);
 	pills_pickup(s, t);
+	TP(16);
 
 	if (k->boat) {
 		boat_move(s, t, bmx, bmy);
@@ -1123,8 +1138,10 @@ void SEC_TANK tank_update(GameState *s, uint8_t t, const GameInput *in)
 		uint8_t mx = (uint8_t)(k->x >> 8), my = (uint8_t)(k->y >> 8);
 
 		drive(s, t, in);
+		TP(17);
 		g_mines_near(s, t, mx, my, util_dir16(k->angle));
 	}
 	if (in->keys & IN_MINE)
 		lay_mine(s, k);
+	TP(18);
 }

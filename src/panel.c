@@ -92,7 +92,7 @@ static const UInt8 col[C_COUNT][3] = {
 static const UInt8 grey[C_COUNT] = {255, 68, 119, 187, 34, 0};
 
 // Colour for terrain class c on a screen with colour, grey or one bit.
-static void SEC_UI LookupColours(Boolean hasColor)
+static void SEC_COLD LookupColours(Boolean hasColor)
 {
 	UInt16 i;
 
@@ -446,7 +446,7 @@ void SEC_UI PanelRebuild(void)
 
 // ---- layout ----
 
-Coord SEC_UI PanelLayout(Coord w)
+Coord SEC_COLD PanelLayout(Coord w)
 {
 	gW = w;
 	gHiRes = ScreenHiRes();
@@ -478,7 +478,7 @@ Boolean SEC_UI PanelToggle(void)
 	return true;
 }
 
-void SEC_UI PanelOpen(const DeviceInfo *d, const GameState *game)
+void SEC_COLD PanelOpen(const DeviceInfo *d, const GameState *game)
 {
 	UInt16 err;
 	UInt16 i;
@@ -517,7 +517,7 @@ void SEC_UI PanelOpen(const DeviceInfo *d, const GameState *game)
 	OvBuild();
 }
 
-void SEC_UI PanelClose(void)
+void SEC_COLD PanelClose(void)
 {
 	if (gOv)
 		WinDeleteWindow(gOv, false);

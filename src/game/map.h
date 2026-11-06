@@ -10,6 +10,15 @@
 
 #include <stdint.h>
 
+// The parser runs once a game, so it goes in the Palm's "cold" segment.
+#ifndef SEC_COLD
+#ifdef __palmos__
+#define SEC_COLD __attribute__((section("cold")))
+#else
+#define SEC_COLD
+#endif
+#endif
+
 #define MAP_SIZE        256
 #define MAP_MAX_PILLS   16
 #define MAP_MAX_BASES   16
@@ -102,7 +111,7 @@ typedef struct MapMemory {
 	const uint8_t *data;
 	uint32_t len, pos;
 } MapMemory;
-void map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32_t len);
+void SEC_COLD map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32_t len);
 
 // Reads a .map file into info and the map store. The store is cleared to
 // deep sea first. As in WinBolo the map is then centred and pills, bases
@@ -111,8 +120,8 @@ void map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *data, uint32
 // road and any mine is removed. Returns MAP_OK or
 // an error code, and never reads or writes outside the arrays. On an error
 // the contents are unspecified (info is zeroed).
-int map_parse(MapInfo *info, MapSource *ms);
+int SEC_COLD map_parse(MapInfo *info, MapSource *ms);
 
-const char *map_error_text(int err);
+const char *SEC_COLD map_error_text(int err);
 
 #endif
