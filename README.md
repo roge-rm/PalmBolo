@@ -2,15 +2,15 @@
 
 Bolo for Palm OS, based on the game rules of WinBolo 2. Drive a tank, capture bases and pillboxes, and send your builder out to build roads, walls, boats and pillboxes.
 
-Version 0.7.0 is single-player against up to 7 bots. Network play over infrared, Bluetooth and Wi-Fi is coming later.
+Version 0.8.0 is single-player against up to 7 bots. Network play over infrared, Bluetooth and Wi-Fi is coming later.
 
 ## Devices
 
-Palm OS 3.0 and up, one build for all of them, from 160×160 mono to 320×480 colour. So far it's only been tested on a Tungsten TX in the Frond emulator.
+Palm OS 3.0 and up, one build for all of them, from 160×160 mono to 320×480 colour. So far it's been tested in the Frond emulator on a Tungsten TX, a Palm IIIx (runs at full speed) and a Clié TG50 for the keyboard.
 
 ## Install
 
-Download `PalmBolo-0.7.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
+Download `PalmBolo-0.8.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
 
 Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
