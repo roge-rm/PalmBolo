@@ -31,6 +31,14 @@ enum { BK_BASE = 1, BK_PILL = 2, BK_TANK = 3 };     // kinds for Bot.skip
 #define BASE_SHOOT_RANGE 1500
 #define FULL_SPEED      64      // quarters a tick, the road's top speed
 #define MINE_COST       24
+// A bot drives in full on one tick in BOT_EVERY, by slot, and at once when
+// it is hit, its foe dies or it reaches a new square. In between it steers
+// by what it decided. Checks every 24 and 8 ticks fall on its full ticks,
+// so BOT_EVERY divides 8.
+#define BOT_EVERY       4
+// SB_TIME: the last full look counted down modeTime, so the ticks after
+// it do too.
+enum { SB_ON = 1, SB_KEEP = 2, SB_SEA = 4, SB_FIRE = 8, SB_TIME = 16 };        // Bot.steerBits
 
 // Per level: ticks between looks round, ticks before firing at a new
 // foe, most aim error (4/32 bradians), lead on a moving tank (halves),
@@ -452,29 +460,78 @@ static void SEC_BOTS search_begin(GameState *s, uint8_t t)
 	b->want = 0;
 }
 
-// One cell being expanded, the search's fields copied out, as gcc reloads
-// them after every byte store otherwise.
+// The search's fields for expanding cells, copied out once a step, as gcc
+// reloads them after every byte store otherwise.
 typedef struct Expand {
 	GameState *s;
 	BotSearch *q;
 	uint8_t *cell;
-	Rows rc;
-	int8_t lx, ly;
-	uint8_t ox, oy, goalX, goalY, boat, far, ex, ey, bestH;
+	uint8_t ox, oy, goalX, goalY, boat, hidden, far, ex, ey, bestH, near;
+	uint8_t inner;      // the window is clear of the map's edge band
 } Expand;
 
-// A new or zone cell n (v its nibble at p) seen from the cell being
-// expanded: queued if it can be crossed. Returns as expand_dir.
-static uint8_t SEC_BOTS expand_new(Expand *e, uint16_t n, int8_t nx, int8_t ny, uint8_t d, uint8_t v,
-	uint8_t *p)
+static void SEC_BOTS expand_init(Expand *e, GameState *s)
 {
-	uint8_t c, h;
+	BotSearch *q = &s->search;
+	uint8_t gx, gy;
 
-	c = cost_rows(e->s, &e->rc, (uint8_t)(e->ox + nx), (uint8_t)(e->oy + ny), e->boat);
-	if (c == 0) {
-		*p |= (uint8_t)((n & 1) ? 0xF0 : 0x0F);
-		return 0;
+	e->s = s;
+	e->q = q;
+	e->cell = q->cell;
+	e->ox = q->ox;
+	e->oy = q->oy;
+	e->goalX = q->goalX;
+	e->goalY = q->goalY;
+	e->boat = q->boat;
+	e->hidden = s->hiddenMines;
+	e->bestH = q->bestH;
+	e->near = q->near;
+	gx = (uint8_t)(e->goalX - e->ox);
+	gy = (uint8_t)(e->goalY - e->oy);
+	e->far = gx >= BOT_WIN || gy >= BOT_WIN;
+	e->ex = gx >= BOT_WIN ? (gx < 144 ? BOT_WIN - 1 : 0) : 255;
+	e->ey = gy >= BOT_WIN ? (gy < 144 ? BOT_WIN - 1 : 0) : 255;
+	e->inner = e->ox > MAP_EDGE_LOW + 1 && e->ox + BOT_WIN - 1 < MAP_EDGE_HIGH - 1 &&
+		e->oy > MAP_EDGE_LOW + 1 && e->oy + BOT_WIN - 1 < MAP_EDGE_HIGH - 1;
+}
+
+// Land a tank crosses, by terrain 0 to 9 (no mines): 0 for walls, else
+// 1 plus the ticks it waits in the queue.
+static const uint8_t kLandCost[10] = { 0, 6, 5, 5, 1, 3, 5, 1, 0, 1 };
+
+// Window cell n, new to the search or new in a pill's reach (v, its nibble
+// at p), seen in direction d from the cell being expanded: queued if it can
+// be crossed, at the cost cost_rows gives. Returns as expand_dir.
+static uint8_t SEC_BOTS expand_new(Expand *e, uint16_t n, uint8_t d, uint8_t v, uint8_t *p)
+{
+	uint8_t nx = (uint8_t)(n & (BOT_WIN - 1)), ny = (uint8_t)(n >> 5);
+	uint8_t x = (uint8_t)(e->ox + nx), y = (uint8_t)(e->oy + ny), c, t, h;
+	const uint8_t *row;
+
+	if (!e->inner && (x <= MAP_EDGE_LOW + 1 || x >= MAP_EDGE_HIGH - 1 ||
+	    y <= MAP_EDGE_LOW + 1 || y >= MAP_EDGE_HIGH - 1))
+		goto solid;
+	row = mapstore_row(y);
+	t = row[x];
+	if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST) {
+		if (!e->hidden || mapstore_flag(MS_KNOWN, x, y)) {
+			c = MINE_COST;
+			goto queue;
+		}
+		t = (uint8_t)(t - TERRAIN_MINE_ADD);
 	}
+	if (is_wall(t))
+		goto solid;
+	if (e->boat) {
+		c = t == TERRAIN_RIVER || t == TERRAIN_DEEP_SEA || t == TERRAIN_BOAT ? 1 : 2;
+		goto queue;
+	}
+	if (t == TERRAIN_DEEP_SEA || row[x - 1] == TERRAIN_DEEP_SEA || row[x + 1] == TERRAIN_DEEP_SEA ||
+	    mapstore_row((uint8_t)(y - 1))[x] == TERRAIN_DEEP_SEA ||
+	    mapstore_row((uint8_t)(y + 1))[x] == TERRAIN_DEEP_SEA)
+		goto solid;
+	c = t < 10 ? kLandCost[t] : 1;
+queue:
 	if (v == 10)
 		c = (uint8_t)(c + ZONE_WAIT);
 	if (c > BOT_BUCKETS - 1)
@@ -484,70 +541,55 @@ static uint8_t SEC_BOTS expand_new(Expand *e, uint16_t n, int8_t nx, int8_t ny, 
 	*p = (uint8_t)((n & 1) ? (*p & 0x0F) | ((d + 1) << 4) : (*p & 0xF0) | (d + 1));
 	// As cell_h: with the goal out of the window, only cells on the edge
 	// facing it (ex, ey; 255 for none) are taken at their distance.
-	h = cheb((uint8_t)(e->ox + nx), (uint8_t)(e->oy + ny), e->goalX, e->goalY);
+	h = cheb(x, y, e->goalX, e->goalY);
 	if (e->far && nx != e->ex && ny != e->ey)
 		h = (uint8_t)(h > 255 - 32 ? 255 : h + 32);
 	if (h < e->bestH) {
 		e->bestH = h;
 		e->q->bestH = h;
 		e->q->best = n;
-		if (h <= e->q->near)
+		if (h <= e->near)
 			return 2;
 	}
 	return 1;
+solid:
+	*p |= (uint8_t)((n & 1) ? 0xF0 : 0x0F);
+	return 0;
 }
 
-// Tries the neighbour in direction d, dx, dy from the cell. 0 if it is
-// solid or off the window, 1 if not, 2 when it reaches the goal.
-static inline uint8_t SEC_BOTS expand_dir(Expand *e, uint8_t d, int8_t dx, int8_t dy)
+// Tries the neighbour step cells on from cell idx, in direction d. 0 if it
+// is solid, 1 if not, 2 when it reaches the goal. The caller checks it is
+// in the window.
+static inline uint8_t SEC_BOTS expand_dir(Expand *e, uint16_t idx, uint8_t d, int16_t step)
 {
-	int8_t nx = (int8_t)(e->lx + dx), ny = (int8_t)(e->ly + dy);
-	uint8_t v, *p;
-	uint16_t n;
+	uint16_t n = (uint16_t)(idx + step);
+	uint8_t *p = &e->cell[n >> 1], v = (uint8_t)((n & 1) ? *p >> 4 : *p & 15);
 
-	if ((dx < 0 && e->lx == 0) || (dx > 0 && e->lx == BOT_WIN - 1) ||
-	    (dy < 0 && e->ly == 0) || (dy > 0 && e->ly == BOT_WIN - 1))
-		return 0;
-	n = (uint16_t)(nx + ny * BOT_WIN);
-	p = &e->cell[n >> 1];
-	v = (uint8_t)((n & 1) ? *p >> 4 : *p & 15);
 	if (v == 15)
 		return 0;
 	if (v != 0 && v != 10)
 		return 1;
-	return expand_new(e, n, nx, ny, d, v, p);
+	return expand_new(e, n, d, v, p);
 }
 
 // Expands one cell, straight neighbours first, then each diagonal with
 // both corners beside it open. Returns 1 when the goal is reached. The
-// directions are written out, so each has its offsets as constants.
-static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
+// directions are written out, so each has its step as a constant.
+static uint8_t SEC_BOTS expand(Expand *e, uint16_t idx)
 {
-	Expand e;
-	uint8_t gx, gy, o0, o2, o4, o6;
+	uint8_t lx = (uint8_t)(idx & (BOT_WIN - 1)), ly = (uint8_t)(idx >> 5);
+	uint8_t w = lx > 0, east = lx < BOT_WIN - 1, north = ly > 0, south = ly < BOT_WIN - 1;
+	uint8_t o0 = 0, o2 = 0, o4 = 0, o6 = 0;
 
-	e.s = s;
-	e.q = &s->search;
-	e.cell = e.q->cell;
-	e.lx = (int8_t)(idx & (BOT_WIN - 1));
-	e.ly = (int8_t)(idx >> 5);
-	e.ox = e.q->ox;
-	e.oy = e.q->oy;
-	e.goalX = e.q->goalX;
-	e.goalY = e.q->goalY;
-	e.boat = e.q->boat;
-	e.bestH = e.q->bestH;
-	gx = (uint8_t)(e.goalX - e.ox);
-	gy = (uint8_t)(e.goalY - e.oy);
-	e.far = gx >= BOT_WIN || gy >= BOT_WIN;
-	e.ex = gx >= BOT_WIN ? (gx < 144 ? BOT_WIN - 1 : 0) : 255;
-	e.ey = gy >= BOT_WIN ? (gy < 144 ? BOT_WIN - 1 : 0) : 255;
-	rows_init(&e.rc, (uint8_t)(e.oy + e.ly - 2));
-	if ((o0 = expand_dir(&e, 0, 0, -1)) == 2 || (o2 = expand_dir(&e, 2, 1, 0)) == 2 ||
-	    (o4 = expand_dir(&e, 4, 0, 1)) == 2 || (o6 = expand_dir(&e, 6, -1, 0)) == 2)
+	if ((north && (o0 = expand_dir(e, idx, 0, -BOT_WIN)) == 2) ||
+	    (east && (o2 = expand_dir(e, idx, 2, 1)) == 2) ||
+	    (south && (o4 = expand_dir(e, idx, 4, BOT_WIN)) == 2) ||
+	    (w && (o6 = expand_dir(e, idx, 6, -1)) == 2))
 		return 1;
-	return (o0 && o2 && expand_dir(&e, 1, 1, -1) == 2) || (o2 && o4 && expand_dir(&e, 3, 1, 1) == 2) ||
-		(o4 && o6 && expand_dir(&e, 5, -1, 1) == 2) || (o6 && o0 && expand_dir(&e, 7, -1, -1) == 2);
+	return (o0 && o2 && expand_dir(e, idx, 1, 1 - BOT_WIN) == 2) ||
+		(o2 && o4 && expand_dir(e, idx, 3, 1 + BOT_WIN) == 2) ||
+		(o4 && o6 && expand_dir(e, idx, 5, BOT_WIN - 1) == 2) ||
+		(o6 && o0 && expand_dir(e, idx, 7, -1 - BOT_WIN) == 2);
 }
 
 static void SEC_BOTS trace_begin(BotSearch *q)
@@ -595,7 +637,11 @@ static void SEC_BOTS search_step(GameState *s, uint8_t budget)
 {
 	BotSearch *q = &s->search;
 	uint16_t units = (uint16_t)budget * 4;
+	Expand e;
 
+	if (!q->who)
+		return;
+	expand_init(&e, s);
 	while (units && q->who) {
 		if (q->phase == 2) {
 			// A pill out of the window costs nothing.
@@ -624,7 +670,7 @@ static void SEC_BOTS search_step(GameState *s, uint8_t budget)
 			q->free = sl;
 			q->count--;
 			units = (uint16_t)(units > 5 ? units - 5 : 0);
-			if (expand(s, q->queue[sl]) || ++q->cur >= BOT_MAX_CELLS)
+			if (expand(&e, q->queue[sl]) || ++q->cur >= BOT_MAX_CELLS)
 				trace_begin(q);
 			continue;
 		}
@@ -1338,18 +1384,28 @@ static uint8_t SEC_BOTS sea_ahead(const Tank *k)
 		TERRAIN_DEEP_SEA;
 }
 
-// Turns towards want (within dead) and makes for speed tsp (quarters),
-// slowing for a sharp turn unless keep is set.
-static void SEC_BOTS steer(const Tank *k, uint16_t want, int16_t tsp, int16_t dead, uint8_t keep,
-	GameInput *in)
+// The keys for what steer last set, from the tank as it is now: turns
+// towards the heading within the dead zone and makes for the speed,
+// slowing for a sharp turn unless kept.
+static void SEC_BOTS steer_keys(const Tank *k, const Bot *b, GameInput *in)
 {
-	int16_t d = turn_to(want, k->angle), ad = d < 0 ? (int16_t)-d : d;
+	int16_t d, ad, tsp = b->tsp, dead = b->dead;
 
+	if (b->sightWant) {
+		if (k->sightLen < b->sightWant)
+			in->keys |= IN_SIGHT_FAR;
+		else if (k->sightLen > b->sightWant)
+			in->keys |= IN_SIGHT_NEAR;
+	}
+	if (!(b->steerBits & SB_ON))
+		return;
+	d = turn_to((uint16_t)(((uint16_t)b->wantHi << 8) | b->wantLo), k->angle);
+	ad = d < 0 ? (int16_t)-d : d;
 	if (d > dead)
 		in->keys |= IN_RIGHT;
 	else if (d < -dead)
 		in->keys |= IN_LEFT;
-	if (keep) {
+	if (b->steerBits & SB_KEEP) {
 		;
 	} else if (!k->boat) {
 		if (ad > 2048)
@@ -1359,12 +1415,27 @@ static void SEC_BOTS steer(const Tank *k, uint16_t want, int16_t tsp, int16_t de
 	} else if (ad > 2048 && tsp > 16) {
 		tsp = 16;
 	}
-	if (tsp && sea_ahead(k))
+	if (b->steerBits & SB_SEA)
 		tsp = 0;
 	if (k->speed < tsp)
 		in->keys |= IN_FASTER;
 	else if (k->speed > tsp + 3)
 		in->keys |= IN_SLOWER;
+}
+
+// Turns towards want (within dead, at most 255) and makes for speed tsp
+// (quarters, 0 to 255), slowing for a sharp turn unless keep is set. Kept
+// for the ticks to the next full look; deep sea ahead stops it till then.
+static void SEC_BOTS steer(const Tank *k, Bot *b, uint16_t want, int16_t tsp, int16_t dead, uint8_t keep,
+	GameInput *in)
+{
+	b->wantHi = (uint8_t)(want >> 8);
+	b->wantLo = (uint8_t)want;
+	b->tsp = (uint8_t)tsp;
+	b->dead = (uint8_t)dead;
+	b->steerBits = (uint8_t)((b->steerBits & (SB_FIRE | SB_TIME)) | SB_ON | (keep ? SB_KEEP : 0) |
+		(tsp && sea_ahead(k) ? SB_SEA : 0));
+	steer_keys(k, b, in);
 }
 
 // Whether the point px, py (world units, from the tank) lies between the
@@ -1414,17 +1485,14 @@ static uint8_t SEC_BOTS line_clear(const GameState *s, const Tank *k, uint16_t x
 	return 1;
 }
 
-// One step of the gunsight towards range units.
-static void SEC_BOTS sight(const Tank *k, uint16_t range, GameInput *in)
+// Steps the gunsight towards range units, from now to the next full look.
+static void SEC_BOTS sight(Bot *b, uint16_t range)
 {
 	uint16_t want = (uint16_t)(range / 128 + 2);
 
 	if (want > R_GUNSIGHT_MAX)
 		want = R_GUNSIGHT_MAX;
-	if (k->sightLen < want)
-		in->keys |= IN_SIGHT_FAR;
-	else if (k->sightLen > want)
-		in->keys |= IN_SIGHT_NEAR;
+	b->sightWant = (uint8_t)want;
 }
 
 // Fires when facing aim closely enough for something at range.
@@ -1452,6 +1520,19 @@ static void SEC_BOTS fire(GameState *s, uint8_t t, uint16_t aim, uint16_t range,
 	}
 	in->keys |= IN_FIRE;
 	roll_aim(s, b);
+}
+
+// fire, and fires the same way when it has reloaded before the next full
+// look.
+static void SEC_BOTS shoot(GameState *s, uint8_t t, uint16_t aim, uint16_t range, GameInput *in)
+{
+	Bot *b = &s->bots[t];
+
+	b->fireHi = (uint8_t)(aim >> 8);
+	b->fireLo = (uint8_t)aim;
+	b->fireRange = (uint8_t)(range > 4095 ? 255 : range >> 4);
+	b->steerBits |= SB_FIRE;
+	fire(s, t, aim, range, in);
 }
 
 // Where it aims: a foe in range, the pill or base of its goal in range.
@@ -1549,6 +1630,15 @@ static void SEC_BOTS next_square(const GameState *s, const Tank *k, uint8_t *x, 
 	*y = (uint8_t)(ty + sy);
 }
 
+// A tick off the mode's time, as the modes count it: escaping while it
+// navigates, a run and a veer while they go on. Returns the ticks left.
+static inline uint8_t SEC_BOTS count_down(Bot *b)
+{
+	if (b->modeTime)
+		b->modeTime--;
+	return b->modeTime;
+}
+
 static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 {
 	const Tank *k = &s->tanks[t];
@@ -1558,24 +1648,26 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	uint16_t want;
 
 	if (b->goal == BG_NONE) {
-		steer(k, k->angle, 0, 128, 0, in);
+		steer(k, b, k->angle, 0, 128, 0, in);
 		return;
 	}
 	if (b->mode == BM_ESCAPE) {
-		if (--b->modeTime == 0) {
+		if (count_down(b) == 0) {
 			b->mode = BM_NAV;
 			b->want = 1;
+		} else {
+			b->steerBits |= SB_TIME;
 		}
-		steer(k, (uint16_t)((uint16_t)(b->veer & 31) << 8), 24, 128, 0, in);
+		steer(k, b, (uint16_t)((uint16_t)(b->veer & 31) << 8), 24, 128, 0, in);
 		return;
 	}
 	gd = cheb(tx, ty, b->goalX, b->goalY);
 	stopAt = b->goal == BG_REFUEL || b->goal == BG_PATROL || b->goal == BG_MAN;
 	if (gd == 0 && (stopAt || b->goal == BG_BASE || b->goal == BG_PILL)) {
 		// Waiting at a pill's stage with no clear shot counts as failing.
-		if (b->goal == BG_PILL && mod32_16(s->tick + t, 25) == 0)
+		if (b->goal == BG_PILL && mod32_16(s->tick + t, 24) == 0)
 			b->fails++;
-		steer(k, k->angle, 0, 128, 0, in);
+		steer(k, b, k->angle, 0, 128, 0, in);
 		return;
 	}
 	if (b->pathX != b->goalX || b->pathY != b->goalY)
@@ -1632,8 +1724,8 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 		tsp = 0;
 	want = util_angle(k->x, k->y, mid(px), mid(py));
 	turn = turn_to(want, k->angle);
-	// Stuck: no new square in 75 ticks while facing where it means to go.
-	if (tsp > 0 && mod32_16(s->tick + t, 25) == 0) {
+	// Stuck: no new square in 72 ticks while facing where it means to go.
+	if (tsp > 0 && mod32_16(s->tick + t, 24) == 0) {
 		if (tx != b->lastX || ty != b->lastY) {
 			b->stuck = 0;
 		} else if (turn < 1024 && turn > -1024 && ++b->stuck >= 3) {
@@ -1642,12 +1734,15 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 			b->modeTime = 40;
 			b->veer = (uint8_t)((k->angle >> 8) + 12 + rnd(s, 9));
 			b->wayN = 0;
+			// Away at once, counting from the next tick.
+			b->steerBits |= SB_TIME;
+			steer(k, b, (uint16_t)((uint16_t)(b->veer & 31) << 8), 24, 128, 0, in);
 			return;
 		}
 		b->lastX = tx;
 		b->lastY = ty;
 	}
-	steer(k, want, tsp, 128, 0, in);
+	steer(k, b, want, tsp, 128, 0, in);
 	bridge(s, t, in);
 }
 
@@ -1681,18 +1776,19 @@ static void SEC_BOTS pill_attack(GameState *s, uint8_t t, GameInput *in)
 		b->modeTime = 200;
 	}
 	if (b->mode == BM_RUN) {
-		if (range >= PILL_VEER_RANGE && --b->modeTime && k->armour >= kLevel[b->level].retreat) {
+		if (range >= PILL_VEER_RANGE && count_down(b) && k->armour >= kLevel[b->level].retreat) {
 			uint16_t a = (uint16_t)((aim + (int8_t)b->aimErr * 4) & (ANGLE_MAX - 1));
 
-			sight(k, range, in);
-			steer(k, a, FULL_SPEED, 8, 1, in);
+			b->steerBits |= SB_TIME;
+			sight(b, range);
+			steer(k, b, a, FULL_SPEED, 8, 1, in);
 			if (range <= GUN_RANGE + 160)
-				fire(s, t, a, range, in);
+				shoot(s, t, a, range, in);
 			return;
 		}
 		start_veer(s, b, aim);
 	}
-	if (range > R_PILL_RANGE + 256 || --b->modeTime == 0) {
+	if (range > R_PILL_RANGE + 256 || count_down(b) == 0) {
 		uint8_t gx, gy;
 
 		b->mode = BM_NAV;
@@ -1704,7 +1800,8 @@ static void SEC_BOTS pill_attack(GameState *s, uint8_t t, GameInput *in)
 		navigate(s, t, in);
 		return;
 	}
-	steer(k, (uint16_t)((uint16_t)b->veer << 8), FULL_SPEED, 64, 1, in);
+	b->steerBits |= SB_TIME;
+	steer(k, b, (uint16_t)((uint16_t)b->veer << 8), FULL_SPEED, 64, 1, in);
 }
 
 static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
@@ -1712,7 +1809,7 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 	const Tank *k = &s->tanks[t];
 	Bot *b = &s->bots[t];
 	uint16_t ax = 0, ay = 0, range = R_GUNSIGHT_MAX * 128, aim;
-	uint8_t what;
+	uint8_t what, tx, ty, hit;
 
 	in->keys = 0;
 	in->opts = 0;
@@ -1725,14 +1822,13 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 			b->mode = BM_NAV;
 			b->foe = NO_TANK;
 		}
+		// Nothing kept from before it died, so it doesn't fire along its
+		// old aim when it comes back.
+		b->steerBits = 0;
+		b->sightWant = 0;
 		if (s->search.who == t + 1)
 			s->search.who = 0;
 		return;
-	}
-	if (k->boat != b->boat) {
-		b->boat = k->boat;
-		b->wayN = 0;
-		b->want = 1;
 	}
 	if (b->react)
 		b->react--;
@@ -1740,13 +1836,38 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 		b->buildWait--;
 	if (b->skipTime && --b->skipTime == 0)
 		b->skip = 0;
+	if (b->think)
+		b->think--;
+	tx = (uint8_t)(k->x >> 8);
+	ty = (uint8_t)(k->y >> 8);
+	hit = k->armour < b->lastArmour;
+	b->lastArmour = k->armour;
+	// Between full looks it keeps steering by the last one, unless it was
+	// hit, reached a new square, got on or off a boat or its foe died.
+	if (((s->tick + t) & (BOT_EVERY - 1)) && !hit && tx == b->lookX && ty == b->lookY &&
+	    k->boat == b->boat &&
+	    (b->foe == NO_TANK || (!s->tanks[b->foe].destroyed && !s->tanks[b->foe].deathWait))) {
+		if (b->steerBits & SB_TIME)
+			count_down(b);
+		steer_keys(k, b, in);
+		if ((b->steerBits & SB_FIRE) && !k->reload)
+			fire(s, t, (uint16_t)(((uint16_t)b->fireHi << 8) | b->fireLo), (uint16_t)(b->fireRange << 4), in);
+		return;
+	}
+	b->lookX = tx;
+	b->lookY = ty;
+	b->steerBits = 0;
+	b->sightWant = 0;
+	if (k->boat != b->boat) {
+		b->boat = k->boat;
+		b->wayN = 0;
+		b->want = 1;
+	}
 	if (b->goal == BG_MAN && s->men[t].inTank)
 		b->think = 0;
-	if (b->think) {
-		b->think--;
-	} else {
+	if (!b->think) {
 		think(s, t, in);
-		b->think = level_think(b->level);
+		b->think = (uint8_t)(level_think(b->level) + 1);
 	}
 	if (b->goal == BG_PILL && s->map.pills[b->target].armour == 0 &&
 	    (b->goalX != s->map.pills[b->target].x || b->goalY != s->map.pills[b->target].y))
@@ -1773,10 +1894,10 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 	what = aim_at(s, t, &ax, &ay);
 	if (what != AIM_NONE) {
 		range = wdist(k->x, k->y, ax, ay);
-		if (mod32_16(s->tick + t, 5) == 0)
+		if (((s->tick + t) & (BOT_EVERY - 1)) == 0)
 			b->clear = line_clear(s, k, ax, ay);
 	}
-	sight(k, range, in);
+	sight(b, range);
 	if (what == AIM_NONE || !b->clear) {
 		navigate(s, t, in);
 		return;
@@ -1786,7 +1907,7 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 	// it goes on its way, shooting when it faces the target.
 	if (!k->boat && !cost(s, (uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8), 0)) {
 		navigate(s, t, in);
-		fire(s, t, aim, range, in);
+		shoot(s, t, aim, range, in);
 		return;
 	}
 	switch (what) {
@@ -1795,13 +1916,13 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 		// it faces the foe.
 		if (k->boat) {
 			navigate(s, t, in);
-			fire(s, t, aim, range, in);
+			shoot(s, t, aim, range, in);
 			break;
 		}
 		// Closes in when far, else holds and shoots; stays put on a base
 		// it is refuelling at.
-		steer(k, aim, range > 1024 && b->goal != BG_REFUEL ? 24 : 0, 8, 0, in);
-		fire(s, t, aim, range, in);
+		steer(k, b, aim, range > 1024 && b->goal != BG_REFUEL ? 24 : 0, 8, 0, in);
+		shoot(s, t, aim, range, in);
 		break;
 	case AIM_PILL:
 		// In reach of the pill on the way to a stage: runs in from here if
@@ -1812,8 +1933,8 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 			navigate(s, t, in);
 		break;
 	default:
-		steer(k, aim, 0, 8, 0, in);
-		fire(s, t, aim, range, in);
+		steer(k, b, aim, 0, 8, 0, in);
+		shoot(s, t, aim, range, in);
 		break;
 	}
 }

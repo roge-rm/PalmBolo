@@ -20,7 +20,13 @@ static UInt8 gBuild, gBuildX, gBuildY;  // builder order to send next tick
 #ifdef DEBUG
 static Boolean gTimedFull;
 static UInt32 gStartTicks;  // when Start was tapped
-static UInt16 gDropped;     // catch-ups that hit the limit and dropped time
+static UInt16 gDropped;     // passes that fell over a frame behind and dropped time
+#endif
+
+// FIXED_SEED=N starts every new game from seed N, for measured runs that
+// have to start the same game. Debug builds only.
+#if defined(FIXED_SEED) && !defined(DEBUG)
+#error FIXED_SEED is for debug builds
 #endif
 
 // The app's own settings, kept in its preferences.
@@ -210,8 +216,10 @@ void AppOpenMap(UInt16 index, const Char *name)
 					if (i != j && (i < half) == (j < half))
 						setup.allies[i] = (UInt16)(setup.allies[i] | (1 << j));
 		LOG(("start: map loaded %lu sys ticks after Start", TimGetTicks() - gStartTicks));
-#ifdef DRAW_BENCH
+#if defined(DRAW_BENCH)
 		game_init(&gGame, 4321, &setup);
+#elif defined(FIXED_SEED)
+		game_init(&gGame, FIXED_SEED, &setup);
 #else
 		game_init(&gGame, TimGetSeconds(), &setup);
 #endif
@@ -385,8 +393,12 @@ static Boolean HandleEvent(EventType *e)
 		gMenuOpen = false;
 		gDirty = gFull = true;
 	}
-	if (SysHandleEvent(e))
+	MARK(LP_HANDLE);
+	if (SysHandleEvent(e)) {
+		MARK(LP_SYS);
 		return true;
+	}
+	MARK(LP_SYS);
 	if (MenuHandleEvent(0, e, &err))
 		return true;
 
@@ -686,6 +698,92 @@ void tick_part(uint8_t n)
 }
 #endif
 
+// Frame pacing. Game ticks run on a 50 a second clock and a frame is drawn
+// after every gStride half ticks of them: an odd stride takes turns at one
+// tick more and one less, so frames come at a near even rhythm. A device
+// that falls behind keeps at most two frames' or 10 ticks' time owed and
+// drops the rest: the game runs slower, every tick still runs in order.
+// Every kPaceTicks ticks the stride is set to the fewest that keep up,
+// from the busy time (all but the waits for ticks to come due) split into
+// drawing and the rest. Full repaints and debug logs are left out.
+#define kPaceTicks  64
+// At most 4 ticks a frame: when the ticks alone nearly fill the time, more
+// costs a lot of smoothness for little speed.
+#define kMaxStride  8                   // half ticks
+static UInt8 gStride = 4;
+static UInt8 gStrideOdd;                // the half tick carried to the next frame
+static Boolean gPaceNew = true;         // the next ticks start a period
+static UInt32 gPaceStart;               // sys ticks at the period's first ticks
+static UInt32 gPaceIdle;                // half sys ticks waiting
+static UInt32 gPaceDraw, gPaceSkip;     // sys ticks drawing, and left out
+static UInt16 gPaceTicks, gPaceFrames;  // ticks and frames in the period
+static UInt8 gPaceSlow;                 // ticks left to catch up a full repaint or a log
+static Boolean gPaceBehind;             // 5 ticks or more behind in the period
+
+// True if s/2 ticks, at a ticks of time each, and a frame, at d ticks of
+// time, take at most part/16 of s/2 ticks; a and d in 1/256 ticks.
+static Boolean Fits(UInt16 s, UInt16 part, UInt32 a, UInt32 d)
+{
+	return (UInt32)s * a * 16 + d * 32 <= (UInt32)s * part * 256;
+}
+
+static void PaceSet(UInt8 s, UInt32 busy)
+{
+#ifdef DEBUG
+	if (s != gStride)
+		LOG(("stride %u/2, busy %lu half sys ticks for %u ticks, draws %lu for %u", (UInt16)s,
+			busy, gPaceTicks, gPaceDraw, gPaceFrames));
+#endif
+	gStride = s;
+	gPaceNew = true;
+}
+
+// Sets the stride at the end of a period: up to the least that fits in
+// 15/16 of the time, or down to the least that fits in 14/16 if it wasn't
+// behind, so it doesn't swap back and forth. When behind (behind set) it
+// looks from a quarter period on and only goes up.
+static void Pace(UInt16 tps, UInt32 now, Boolean behind)
+{
+	UInt32 wall, busy, a, d;
+	UInt8 s;
+
+	if (behind)
+		gPaceBehind = true;
+	if (gPaceNew || gPaceTicks < (behind ? kPaceTicks / 4 : kPaceTicks))
+		return;
+	wall = now - gPaceStart;
+	// Longer than 4 times its game time, it had stopped (a form on top).
+	if (wall > (UInt32)gPaceTicks * tps * 4 / GAME_TICKS_PER_SECOND) {
+		gPaceNew = true;
+		return;
+	}
+	wall = wall > gPaceSkip ? (wall - gPaceSkip) * 2 : 0;
+	busy = wall > gPaceIdle ? wall - gPaceIdle : 0;
+	// Busy time less drawing a tick, and drawing a frame, in 1/256 ticks
+	// (a tick is tps / 25 half sys ticks).
+	d = gPaceDraw * 2;
+	a = (busy > d ? busy - d : 0) * 25 * 256 / ((UInt32)tps * gPaceTicks);
+	d = d * 25 * 256 / ((UInt32)tps * (gPaceFrames ? gPaceFrames : 1));
+	for (s = 2; s < kMaxStride && !Fits(s, 15, a, d); s++)
+		;
+	if (behind) {
+		if (s < gStride)
+			s = gStride;
+	} else if (s < gStride) {
+		if (gPaceBehind)
+			s = gStride;
+		else
+			while (s < gStride && !Fits(s, 14, a, d))
+				s++;
+	}
+#ifdef PACE_LOG
+	LOG(("pace %u/2 -> %u/2 behind %u/%u wall %lu idle %lu skip %lu draw %lu ticks %u frames %u",
+		(UInt16)gStride, (UInt16)s, (UInt16)behind, (UInt16)gPaceBehind, now - gPaceStart,
+		gPaceIdle, gPaceSkip, gPaceDraw, gPaceTicks, gPaceFrames));
+#endif
+	PaceSet(s, busy);
+}
+
 static void EventLoop(void)
 {
 	EventType e;
@@ -693,39 +791,89 @@ static void EventLoop(void)
 #if defined(DEBUG) && defined(TEST_LEAVE_AT)
 	Boolean left = false;
 #endif
-	UInt32 last = TimGetTicks(), now, acc = 0;
-#ifdef DEBUG
-	UInt32 t1;
-#endif
+	UInt32 last = TimGetTicks(), now, acc = 0, owed, due, t0, t1;
 	UInt16 n;
+	Int32 wait;
+	Boolean live, run;
 #ifdef AUTOQUIT_SECONDS
-	UInt32 startSeconds = TimGetSeconds();
+	// System ticks, which stop with the CPU under a debugger; the clock
+	// in seconds runs on.
+	UInt32 startTicks = TimGetTicks();
 #endif
 
-	// The game runs at 50 ticks a second. acc counts system ticks times 50,
-	// and one game tick costs tps of it. After a long stall at most
-	// kMaxCatchUp ticks are run and the rest is dropped.
-	const UInt16 kMaxCatchUp = 10;
+#ifdef LOOP_PARTS
+	{
+		UInt32 u = TimingNowUs();
+		UInt16 i;
+
+		for (i = 0; i < 100; i++)
+			ReadInputs();
+		LOG(("100 ReadInputs %lu us", TimingNowUs() - u));
+		u = TimingNowUs();
+		for (i = 0; i < 100; i++)
+			KeysHeld();
+		LOG(("100 KeysHeld %lu us", TimingNowUs() - u));
+	}
+#endif
+	// acc counts system ticks times 50, and one game tick costs tps of it.
 
 	while (!gQuit) {
+		MARK(LP_OTHER);
 #ifdef AUTOQUIT_SECONDS
-		if (TimGetSeconds() - startSeconds >= AUTOQUIT_SECONDS)
+		if (TimGetTicks() - startTicks >= (UInt32)AUTOQUIT_SECONDS * tps)
 			gQuit = true;
 #endif
 #ifdef DEBUG
 		t1 = TimGetTicks();
 #endif
-		// No wait for an event when a game tick is already due.
-		EvtGetEvent(&e, gForm == GameForm && gFormOpen &&
-			acc + (TimGetTicks() - last) * GAME_TICKS_PER_SECOND >= tps ? 0 : 1);
+		// Wait for an event until the next frame's ticks are due.
+		due = (UInt32)((gStride + gStrideOdd) >> 1) * tps;
+		wait = 1;
+		now = TimGetTicks();
+		if (gForm == GameForm && gFormOpen) {
+			owed = acc + (now - last) * GAME_TICKS_PER_SECOND;
+			wait = owed >= due ? 0 : (Int32)((due - owed + GAME_TICKS_PER_SECOND - 1) /
+				GAME_TICKS_PER_SECOND);
+		}
+		MARK(LP_OTHER);
+		EvtGetEvent(&e, wait);
+		MARK(wait ? LP_SLEEP : LP_POLL);
+		// The wait ends on a system tick and started half way through one,
+		// on average.
+		if (wait > 0 && (t0 = TimGetTicks() - now) > 0)
+			gPaceIdle += t0 * 2 - 1;
+#ifdef LOOP_PARTS
+		TimingWait(wait, e.eType == nilEvent);
+		MARK(LP_DEBUG);
+#endif
 		HandleEvent(&e);
+		MARK(LP_HANDLE);
+		// A form or alert came or went: its time isn't owed and a new
+		// period starts, so it doesn't count as busy.
+		if (e.eType == winEnterEvent || e.eType == winExitEvent) {
+			gPaceNew = true;
+			acc = 0;
+			last = TimGetTicks();
+		}
 		TimingEvent(TimGetTicks() - t1);
+		MARK(LP_DEBUG);
 
 		now = TimGetTicks();
 		acc += (now - last) * GAME_TICKS_PER_SECOND;
 		last = now;
-		n = 0;
-		while (acc >= tps && n < kMaxCatchUp && gForm == GameForm && gFormOpen && !gGame.over) {
+		// A frame's ticks run together once they are all due.
+		live = gForm == GameForm && gFormOpen && !gGame.over;
+		if (!live)
+			acc = 0;
+		run = live && acc >= due;
+		if (run && gPaceNew) {
+			gPaceNew = false;
+			gPaceStart = now;
+			gPaceIdle = gPaceDraw = gPaceSkip = 0;
+			gPaceTicks = gPaceFrames = 0;
+			gPaceBehind = false;
+		}
+		for (n = 0; run && n < (gStride + gStrideOdd) >> 1; n++) {
 			GameInput all[GAME_MAX_TANKS];
 			UInt8 vt = game_viewer_tank(&gGame);
 			GameInput in = ReadInputs();
@@ -733,9 +881,11 @@ static void EventLoop(void)
 			// Bot tanks ignore their entry; the rest have nobody at the keys.
 			MemSet(all, sizeof(all), 0);
 			all[vt] = in;
+			MARK(LP_INPUT);
 #ifdef DEBUG
 			t1 = TimGetTicks();
 			game_tick(&gGame, all);
+			MARK(LP_TICK);
 			TimingTick(TimGetTicks() - t1);
 #else
 			game_tick(&gGame, all);
@@ -764,16 +914,29 @@ static void EventLoop(void)
 						(UInt16)m->inTank, (UInt16)m->isDead));
 				}
 			}
+			MARK(LP_TICKLOG);
 #endif
 			acc -= tps;
-			n++;
 		}
-		if (n == kMaxCatchUp) {
-			acc = 0;
+		t1 = TimGetTicks();
+		gPaceTicks += n;
+		if (n)
+			gStrideOdd = (gStride + gStrideOdd) & 1;
+		// At most two frames' or 10 ticks' time stays owed, whichever is
+		// more. Owing 5 ticks after a frame's ticks steps the stride up
+		// before time is dropped, unless it's from a full repaint or a debug
+		// log less than 16 ticks ago and not caught up yet.
+		owed = 2 * due > 10 * (UInt32)tps ? 2 * due : 10 * (UInt32)tps;
+		if (n && !gPaceSlow && acc > 5 * (UInt32)tps)
+			Pace(tps, t1, true);
+		if (acc > owed) {
+			acc = owed;
 #ifdef DEBUG
-			gDropped++;
+			if (live)
+				gDropped++;
 #endif
 		}
+		gPaceSlow = acc < due || gPaceSlow < n ? 0 : gPaceSlow - n;
 #if defined(DEBUG) && defined(TEST_LEAVE_AT)
 		if (!left && gInGame && gForm == GameForm && gGame.tick >= TEST_LEAVE_AT) {
 			left = true;
@@ -787,8 +950,10 @@ static void EventLoop(void)
 			SaveDrop();
 			FrontResults(&gGame);
 		}
+		MARK(LP_OTHER);
 		if (gForm == GameForm && gFormOpen)
 			SoundFrame(&gGame);
+		MARK(LP_SOUND);
 
 		// A menu or alert is on top, so leave the screen alone.
 		if (gForm == GameForm && gFormOpen && !gQuit && !gMenuOpen &&
@@ -796,7 +961,20 @@ static void EventLoop(void)
 			Boolean full = gFull;
 
 			gFull = gDirty = false;
+			MARK(LP_OTHER);
 			ViewFrame(full, n != 0);
+			MARK(LP_DEBUG);
+			// Full repaints are rare and slow, so they stay out of the pacing.
+			if (full) {
+				gPaceSkip += TimGetTicks() - t1;
+				gPaceSlow = kPaceTicks / 4;
+			} else if (n) {
+				gPaceDraw += TimGetTicks() - t1;
+				gPaceFrames++;
+			}
+			if (full || n)
+				TimingFrame(n);
+			MARK(LP_DEBUG);
 #ifdef DEBUG
 			if (full && !gTimedFull) {
 				gTimedFull = true;
@@ -808,18 +986,27 @@ static void EventLoop(void)
 #ifdef DRAW_BENCH
 				DrawBench();
 #endif
+#ifdef SCROLL_BENCH
+				ViewScrollBench();
+#endif
 			}
 #endif
 		}
+		Pace(tps, TimGetTicks(), false);
+		MARK(LP_OTHER);
 #ifdef DEBUG
-		// Logging every 5 s, kept out of the times it reports.
+		// Logging every 5 s, kept out of the times it reports and the pacing.
 		if (TimingDue()) {
+			t1 = TimGetTicks();
 			if (gDropped) {
 				LOG(("fell behind: ticks dropped %u times", gDropped));
 				gDropped = 0;
 			}
 			TimingMaybeLog();
+			gPaceSkip += TimGetTicks() - t1;
+			gPaceSlow = kPaceTicks / 4;
 		}
+		MARK(LP_LOG);
 #endif
 	}
 }

@@ -212,7 +212,9 @@ void SEC_UI SoundFrame(const GameState *g)
 		}
 		if (best != FX_NONE &&
 		    (gFx == FX_NONE || kRecipe[best].priority >= kRecipe[gFx].priority)) {
+#ifndef QUIET_TICKS
 			LOG(("sound fx %d from %d events", (Int16)best, (Int16)n));
+#endif
 			gFx = best;
 			gStep = 0;
 			PlayStep(now);

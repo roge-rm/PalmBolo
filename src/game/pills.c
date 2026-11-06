@@ -118,31 +118,48 @@ static void SEC_PILLS anger(MapPill *p)
 	}
 }
 
+// Marks the groups of 8 squares in near (32 of them, one axis) that hold
+// a square within 9 of square c, the most a pill's range reaches.
+static void SEC_PILLS mark_near(uint8_t *near, uint8_t c)
+{
+	uint8_t g = (uint8_t)(c < 9 ? 0 : (c - 9) >> 3), last = (uint8_t)(c > 255 - 9 ? 31 : (c + 9) >> 3);
+
+	for (; g <= last; g++)
+		near[g] = 1;
+}
+
 // pillsUpdate.
 void SEC_PILLS pills_update(GameState *s)
 {
 	uint8_t i, t, nt = 0, live[GAME_MAX_TANKS];
 	uint16_t lx[GAME_MAX_TANKS], ly[GAME_MAX_TANKS];
+	// Groups of 8 rows and of 8 columns with a live tank near enough for
+	// a pill there to see it: a pill outside them has no target, without
+	// the walk over the tanks.
+	uint32_t nearXw[8], nearYw[8];      // longs, so they clear a long at a time
+	uint8_t *nearX = (uint8_t *)nearXw, *nearY = (uint8_t *)nearYw;
 	const Tank *k;
+	MapPill *p;
 
+	for (i = 0; i < 8; i++)
+		nearXw[i] = nearYw[i] = 0;
 	// The live tanks, in order: firing at them doesn't change them.
 	for (t = 0, k = s->tanks; t < s->numTanks; t++, k++)
 		if (!k->destroyed) {
 			live[nt] = t;
 			lx[nt] = k->x;
 			ly[nt] = k->y;
+			mark_near(nearX, (uint8_t)(k->x >> 8));
+			mark_near(nearY, (uint8_t)(k->y >> 8));
 			nt++;
 		}
-	for (i = 0; i < s->map.numPills; i++) {
-		MapPill *p = &s->map.pills[i];
+	for (i = s->map.numPills, p = s->map.pills; i; i--, p++) {
 		uint16_t px, py;
 		uint32_t best = 0xFFFFFFFFUL;
 		int8_t target = -1;
 
 		if (!p->active)
 			continue;
-		px = (uint16_t)(((uint16_t)p->x << 8) + 128U);
-		py = (uint16_t)(((uint16_t)p->y << 8) + 128U);
 		if (p->reload < p->speed)
 			p->reload++;
 		if (p->coolDown > 0 && --p->coolDown == 0) {
@@ -152,6 +169,12 @@ void SEC_PILLS pills_update(GameState *s)
 		}
 		if (p->armour == 0 || p->reload < p->speed || p->inTank)
 			continue;
+		if (!(nearX[p->x >> 3] & nearY[p->y >> 3])) {
+			p->justSeen = 0;
+			continue;
+		}
+		px = (uint16_t)(((uint16_t)p->x << 8) + 128U);
+		py = (uint16_t)(((uint16_t)p->y << 8) + 128U);
 		for (t = 0; t < nt; t++) {
 			uint16_t dx, dy;
 			uint32_t d2;
@@ -163,8 +186,10 @@ void SEC_PILLS pills_update(GameState *s)
 			if (dx > R_PILL_RANGE)
 				continue;
 			dy = abs_diff(ly[t], py);
+			if (dy > R_PILL_RANGE)
+				continue;
 			k = &s->tanks[live[t]];
-			if (dy > R_PILL_RANGE || game_allied(s, p->owner, k->player))
+			if (game_allied(s, p->owner, k->player))
 				continue;
 			if ((dx >= R_TREE_HIDE_DIST || dy >= R_TREE_HIDE_DIST) && !k->justFired &&
 			    in_trees(s, k->x, k->y))
@@ -411,9 +436,6 @@ void SEC_PILLS bases_update(GameState *s)
 			s->baseTimer[i] = R_BASE_REGEN_TICKS;
 		}
 	}
-	for (i = 0; i < s->map.numBases; i++)
-		if (s->map.bases[i].active && s->baseTime[i] > 0)
-			s->baseTime[i]--;
 	// The bases with a live tank on them, so the rest skip the tank loop.
 	occupied = 0;
 	for (t = 0; t < s->numTanks; t++) {
@@ -432,6 +454,10 @@ void SEC_PILLS bases_update(GameState *s)
 
 		if (!b->active)
 			continue;
+		// Each base's wait counts down first, as basesUpdate does for all
+		// of them before the refuel loop.
+		if (s->baseTime[i] > 0)
+			s->baseTime[i]--;
 		if (!(occupied & (1U << i))) {
 			s->baseStopped[i] = 1;
 			continue;

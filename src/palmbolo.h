@@ -11,8 +11,9 @@ struct GameState;
 // Go in front of a function to put it in another code segment. Each
 // segment must stay under 32 KB. The game rules, main.c and the map store
 // are in the first; drawing, map loading, the log and the timers are in
-// "ui". A function's prototype must carry the same attribute, or a call
-// from another segment jumps to the wrong place (tools/segcheck.py checks).
+// "ui", the direct blits in "draw". A function's prototype must carry the
+// same attribute, or a call from another segment jumps to the wrong place
+// (tools/segcheck.py checks).
 #ifndef SEC_DETECT
 #define SEC_DETECT __attribute__((section("detect")))
 #endif
@@ -64,6 +65,8 @@ void SEC_UI TimingTick(UInt32 ticks);
 void SEC_UI TimingDraw(UInt32 startTicks, UInt32 endTicks);
 // Time getting and handling one event.
 void SEC_UI TimingEvent(UInt32 ticks);
+// A frame was drawn after ticks game ticks: keeps the gaps between frames.
+void SEC_UI TimingFrame(UInt16 ticks);
 // Logs the free heap at where, and keeps the least seen.
 void SEC_UI TimingHeap(const Char *where);
 // True about every 5 seconds, when TimingMaybeLog has something to log.
@@ -72,14 +75,33 @@ Boolean SEC_UI TimingDue(void);
 // period after the logging, so its own time is left out.
 void SEC_UI TimingMaybeLog(void);
 #define LOG(args) LogF args
+#ifdef LOOP_PARTS
+// Parts of the event loop's time (timing.c). LP_TICKLOG is the tick log
+// and the tick timer.
+enum { LP_SLEEP, LP_POLL, LP_SYS, LP_HANDLE, LP_INPUT, LP_TICK, LP_TICKLOG, LP_SOUND,
+	LP_VIEW, LP_PANEL, LP_DEBUG, LP_LOG, LP_OTHER, LP_COUNT };
+// Charges the time since the last mark to part.
+void SEC_UI TimingMark(UInt8 part);
+// Counts an EvtGetEvent call that waited wait sys ticks at most.
+void SEC_UI TimingWait(Int32 wait, Boolean nil);
+UInt32 SEC_UI TimingNowUs(void);
+#define MARK(p) TimingMark(p)
+#endif
 #else
 #define LOG(args) ((void)0)
 #define TimingInit(t) ((void)0)
 #define TimingTick(a) ((void)0)
 #define TimingDraw(a, b) ((void)0)
 #define TimingEvent(a) ((void)0)
+#define TimingFrame(a) ((void)0)
 #define TimingHeap(a) ((void)0)
 #define TimingMaybeLog() ((void)0)
+#endif
+#ifndef MARK
+#define MARK(p) ((void)0)
+#endif
+#if defined(LOOP_PARTS) && !defined(DEBUG)
+#error LOOP_PARTS is for debug builds
 #endif
 
 // A window's pixels for drawing into directly (blit.c), OS 3.0 to 3.3 at
@@ -90,10 +112,11 @@ typedef struct BlitWin {
 	Coord w, h;
 	WinHandle win;
 } BlitWin;
-Boolean SEC_UI BlitFind(WinHandle w, BlitWin *b);
-void SEC_UI BlitCell(const BlitWin *src, Coord sx, Coord sy, const BlitWin *dst,
+Boolean SEC_DRAW BlitFind(WinHandle w, BlitWin *b);
+void SEC_DRAW BlitCell(const BlitWin *src, Coord sx, Coord sy, const BlitWin *dst,
 	Coord x, Coord y, const RectangleType *clip);
-void SEC_UI BlitSprite(const BlitWin *mask, Coord mx, Coord my, const BlitWin *spr,
+void SEC_DRAW BlitMove(UInt8 *d, const UInt8 *s, UInt32 n);
+void SEC_DRAW BlitSprite(const BlitWin *mask, Coord mx, Coord my, const BlitWin *spr,
 	Coord sx, Coord sy, const BlitWin *dst, Coord x, Coord y, const RectangleType *clip);
 
 // Screen. ScreenInit picks the depth and coordinate system, ScreenExit
@@ -149,6 +172,7 @@ Int16 SEC_UI ViewTap(Coord x, Coord y, UInt8 *mx, UInt8 *my);
 // Draws the whole view count times and logs the average time.
 void SEC_UI ViewTimeFull(UInt16 count);
 UInt16 SEC_UI ViewCheck(void);
+void SEC_UI ViewScrollBench(void);
 #endif
 
 // Status panel and overview map (panel.c). The view calls these.

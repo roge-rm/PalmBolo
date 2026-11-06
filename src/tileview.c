@@ -46,7 +46,9 @@ static UInt8 gAction, gBarShown = 0xFF;
 static Boolean gWasCovered;
 
 static void SEC_UI CentreOnTank(void);
+static void SEC_UI NearBases(void);
 static void SEC_UI CellRect(UInt16 cell, RectangleType *r);
+static void SEC_UI PickClear(void);
 static Coord gTs = 8;           // tile size in pixels
 static Coord gW, gH;            // view size
 static Int32 gVx, gVy;          // world pixel at the top left of the view
@@ -146,6 +148,9 @@ static const RectangleType *gClipB; // DrawRegion's clip while it draws
 static BlitWin gBgB;
 static BlitWin *gDstB = &gViewB;
 static Boolean gBgValid;
+// The scroll moved gBgB only: DrawRegion leaves the view alone and the
+// frame copies all of gBgB to the view once the scroll is done.
+static Boolean gBgMoved;
 // The frame is drawn offscreen (compose.c) and copied to the screen at the
 // end; gCompValid once the window holds the whole view.
 static Boolean gComposing, gCompValid;
@@ -416,6 +421,8 @@ Boolean SEC_UI ViewOpen(const DeviceInfo *d, const GameState *game)
 		return false;
 	}
 	gGame = game;
+	NearBases();
+	PickClear();
 	gPins = d->pins;
 	gHiRes = ScreenHiRes();
 	gTs = gHiRes ? 16 : 8;
@@ -476,20 +483,23 @@ static Boolean gSkipBlit;       // ViewTimeFull: time the tile picking alone
 static void SEC_UI CopyTile(UInt16 cell, Int32 tx, Int32 ty)
 {
 	RectangleType src;
+	Coord x, y;
 
 #ifdef DEBUG
 	if (gSkipBlit)
 		return;
 #endif
 
+	// Squares and view pixels fit 16 bits (255 * 16), so a 16-bit multiply
+	// does; a 32-bit one is a library call on the 68000.
+	x = (Coord)((Int16)tx * gTs - (Int16)gVx);
+	y = (Coord)((Int16)ty * gTs - (Int16)gVy);
 	CellRect(cell, &src);
 	if (gClipB && gSheetB.bits) {
-		BlitCell(&gSheetB, src.topLeft.x, src.topLeft.y, gDstB, (Coord)(tx * gTs - gVx),
-			(Coord)(ty * gTs - gVy), gClipB);
+		BlitCell(&gSheetB, src.topLeft.x, src.topLeft.y, gDstB, x, y, gClipB);
 		return;
 	}
-	WinCopyRectangle(gSheet, WinGetDrawWindow(), &src, (Coord)(tx * gTs - gVx),
-		(Coord)(ty * gTs - gVy), winPaint);
+	WinCopyRectangle(gSheet, WinGetDrawWindow(), &src, x, y, winPaint);
 }
 
 // Draws sprite cell with its top left at view pixel (x, y). The mask
@@ -554,11 +564,36 @@ static UInt16 SEC_UI BaseTile(const MapBase *b)
 }
 
 // Bases count as road to the squares round them, as in WinBolo.
+// Bit y of gNearRow is set if a base lies on row y - 1, y or y + 1, the
+// same for columns, so most squares skip the search below. Set by
+// ViewOpen; the bases don't move.
+static UInt8 gNearRow[32], gNearCol[32];
+
+static void SEC_UI NearBases(void)
+{
+	const MapInfo *m = &gGame->map;
+	UInt16 i;
+	Int16 j;
+
+	MemSet(gNearRow, sizeof(gNearRow), 0);
+	MemSet(gNearCol, sizeof(gNearCol), 0);
+	for (i = 0; i < m->numBases; i++)
+		for (j = -1; j <= 1; j++) {
+			UInt8 y = (UInt8)(m->bases[i].y + j), x = (UInt8)(m->bases[i].x + j);
+
+			gNearRow[y >> 3] |= (UInt8)(1 << (y & 7));
+			gNearCol[x >> 3] |= (UInt8)(1 << (x & 7));
+		}
+}
+
 static void SEC_UI BasesAsRoad(Int32 tx, Int32 ty, uint8_t n[8])
 {
 	const MapInfo *m = &gGame->map;
 	UInt16 i;
+	UInt8 x = (UInt8)tx, y = (UInt8)ty;
 
+	if (!((gNearRow[y >> 3] >> (y & 7)) & (gNearCol[x >> 3] >> (x & 7)) & 1))
+		return;
 	for (i = 0; i < m->numBases; i++) {
 		Int16 dx = (Int8)(UInt8)(m->bases[i].x - tx), dy = (Int8)(UInt8)(m->bases[i].y - ty);
 
@@ -619,15 +654,38 @@ static void SEC_UI BgToView(const RectangleType *r)
 	s = gBgB.bits + (UInt32)r->topLeft.y * brb + b0;
 	d = gViewB.bits + (UInt32)r->topLeft.y * vrb + b0;
 	if (n == brb && brb == vrb) {
-		MemMove(d, s, (UInt32)n * r->extent.y);
+		BlitMove(d, s, (UInt32)n * r->extent.y);
 		return;
 	}
 	for (y = 0; y < (UInt16)r->extent.y; y++, s += brb, d += vrb)
 		if (n > 8)
-			MemMove(d, s, n);
+			BlitMove(d, s, n);
 		else
 			for (i = 0; i < n; i++)
 				d[i] = s[i];
+}
+
+// The art cell picked for each map square drawn lately, by square modulo
+// kPick on each axis, so the squares in and round the view stay picked as
+// it scrolls. gPickTag holds the square (y << 8 | x), and a cell of 255 is
+// none. A terrain change forgets the squares round it, and a full frame all.
+#define kPick 32
+static UInt16 gPickTag[kPick * kPick];
+static UInt8 gPickCell[kPick * kPick];
+
+static void SEC_UI PickClear(void)
+{
+	MemSet(gPickCell, sizeof(gPickCell), 255);
+}
+
+// Forgets the squares whose pick square (x, y) is a neighbour of.
+static void SEC_UI PickForget(UInt8 x, UInt8 y)
+{
+	Int16 i, j;
+
+	for (j = -1; j <= 1; j++)
+		for (i = -1; i <= 1; i++)
+			gPickCell[(((UInt8)(y + j) & (kPick - 1)) << 5) | ((UInt8)(x + i) & (kPick - 1))] = 255;
 }
 
 // Draws map square (tx, ty) without the pill, base or start on it. up, row
@@ -635,31 +693,44 @@ static void SEC_UI BgToView(const RectangleType *r)
 static void SEC_UI DrawTerrain(const uint8_t *up, const uint8_t *row, const uint8_t *down, Int32 tx,
 	Int32 ty)
 {
-	uint8_t t = row[tx], n[8];
+	uint8_t t = row[tx], n[8], cell;
 	Boolean mine = false;
+	UInt16 slot = (UInt16)((((UInt8)ty & (kPick - 1)) << 5) | ((UInt8)tx & (kPick - 1)));
+	UInt16 tag = (UInt16)(((UInt16)(UInt8)ty << 8) | (UInt8)tx);
 
 	// A hidden mine the player wasn't shown is drawn without it.
 	if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST) {
 		mine = !gGame->hiddenMines || game_mine_shown(gGame, (uint8_t)tx, (uint8_t)ty);
 		t = (uint8_t)(t - TERRAIN_MINE_ADD);
 	}
-	if (tile_has_variants(t)) {
-		tile_neighbours(up, row, down, (uint8_t)tx, n);
-		if (tile_bases_matter(t))
-			BasesAsRoad(tx, ty, n);
+	cell = gPickCell[slot];
+	if (cell == 255 || gPickTag[slot] != tag) {
+		if (tile_has_variants(t)) {
+			tile_neighbours(up, row, down, (uint8_t)tx, n);
+			if (tile_bases_matter(t))
+				BasesAsRoad(tx, ty, n);
+		}
+		cell = tile_pick(t, n);
+		gPickCell[slot] = cell;
+		gPickTag[slot] = tag;
 	}
-	CopyTile(tile_pick(t, n), tx, ty);
+	CopyTile(cell, tx, ty);
 	if (mine)
-		DrawSprite(AS_MINE, (Coord)(tx * gTs - gVx), (Coord)(ty * gTs - gVy));
+		DrawSprite(AS_MINE, (Coord)((Int16)tx * gTs - (Int16)gVx),
+			(Coord)((Int16)ty * gTs - (Int16)gVy));
 }
 
 // Draws the part of the view inside r (view pixels) from the map.
 static void SEC_UI DrawRegion(const RectangleType *r)
 {
-	Int32 tx0 = (gVx + r->topLeft.x) / gTs, tx1 = (gVx + r->topLeft.x + r->extent.x - 1) / gTs;
-	Int32 ty0 = (gVy + r->topLeft.y) / gTs, ty1 = (gVy + r->topLeft.y + r->extent.y - 1) / gTs;
+	// The view and r are never left of or above the map, so a shift
+	// divides by the tile size (256 world units over gShift).
+	UInt8 ts = (UInt8)(8 - gShift);
+	Int32 tx0 = (gVx + r->topLeft.x) >> ts, tx1 = (gVx + r->topLeft.x + r->extent.x - 1) >> ts;
+	Int32 ty0 = (gVy + r->topLeft.y) >> ts, ty1 = (gVy + r->topLeft.y + r->extent.y - 1) >> ts;
 	Int32 tx, ty;
 	UInt16 i;
+	UInt8 x0, y0, w, h;
 	const MapInfo *m = &gGame->map;
 	const uint8_t *up, *row, *down;
 	Boolean osClip, bg = BgUse();
@@ -670,6 +741,11 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 		tx1 = MAP_SIZE - 1;
 	if (ty1 > MAP_SIZE - 1)
 		ty1 = MAP_SIZE - 1;
+	// Squares tx0 to tx1 and ty0 to ty1 as one unsigned byte compare each.
+	x0 = (UInt8)tx0;
+	y0 = (UInt8)ty0;
+	w = (UInt8)(tx1 - tx0);
+	h = (UInt8)(ty1 - ty0);
 	if (gSheetB.bits && gViewB.bits && WinGetDrawWindow() == gViewB.win &&
 	    r->topLeft.x >= 0 && r->topLeft.y >= 0 && r->topLeft.x + r->extent.x <= gViewB.w &&
 	    r->topLeft.y + r->extent.y <= gViewB.h)
@@ -688,19 +764,18 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 			DrawTerrain(up, row, down, tx, ty);
 	}
 	for (i = 0; i < m->numStarts; i++)
-		if (m->starts[i].x >= tx0 && m->starts[i].x <= tx1 &&
-		    m->starts[i].y >= ty0 && m->starts[i].y <= ty1)
+		if ((UInt8)(m->starts[i].y - y0) <= h && (UInt8)(m->starts[i].x - x0) <= w)
 			CopyTile(AT_START, m->starts[i].x, m->starts[i].y);
 	for (i = 0; i < m->numBases; i++) {
 		const MapBase *b = &m->bases[i];
 
-		if (b->active && b->x >= tx0 && b->x <= tx1 && b->y >= ty0 && b->y <= ty1)
+		if ((UInt8)(b->y - y0) <= h && (UInt8)(b->x - x0) <= w && b->active)
 			CopyTile(BaseTile(b), b->x, b->y);
 	}
 	for (i = 0; i < m->numPills; i++) {
 		const MapPill *p = &m->pills[i];
 
-		if (!p->active || p->inTank || p->x < tx0 || p->x > tx1 || p->y < ty0 || p->y > ty1)
+		if ((UInt8)(p->y - y0) > h || (UInt8)(p->x - x0) > w || !p->active || p->inTank)
 			continue;
 		CopyTile(PillTile(p), p->x, p->y);
 	}
@@ -709,7 +784,8 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 		WinResetClip();
 	if (bg) {
 		gDstB = &gViewB;
-		BgToView(r);
+		if (!gBgMoved)
+			BgToView(r);
 	}
 }
 
@@ -747,29 +823,41 @@ static void SEC_UI ShiftBits(const BlitWin *b, Boolean horizontal, Boolean fwd, 
 	if (horizontal) {
 		UInt16 nb = (UInt16)dist >> 2;
 
+		// Rows that fill the whole row bytes move as one block. The ends
+		// of each row then hold bytes of the row beside it, which is the
+		// vacated strip the caller draws.
+		if (wb == rb) {
+			UInt32 n = (UInt32)(UInt16)gH * rb - nb;
+
+			if (fwd)
+				BlitMove(p, p + nb, n);
+			else
+				BlitMove(p + nb, p, n);
+			return;
+		}
 		for (y = 0; y < (UInt16)gH; y++, p += rb)
 			if (fwd)
-				MemMove(p, p + nb, wb - nb);
+				BlitMove(p, p + nb, wb - nb);
 			else
-				MemMove(p + nb, p, wb - nb);
+				BlitMove(p + nb, p, wb - nb);
 		return;
 	}
 	if (wb == rb) {
 		UInt32 n = (UInt32)(gH - dist) * rb;
 
 		if (fwd)
-			MemMove(p, p + (UInt32)dist * rb, n);
+			BlitMove(p, p + (UInt32)dist * rb, n);
 		else
-			MemMove(p + (UInt32)dist * rb, p, n);
+			BlitMove(p + (UInt32)dist * rb, p, n);
 		return;
 	}
 	if (fwd) {
 		for (y = 0; y < (UInt16)(gH - dist); y++, p += rb)
-			MemMove(p, p + (UInt32)dist * rb, wb);
+			BlitMove(p, p + (UInt32)dist * rb, wb);
 	} else {
 		p += (UInt32)(gH - 1 - dist) * rb;
 		for (y = 0; y < (UInt16)(gH - dist); y++, p -= rb)
-			MemMove(p + (UInt32)dist * rb, p, wb);
+			BlitMove(p + (UInt32)dist * rb, p, wb);
 	}
 }
 
@@ -817,9 +905,16 @@ static void SEC_UI ScrollAxis(Int32 d, Boolean horizontal)
 			if (d > 0)
 				vacated.topLeft.y = gH - dist;
 		}
-		ShiftBits(&gViewB, horizontal, d > 0, dist);
-		if (BgUse())
+		// With a whole gBgB only it moves, and the frame copies it to the
+		// view after both axes, which costs less than moving both.
+		if (BgUse() && gBgValid) {
 			ShiftBits(&gBgB, horizontal, d > 0, dist);
+			gBgMoved = true;
+		} else {
+			ShiftBits(&gViewB, horizontal, d > 0, dist);
+			if (BgUse())
+				ShiftBits(&gBgB, horizontal, d > 0, dist);
+		}
 		DrawRegion(&vacated);
 		return;
 	}
@@ -856,11 +951,13 @@ static Coord SEC_UI WorldY(uint16_t wy)
 }
 
 // Draws sprite cell centred on world point (wx, wy) and notes it for
-// erasing.
+// erasing. One wholly off the view is skipped.
 static void SEC_UI DrawAt(UInt16 cell, uint16_t wx, uint16_t wy)
 {
 	Coord x = WorldX(wx) - gTs / 2, y = WorldY(wy) - gTs / 2;
 
+	if (x <= -gTs || x >= gW || y <= -gTs || y >= gH)
+		return;
 	DrawSprite(cell, x, y);
 	Remember(x, y, gTs, gTs);
 }
@@ -890,14 +987,18 @@ static void SEC_UI DrawSprites(void)
 	const Tank *k = &g->tanks[vt];
 	UInt16 i;
 	RectangleType clip;
+	Boolean osClip;
 
 	clip.topLeft.x = clip.topLeft.y = 0;
 	clip.extent.x = gW;
 	clip.extent.y = gH;
-	WinSetClip(&clip);
 	if (gViewB.bits && gSprB.bits && gMaskB.bits && WinGetDrawWindow() == gViewB.win &&
 	    gW <= gViewB.w && gH <= gViewB.h)
 		gClipB = &clip;
+	// Direct sprites clip themselves, the OS calls need the clip.
+	osClip = !gClipB || gMask1;
+	if (osClip)
+		WinSetClip(&clip);
 
 	for (i = 0; i < g->numExpl; i++) {
 		Int16 f = R_EXPLOSION_START - g->expl[i].frame;
@@ -924,7 +1025,8 @@ static void SEC_UI DrawSprites(void)
 		DrawAt(AS_GUNSIGHT, (uint16_t)(wx + 128), (uint16_t)(wy + 128));
 	}
 	gClipB = NULL;
-	WinResetClip();
+	if (osClip)
+		WinResetClip();
 }
 
 static const Char kButtonText[] = "Tree\0Road\0Wall\0Pill\0Mine\0Near\0Far\0";
@@ -1030,13 +1132,16 @@ static void SEC_UI DrawChanges(Boolean covered)
 	RectangleType r;
 
 	if (n == 255) {
+		PickClear();
 		PanelRebuild();
 		if (!covered)
 			DrawAll();
 		return;
 	}
-	for (i = 0; i < n; i++)
+	for (i = 0; i < n; i++) {
 		PanelSquare(xy[i * 2], xy[i * 2 + 1]);
+		PickForget(xy[i * 2], xy[i * 2 + 1]);
+	}
 	if (covered)
 		return;
 	// The squares round a change may join it differently now.
@@ -1319,6 +1424,15 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 				ScrollAxis(dx, true);
 			if (dy)
 				ScrollAxis(dy, false);
+			if (gBgMoved) {
+				RectangleType all;
+
+				all.topLeft.x = all.topLeft.y = 0;
+				all.extent.x = gW;
+				all.extent.y = gH;
+				gBgMoved = false;
+				BgToView(&all);
+			}
 		}
 		PART(2);
 	}
@@ -1328,6 +1442,7 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 			CentreOnTank();
 		ClampView();
 		DrawItemChanges(true, covered);
+		PickClear();
 		if (!covered) {
 			BgFit();
 			DrawAll();
@@ -1351,8 +1466,10 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 	}
 	PART(4);
 	gShownDeaths = k->deaths;
+	MARK(LP_VIEW);
 	PanelDraw(full, gH, gVx, gVy, gW, gH, gTs);
 	DrawBar(full);
+	MARK(LP_PANEL);
 	PART(5);
 	NativeOff();
 #ifdef DRAW_PARTS
@@ -1398,6 +1515,68 @@ UInt16 SEC_UI ViewCheck(void)
 			}
 	MemPtrFree(keep);
 	return diff;
+}
+#endif
+
+#if defined(DEBUG) && defined(SCROLL_BENCH)
+// Debug: times the parts of a scroll 50 times each, then redraws.
+void SEC_UI ViewScrollBench(void)
+{
+	UInt32 t[16], t0;
+	UInt16 i, j, rb = gViewB.rowBytes;
+	UInt32 n = (UInt32)rb * gH;
+	RectangleType col, row, all, one;
+
+	if (!gViewB.bits)
+		return;
+	NativeOn();
+	col.topLeft.x = gW - 4;
+	col.topLeft.y = 0;
+	col.extent.x = 4;
+	col.extent.y = gH;
+	row.topLeft.x = 0;
+	row.topLeft.y = gH - 4;
+	row.extent.x = gW;
+	row.extent.y = 4;
+	all.topLeft.x = all.topLeft.y = 0;
+	all.extent.x = gW;
+	all.extent.y = gH;
+	one.topLeft.x = 40 - ((Int16)gVx & 7);
+	one.topLeft.y = 40 - ((Int16)gVy & 7);
+	one.extent.x = one.extent.y = 8;
+	for (j = 0; j < 16; j++) {
+		gSkipBlit = j == 10 || j == 11;
+		t0 = TimGetTicks();
+		for (i = 0; i < 50; i++)
+			switch (j) {
+			case 10: DrawRegion(&col); break;
+			case 11: DrawRegion(&row); break;
+			case 12: if (gBgB.bits) BgToView(&col); break;
+			case 13: if (gBgB.bits) BgToView(&row); break;
+			case 14: DrawRegion(&one); break;
+			case 15: DrawRegion(&all); break;
+			case 0: MemMove(gViewB.bits, gViewB.bits + 1, n - 1); break;
+			case 1: MemMove(gViewB.bits, gViewB.bits + 4 * rb, n - 4 * rb); break;
+			case 2: BlitMove(gViewB.bits, gViewB.bits + 1, n - 1); break;
+			case 3: BlitMove(gViewB.bits, gViewB.bits + 4 * rb, n - 4 * rb); break;
+			case 4: BlitMove(gViewB.bits + 1, gViewB.bits, n - 1); break;
+			case 5: BlitMove(gViewB.bits + 4 * rb, gViewB.bits, n - 4 * rb); break;
+			case 6: DrawRegion(&col); break;
+			case 7: DrawRegion(&row); break;
+			case 8: if (gBgB.bits) BgToView(&all); break;
+			case 9: if (gBgB.bits) BlitMove(gViewB.bits, gBgB.bits, n); break;
+			}
+		t[j] = TimGetTicks() - t0;
+	}
+	gSkipBlit = false;
+	DrawAll();
+	NativeOff();
+	LOG(("scroll bench x50, sys ticks: MemMove odd %lu rows %lu, BlitMove odd %lu rows %lu back %lu %lu",
+		t[0], t[1], t[2], t[3], t[4], t[5]));
+	LOG(("scroll bench x50: strip column %lu row %lu, bg to view %lu BlitMove %lu (bg %d, %d x %d rb %u)",
+		t[6], t[7], t[8], t[9], (Int16)(gBgB.bits != NULL), (Int16)gW, (Int16)gH, rb));
+	LOG(("scroll bench x50: strips without blits %lu %lu, bg to view %lu %lu, one tile %lu, all %lu (view at %ld %ld)",
+		t[10], t[11], t[12], t[13], t[14], t[15], gVx, gVy));
 }
 #endif
 

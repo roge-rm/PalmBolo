@@ -43,6 +43,7 @@ static UInt8 gPillSig[MAP_MAX_PILLS], gBaseSig[MAP_MAX_BASES];
 static UInt8 gShownPills, gShownBases;
 static UInt32 gShownSec = 0xFFFFFFFFUL;    // time left drawn, in seconds
 static Boolean gStatusDrawn;
+static UInt32 gScanTick;                   // game tick >> 4 of the last scan of the marks
 // What the overview showed on screen: the tank's pixel, the view rectangle
 // and a dirty rectangle of window pixels to copy again.
 static Coord gTankX = -1, gTankY, gViewX, gViewY, gViewW, gViewH;
@@ -650,14 +651,6 @@ static void SEC_UI DrawTimeLeft(Coord y, Coord rowH, UInt32 sec)
 	}
 }
 
-// The builder: in the tank, going out, coming back or flying in.
-static UInt8 SEC_UI ManState(void)
-{
-	const Builder *m = &gGame->men[game_viewer_tank(gGame)];
-
-	return m->isDead ? 3 : m->inTank ? 0 : m->state == LGM_STATE_GOING ? 1 : 2;
-}
-
 // The builder's icon and, when the tank carries pills, a pill icon and how
 // many, centred in the box x, y, w wide.
 static void SEC_UI DrawBuilder(Coord x, Coord y, Coord w, UInt8 man, UInt8 carry)
@@ -685,67 +678,101 @@ static void SEC_UI DrawBuilder(Coord x, Coord y, Coord w, UInt8 man, UInt8 carry
 	}
 }
 
-// What a pill or base mark shows, as a byte to compare with the last
-// frame's. viewer is game_viewer().
-static UInt8 SEC_UI Sig(Boolean base, UInt16 i, UInt8 viewer)
+// What a pill or base mark shows, as a byte per mark to compare with the
+// last time. kt gives the owner's kind for the owners 0..GAME_MAX_PLAYERS
+// (the last is neutral). The loops use pointers and no calls, as indexing
+// a struct array costs a multiply call on the 68000.
+static void SEC_UI MakeKinds(UInt8 *kt, UInt8 viewer)
 {
-	const MapInfo *m = &gGame->map;
+	UInt8 o;
 
-	if (base)
-		return (UInt8)(game_owner_kind(gGame, m->bases[i].owner, viewer) |
-			(m->bases[i].armour <= R_BASE_CAPTURE_ARMOUR ? 4 : 0) | (m->bases[i].active ? 0 : 8));
-	return (UInt8)(game_owner_kind(gGame, m->pills[i].owner, viewer) |
-		(m->pills[i].armour == 0 ? 4 : 0) | (m->pills[i].inTank ? 8 : 0));
+	for (o = 0; o < GAME_MAX_PLAYERS; o++) {
+		const Player *p = &gGame->players[o];
+
+		kt[o] = o == viewer ? OWN_SELF :
+			viewer < GAME_MAX_PLAYERS && p->inUse && ((p->allies >> viewer) & 1) ? OWN_ALLY : OWN_ENEMY;
+	}
+	kt[GAME_MAX_PLAYERS] = OWN_NEUTRAL;
 }
 
-// Redraws a gauge when its value changed or its blink ended.
-static void SEC_UI MaybeGauge(const Tank *k, UInt32 now, UInt8 i, Boolean force, Coord x, Coord y,
-	Coord w)
+static Boolean SEC_UI ScanMarks(UInt8 viewer, Boolean *pc, Boolean *bc)
+{
+	const MapInfo *m = &gGame->map;
+	const MapPill *pp = m->pills;
+	const MapBase *bp = m->bases;
+	UInt8 *sp = gPillSig, kt[GAME_MAX_PLAYERS + 1], v, o;
+	UInt16 i;
+
+	MakeKinds(kt, viewer);
+	for (i = m->numPills; i; i--, pp++, sp++) {
+		o = pp->owner;
+		v = (UInt8)(kt[o < GAME_MAX_PLAYERS ? o : GAME_MAX_PLAYERS] | (pp->armour == 0 ? 4 : 0) |
+			(pp->inTank ? 8 : 0));
+		if (v != *sp)
+			*pc = true;
+		*sp = v;
+	}
+	sp = gBaseSig;
+	for (i = m->numBases; i; i--, bp++, sp++) {
+		o = bp->owner;
+		v = (UInt8)(kt[o < GAME_MAX_PLAYERS ? o : GAME_MAX_PLAYERS] |
+			(bp->armour <= R_BASE_CAPTURE_ARMOUR ? 4 : 0) | (bp->active ? 0 : 8));
+		if (v != *sp)
+			*bc = true;
+		*sp = v;
+	}
+	return true;
+}
+
+// Whether gauge i has to be drawn: its value changed or its blink ended.
+// The clock is only read when a blink starts or is running.
+static Boolean SEC_UI NeedGauge(const Tank *k, UInt8 i, Boolean force)
 {
 	UInt8 v = i == 0 ? k->armour : i == 1 ? k->shells : i == 2 ? k->mines : k->trees;
-	Boolean changed, ended = false;
+	Boolean changed = force || v != gShownV[i], ended = false;
 
-	changed = force || v != gShownV[i];
 	// Running out makes the icon flash once.
 	if (v == 0 && gShownV[i] != 0 && !force)
-		gBlink[i] = now + SysTicksPerSecond() / 3;
-	if (gBlink[i] && now >= gBlink[i]) {
+		gBlink[i] = TimGetTicks() + SysTicksPerSecond() / 3;
+	if (gBlink[i] && TimGetTicks() >= gBlink[i]) {
 		gBlink[i] = 0;
 		ended = true;
 	}
 	gShownV[i] = v;
-	if (changed || ended)
-		DrawGauge(i, x, y, w, gBlink[i] != 0);
+	return changed || ended;
 }
 
 static void SEC_UI DrawStatus(Coord py)
 {
 	const MapInfo *m = &gGame->map;
-	Boolean force = !gStatusDrawn, pc = false, bc = false;
+	Boolean force = !gStatusDrawn, pc = false, bc = false, tc = false, gc[4], mc;
 	UInt16 i;
-	const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
-	UInt8 man = ManState(), v, carry = k->numCarry, viewer = game_viewer();
-	UInt32 now = TimGetTicks();
-	FontID old = FntSetFont(stdFont);
+	UInt8 viewer = game_viewer(), man, carry, ti = 0;
+	const Tank *k;
+	const Builder *b;
+	FontID old;
 	Coord y, isz = gTs, rowM;
+	UInt32 left = 0;
 
-	if (force) {
-		Erase(0, py, gW, gPanelH);
-		Fill(0, py, gW, 1, gBlack);
-		Fill(0, py + 1, gW, 1, gWhite);
+	// What changed is worked out first without any drawing calls, so a
+	// frame where nothing did costs next to nothing.
+	for (k = gGame->tanks; ti < gGame->numTanks; ti++, k++)
+		if (k->player == viewer)
+			break;
+	if (ti >= gGame->numTanks) {
+		ti = 0;
+		k = gGame->tanks;
+	}
+	b = &gGame->men[ti];
+	man = b->isDead ? 3 : b->inTank ? 0 : b->state == LGM_STATE_GOING ? 1 : 2;
+	carry = k->numCarry;
+	if (force)
 		gShownPills = gShownBases = 0xFF;
-	}
-	for (i = 0; i < m->numPills; i++) {
-		v = Sig(false, i, viewer);
-		if (v != gPillSig[i])
-			pc = true;
-		gPillSig[i] = v;
-	}
-	for (i = 0; i < m->numBases; i++) {
-		v = Sig(true, i, viewer);
-		if (v != gBaseSig[i])
-			bc = true;
-		gBaseSig[i] = v;
+	// Walking every mark costs about a millisecond on the Palm IIIx, so it
+	// is done on a full redraw and every 16 ticks (about 3 times a second).
+	if (force || (gGame->tick >> 4) != gScanTick) {
+		gScanTick = gGame->tick >> 4;
+		ScanMarks(viewer, &pc, &bc);
 	}
 	if (gShownPills != m->numPills) {
 		pc = true;
@@ -755,29 +782,43 @@ static void SEC_UI DrawStatus(Coord py)
 		bc = true;
 		gShownBases = (UInt8)m->numBases;
 	}
+	for (i = 0; i < 4; i++)
+		gc[i] = NeedGauge(k, (UInt8)i, force);
+	mc = force || man != gShownMan || carry != gShownCarry;
+	if (gGame->timeLimit) {
+		left = gGame->tick >= gGame->timeLimit ? 0 :
+			(gGame->timeLimit - gGame->tick + GAME_TICKS_PER_SECOND - 1) / GAME_TICKS_PER_SECOND;
+		tc = force || bc || left != gShownSec;
+		gShownSec = left;
+	}
+	gShownMan = man;
+	gShownCarry = carry;
+	if (!force && !pc && !bc && !tc && !mc && !gc[0] && !gc[1] && !gc[2] && !gc[3])
+		return;
+
+	old = FntSetFont(stdFont);
+	if (force) {
+		Erase(0, py, gW, gPanelH);
+		Fill(0, py, gW, 1, gBlack);
+		Fill(0, py + 1, gW, 1, gWhite);
+	}
 	rowM = 3 * gMs + 4;
 	// The four gauges and the builder share the width in five even slots,
 	// with a gap of gU on each side of a slot.
 	y = py + 2;
 	for (i = 0; i < 4; i++)
-		MaybeGauge(k, now, (UInt8)i, force, SlotX(i, 5) + gU, y, SlotX(i + 1, 5) - SlotX(i, 5) - 2 * gU);
-	if (force || man != gShownMan || carry != gShownCarry)
+		if (gc[i])
+			DrawGauge((UInt8)i, SlotX(i, 5) + gU, y, SlotX(i + 1, 5) - SlotX(i, 5) - 2 * gU,
+				gBlink[i] != 0);
+	if (mc)
 		DrawBuilder(SlotX(4, 5) + gU, y, gW - SlotX(4, 5) - 2 * gU, man, carry);
 	y += isz + 1;
 	if (force || pc)
 		DrawMarks(false, y, rowM - 2);
 	if (force || bc)
 		DrawMarks(true, y, rowM - 2);
-	if (gGame->timeLimit) {
-		UInt32 left = gGame->tick >= gGame->timeLimit ? 0 :
-			(gGame->timeLimit - gGame->tick + GAME_TICKS_PER_SECOND - 1) / GAME_TICKS_PER_SECOND;
-
-		if (force || bc || left != gShownSec)
-			DrawTimeLeft(y, rowM - 2, left);
-		gShownSec = left;
-	}
-	gShownMan = man;
-	gShownCarry = carry;
+	if (tc)
+		DrawTimeLeft(y, rowM - 2, left);
 	gStatusDrawn = true;
 	FntSetFont(old);
 }

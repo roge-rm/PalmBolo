@@ -193,6 +193,17 @@ typedef struct Bot {
 	uint8_t stuck;          // stuck checks with no new square
 	uint8_t minesLaid;
 	uint8_t buildWait;      // ticks before another builder order
+	// What it steers by between looks (bot.c drives in full every few
+	// ticks and keeps these in between).
+	uint8_t wantHi, wantLo; // heading to turn to
+	uint8_t tsp;            // speed to make for, quarters a tick
+	uint8_t dead;           // turns only when further off than this
+	uint8_t steerBits;      // SB_* in bot.c
+	uint8_t sightWant;      // gunsight length to step to, 0 for none
+	uint8_t fireHi, fireLo; // heading it shoots along when facing it
+	uint8_t fireRange;      // range of that shot, 16 world units
+	uint8_t lastArmour;     // armour at the last tick, to see a hit
+	uint8_t lookX, lookY;   // square at the last full look
 	uint8_t wayN;
 	uint8_t way[BOT_WAYS][2];
 } Bot;

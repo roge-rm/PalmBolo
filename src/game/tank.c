@@ -595,45 +595,102 @@ void SEC_TANK tank_create(GameState *s, uint8_t t, uint8_t player)
 // same way.
 // For nudge: a[i] is v's distance from the span of square c + i - 1
 // (256 world units), negative before it, 0 inside and positive after.
+// Returns bit i set where a[i] is within the tank's radius either way.
 #define kFar 0x4000
-static void SEC_TANK nudge_reach(int32_t v, uint8_t c, int16_t *a)
+static __inline__ uint8_t SEC_TANK nudge_reach(int32_t v, uint8_t c, int16_t *a)
 {
 	int16_t l = (int16_t)(v - ((int32_t)c << 8));       // a push moves at most a radius
+	int16_t a0, a1, a2;
 
-	a[0] = c == 0 ? kFar : l < -256 ? (int16_t)(l + 256) : l > 0 ? l : 0;
-	a[1] = l < 0 ? l : l > 256 ? (int16_t)(l - 256) : 0;
-	a[2] = c == 255 ? kFar : l < 256 ? (int16_t)(l - 256) : l > 512 ? (int16_t)(l - 512) : 0;
+	a0 = c == 0 ? kFar : l < -256 ? (int16_t)(l + 256) : l > 0 ? l : 0;
+	a1 = l < 0 ? l : l > 256 ? (int16_t)(l - 256) : 0;
+	a2 = c == 255 ? kFar : l < 256 ? (int16_t)(l - 256) : l > 512 ? (int16_t)(l - 512) : 0;
+	a[0] = a0;
+	a[1] = a1;
+	a[2] = a2;
+	return (uint8_t)((a0 > -R_TANK_HIT_RADIUS && a0 < R_TANK_HIT_RADIUS ? 1 : 0) |
+		(a1 > -R_TANK_HIT_RADIUS && a1 < R_TANK_HIT_RADIUS ? 2 : 0) |
+		(a2 > -R_TANK_HIT_RADIUS && a2 < R_TANK_HIT_RADIUS ? 4 : 0));
+}
+
+// True if any square nudge's first pass reaches is solid. The radius is
+// under half a square, so it reaches the middle square, at most one
+// neighbour on each axis and the corner between them. With none solid
+// nudge changes nothing.
+static uint8_t SEC_TANK nudge_any(const GameState *s, const Tank *k)
+{
+	uint8_t cx = (uint8_t)(k->x >> 8), cy = (uint8_t)(k->y >> 8), fx = (uint8_t)k->x,
+		fy = (uint8_t)k->y, nx = cx, ny = cy, p = k->player;
+	int16_t ex = 0, ey = 0;    // distance to the neighbour on each axis, 0 for none
+
+	if (solid(s, cx, cy, p))
+		return 1;
+	if (fx < R_TANK_HIT_RADIUS && cx != 0) {
+		nx = (uint8_t)(cx - 1);
+		ex = fx;
+	} else if (fx > 256 - R_TANK_HIT_RADIUS && cx != 255) {
+		nx = (uint8_t)(cx + 1);
+		ex = (int16_t)(256 - fx);
+	}
+	if (fy < R_TANK_HIT_RADIUS && cy != 0) {
+		ny = (uint8_t)(cy - 1);
+		ey = fy;
+	} else if (fy > 256 - R_TANK_HIT_RADIUS && cy != 255) {
+		ny = (uint8_t)(cy + 1);
+		ey = (int16_t)(256 - fy);
+	}
+	// fx or fy of 0 is a neighbour at distance 0, still in reach.
+	if (nx != cx && solid(s, nx, cy, p))
+		return 1;
+	if (ny != cy && solid(s, cx, ny, p))
+		return 1;
+	return nx != cx && ny != cy &&
+		MUL16(ex, ex) + MUL16(ey, ey) < (int32_t)R_TANK_HIT_RADIUS * R_TANK_HIT_RADIUS &&
+		solid(s, nx, ny, p);
 }
 
 static uint8_t SEC_TANK nudge(GameState *s, Tank *k)
 {
 	uint8_t pass, hit = 0;
-	int32_t x = k->x, y = k->y;
+	int32_t x, y;
+
+	if (!nudge_any(s, k))
+		return 0;
+	x = k->x;
+	y = k->y;
 
 	for (pass = 0; pass < R_TANK_NUDGE_PASSES; pass++) {
-		uint8_t cx = (uint8_t)(x >> 8), cy = (uint8_t)(y >> 8), pushed = 0, ox, oy;
+		uint8_t cx = (uint8_t)(x >> 8), cy = (uint8_t)(y >> 8), pushed = 0, ox, oy, mx, my;
 		// The distance on each axis from the tank's middle to the nearest
 		// point of the column or row of squares before, at and after the
 		// middle one, or kFar for one past the map's edge (it wraps to the
-		// far side). Worked out again after each push.
+		// far side), and which of them are within reach. Worked out again
+		// after each push.
 		int16_t ax[3], ay[3];
 
-		nudge_reach(x, cx, ax);
-		nudge_reach(y, cy, ay);
+		mx = nudge_reach(x, cx, ax);
+		my = nudge_reach(y, cy, ay);
 		for (oy = 0; oy < 3; oy++) {
+			// A row out of reach stays so until a push, and a push needs
+			// a square in reach.
+			if (!((my >> oy) & 1))
+				continue;
 			for (ox = 0; ox < 3; ox++) {
-				uint8_t sx = (uint8_t)(cx + ox - 1), sy = (uint8_t)(cy + oy - 1);
-				int16_t dx = ax[ox], dy = ay[oy];
+				uint8_t sx, sy;
+				int16_t dx, dy;
 				int32_t minX, minY, d2;
 
 				// Out of reach on either axis is out of reach, solid or
 				// not, so that is checked first.
-				if (dx <= -R_TANK_HIT_RADIUS || dx >= R_TANK_HIT_RADIUS ||
-				    dy <= -R_TANK_HIT_RADIUS || dy >= R_TANK_HIT_RADIUS)
+				if (!((mx >> ox) & (my >> oy) & 1))
 					continue;
+				dx = ax[ox];
+				dy = ay[oy];
 				d2 = MUL16(dx, dx) + MUL16(dy, dy);
 				if (d2 >= (int32_t)R_TANK_HIT_RADIUS * R_TANK_HIT_RADIUS)
 					continue;
+				sx = (uint8_t)(cx + ox - 1);
+				sy = (uint8_t)(cy + oy - 1);
 				if (!solid(s, sx, sy, k->player))
 					continue;
 				minX = (int32_t)sx << 8;
@@ -666,8 +723,8 @@ static uint8_t SEC_TANK nudge(GameState *s, Tank *k)
 					y = 0;
 				if (y > 65535)
 					y = 65535;
-				nudge_reach(x, cx, ax);
-				nudge_reach(y, cy, ay);
+				mx = nudge_reach(x, cx, ax);
+				my = nudge_reach(y, cy, ay);
 			}
 		}
 		if (!pushed)

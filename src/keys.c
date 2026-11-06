@@ -19,6 +19,8 @@
 #define vchrSonyJogRelease  0x1706
 #define vchrSonyKeyDown     0x1720  // keyCode is the character
 #define vchrSonyKeyUp       0x1721
+#define vchrHardCenter      0x013D  // vchrHardRockerCenter, palmOne 5-way centre
+#define vchrAttnTapped      0x0128  // vchrAttnIndicatorTapped, opens the Alerts list
 #define kWillSendUp         0x0800  // willSendUpKeyMask, palmOne
 #define kKeyUpEvent         0x4000  // keyUpEvent, OS 5 with palmOne keys
 
@@ -32,6 +34,7 @@ static UInt32 gUntil[kHeld];        // sys tick each held key runs to, 0 not hel
 static UInt32 gStart[kHeld];        // tick of a first press waiting for its first repeat, 0 none
 static UInt16 gFirst = 50;          // longest first repeat delay seen, ticks
 static Boolean gNavState;           // KeyCurrentState gives the 5-way's left and right
+static Boolean gCentre;             // the 5-way centre is down (TX)
 static UInt16 gInit = 50, gPeriod = 10, gTps = 100;
 static UInt16 gOldInit, gOldPeriod, gOldTap;
 static Boolean gOldAhead, gRatesSet;
@@ -52,6 +55,7 @@ static UInt16 SEC_KEYS Lookup(WChar c)
 	case chrDownArrow: case 'a':
 		return IN_SLOWER;
 	case chrSpace: case chrLineFeed: case chrCarriageReturn: case vchrSonyJogPush:
+	case vchrHardCenter:
 		return IN_FIRE;
 	case chrHorizontalTabulation: case 'z':
 		return IN_MINE;
@@ -92,6 +96,7 @@ void SEC_KEYS KeysClear(void)
 
 	for (i = 0; i < kHeld; i++)
 		gUntil[i] = gStart[i] = 0;
+	gCentre = false;
 }
 
 void SEC_KEYS KeysStart(UInt16 ticksPerSecond)
@@ -186,6 +191,8 @@ UInt8 SEC_KEYS KeysEvent(const EventType *e)
 			what = Lookup(e->data.keyDown.keyCode);
 		if (what && what < 0x100)
 			gUntil[Index(what)] = 0;
+		if (e->data.keyDown.chr == vchrHardCenter)
+			gCentre = false;
 		return what ? KA_EAT : KA_NONE;
 	}
 	if (e->eType != keyDownEvent)
@@ -208,6 +215,13 @@ UInt8 SEC_KEYS KeysEvent(const EventType *e)
 		gUntil[Index(IN_FIRE)] = 0;
 		return KA_EAT;
 	}
+	// Holding the 5-way centre on a TX sends this, which opens the Alerts
+	// list, and then no key up. It is eaten and ends the centre's fire.
+	if (c == vchrAttnTapped && gCentre) {
+		gCentre = false;
+		gUntil[Index(IN_FIRE)] = 0;
+		return KA_EAT;
+	}
 	if (c == vchrLateWakeup || c == vchrAutoOff) {
 		KeysClear();
 		return KA_NONE;
@@ -220,6 +234,8 @@ UInt8 SEC_KEYS KeysEvent(const EventType *e)
 			return KA_EAT;
 	}
 	what = Lookup(c);
+	if (c == vchrHardCenter)
+		gCentre = true;
 	if (!what) {
 		// Menus, commands, Find and the launcher stay with the system;
 		// other characters don't reach the form.

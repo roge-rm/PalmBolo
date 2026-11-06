@@ -1017,7 +1017,8 @@ static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
 		gSoakGame = n;
 		memset(&st, 0, sizeof(st));
 		st.firstCapture = -1;
-		bot_new(&g, ev, len, 1000 + n * 77, 1, bots - 1, level);
+		// SOAK_SEED=N moves every game to other seeds.
+		bot_new(&g, ev, len, (getenv("SOAK_SEED") ? atoi(getenv("SOAK_SEED")) : 1000) + n * 77, 1, bots - 1, level);
 		game_set_bot(&g, 0, level);
 		if (getenv("MD") && n == 0) {
 			int x0, y0, x, y;
