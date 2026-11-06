@@ -146,6 +146,9 @@ static const RectangleType *gClipB; // DrawRegion's clip while it draws
 static BlitWin gBgB;
 static BlitWin *gDstB = &gViewB;
 static Boolean gBgValid;
+// The frame is drawn offscreen (compose.c) and copied to the screen at the
+// end; gCompValid once the window holds the whole view.
+static Boolean gComposing, gCompValid;
 
 // b, if not NULL, gets the sheet's pixels for BlitCell.
 static WinHandle SEC_UI LoadSheet(UInt16 id, UInt16 cells, Boolean oneBit, BlitWin *b)
@@ -218,6 +221,8 @@ static void SEC_UI FreeSheets(void)
 		MemPtrFree(gBgB.bits);
 	gBgB.bits = NULL;
 	gBgValid = false;
+	CompFree();
+	gCompValid = false;
 }
 
 // Copies mask cell 0 from the 1-bit sheet with winMask onto a cell filled
@@ -716,6 +721,8 @@ static void SEC_UI DrawAll(void)
 	r.extent.x = gW;
 	r.extent.y = gH;
 	DrawRegion(&r);
+	if (gComposing)
+		CompAll();
 }
 
 // True if the view can scroll dist pixels by moving its bits: drawn
@@ -783,6 +790,8 @@ static void SEC_UI ScrollAxis(Int32 d, Boolean horizontal)
 	if (d == 0)
 		return;
 	dist = (Coord)(d < 0 ? -d : d);
+	if (gComposing)
+		CompAll();
 	if (horizontal)
 		gVx = now;
 	else
@@ -831,6 +840,8 @@ static void SEC_UI Remember(Coord x, Coord y, Coord w, Coord h)
 	gOld[gNumOld].topLeft.y = y;
 	gOld[gNumOld].extent.x = w;
 	gOld[gNumOld].extent.y = h;
+	if (gComposing)
+		CompAdd(&gOld[gNumOld]);
 	gNumOld++;
 }
 
@@ -1183,6 +1194,8 @@ static void SEC_UI Erase(const RectangleType *r)
 		Mark(&c);
 	else
 		DrawRegion(&c);
+	if (gComposing)
+		CompAdd(&c);
 }
 
 // Draws the squares Erase marked, each once, then clears the marks.
@@ -1261,6 +1274,7 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 	UInt16 i;
 	Boolean covered = PanelCovers();
 	const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
+	WinHandle scr = NULL;
 #ifdef DEBUG
 	UInt32 t0 = TimGetTicks();
 #endif
@@ -1271,6 +1285,16 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 	gPartT = TimGetTicks();
 #endif
 	NativeOn();
+	// On OS 3.5 and later the view is drawn offscreen when there's room.
+	if (full && !covered && !gViewB.bits && !CompFit(gW, gH))
+		gCompValid = false;
+	if (CompWin() && !covered) {
+		if (!gCompValid)
+			full = true;
+		scr = WinSetDrawWindow(CompWin());
+		CompBegin();
+		gComposing = true;
+	}
 	if (!full) {
 		DirtyStart();
 		gEraseBg = BgUse() && gBgValid;
@@ -1308,17 +1332,23 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 			BgFit();
 			DrawAll();
 			gBgValid = BgUse();
+			gCompValid = gComposing;
 		}
 	}
 	// Changes under the overview aren't drawn, so gBgB is stale until the
 	// next full frame.
 	if (covered)
-		gBgValid = false;
+		gBgValid = gCompValid = false;
 	gWasCovered = covered;
 	gNumOld = 0;
 	PART(3);
 	if (!covered)
 		DrawSprites();
+	if (gComposing) {
+		gComposing = false;
+		WinSetDrawWindow(scr);
+		CompFlush(scr);
+	}
 	PART(4);
 	gShownDeaths = k->deaths;
 	PanelDraw(full, gH, gVx, gVy, gW, gH, gTs);

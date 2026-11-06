@@ -33,7 +33,7 @@ ART      = build/art
 CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES) -I$(ART) -Isrc
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
-SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound front blit
+SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound front blit keys compose
 GAMESRCS = game tank shells pills lgm treegrow util map bot
 # The scripted games are for the debug self-test only.
 ifdef DEBUG

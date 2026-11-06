@@ -1,0 +1,62 @@
+# TG50 keyboard play: starts a game on Everard Island and drives with the
+# built-in keyboard (kb:NAME keys, tools/frond-tg50.py). Debug build made
+# with EXTRA="-DDEMO_START -DAUTOQUIT_SECONDS=40". Times are ms after launch.
+2000 pen-down 80 240
+2100 pen-up
+3500 pen-down 66 300
+3600 pen-up
+5000 pen-down 66 300
+5100 pen-up
+8000 snapshot "start.png"
+# Gunsight nearer three times with K, then the builder makes road there
+# with R.
+8500 key-down kb:k
+8600 key-up kb:k
+8800 key-down kb:k
+8900 key-up kb:k
+9100 key-down kb:k
+9200 key-up kb:k
+9500 snapshot "sight-near.png"
+9600 key-down kb:r
+9700 key-up kb:r
+10500 snapshot "builder-road.png"
+# Turn left with O for 0.6 s, faster with Q for 1 s, slower with A.
+14000 key-down kb:o
+14600 key-up kb:o
+14700 snapshot "turned-left.png"
+15000 key-down kb:q
+16000 key-up kb:q
+16100 snapshot "driven.png"
+16200 key-down kb:a
+17700 key-up kb:a
+# Right arrow 0.6 s, fire with Space, lay a mine with Tab.
+18000 key-down kb:right
+18600 key-up kb:right
+18700 snapshot "turned-right.png"
+19000 key-down kb:space
+19100 key-up kb:space
+19150 snapshot "fired.png"
+19600 key-down kb:tab
+19700 key-up kb:tab
+# Up and down arrows: faster for 0.5 s, then slower.
+20500 key-down kb:up
+21000 key-up kb:up
+21000 key-down kb:down
+22500 key-up kb:down
+22600 snapshot "stopped.png"
+# Overview on and off with V.
+23000 key-down kb:v
+23100 key-up kb:v
+24000 snapshot "overview.png"
+24500 key-down kb:v
+24600 key-up kb:v
+# Backspace opens the menu; a tap below closes it.
+25500 key-down kb:backspace
+25600 key-up kb:backspace
+26500 snapshot "menu.png"
+27000 pen-down 160 200
+27100 pen-up
+# Typed letters that do nothing are eaten.
+28000 key-down kb:h
+28100 key-up kb:h
+29000 snapshot "end.png"

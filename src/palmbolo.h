@@ -18,6 +18,8 @@ struct GameState;
 #endif
 #define SEC_UI __attribute__((section("ui")))
 #define SEC_FRONT __attribute__((section("front")))
+#define SEC_KEYS __attribute__((section("keys")))
+#define SEC_DRAW __attribute__((section("draw")))
 
 #define kMinRomVersion  sysMakeROMVersion(3, 0, 0, sysROMStageRelease, 0)
 #define kRom35          sysMakeROMVersion(3, 5, 0, sysROMStageRelease, 0)
@@ -163,6 +165,31 @@ Boolean SEC_UI PanelCovers(void);
 IndexedColorType SEC_UI PanelBg(void);
 Boolean SEC_UI PanelToggle(void);
 void SEC_UI PanelDraw(Boolean force, Coord py, Int32 vx, Int32 vy, Coord vw, Coord vh, Coord ts);
+
+// The view composed offscreen (compose.c), OS 3.5 and later. CompFit makes
+// the window, CompWin is it or NULL, CompAdd and CompAll note what changed
+// this frame (from CompBegin) and CompFlush copies that to dst.
+Boolean SEC_DRAW CompFit(Coord w, Coord h);
+void SEC_DRAW CompFree(void);
+WinHandle SEC_DRAW CompWin(void);
+void SEC_DRAW CompBegin(void);
+void SEC_DRAW CompAdd(const RectangleType *r);
+void SEC_DRAW CompAll(void);
+void SEC_DRAW CompFlush(WinHandle dst);
+
+// Keyboard (keys.c). KeysStart and KeysStop go round a game showing; they
+// set and put back the key repeat. KeysEvent takes a key event and returns
+// a KA_* action, with KA_EAT when the event is used up. KeysHeld gives the
+// IN_* keys held now. KeysTarget is the square under the gunsight.
+enum { KA_NONE, KA_TREE, KA_ROAD, KA_WALL, KA_PILL, KA_MINE, KA_NEAR, KA_FAR, KA_OVERVIEW,
+	KA_MENU };
+#define KA_EAT 0x80
+void SEC_KEYS KeysStart(UInt16 ticksPerSecond);
+void SEC_KEYS KeysStop(void);
+void SEC_KEYS KeysClear(void);
+UInt8 SEC_KEYS KeysEvent(const EventType *e);
+UInt8 SEC_KEYS KeysHeld(void);
+void SEC_KEYS KeysTarget(const struct GameState *g, UInt8 *mx, UInt8 *my);
 
 // Sound (sound.c). SoundOpen reads the system game volume when the game
 // shows; SoundFrame plays the sounds the rules made since the last frame

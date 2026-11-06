@@ -289,18 +289,39 @@ static Boolean GameHandler(EventType *e)
 		LOG(("start: view open %lu sys ticks after Start", TimGetTicks() - gStartTicks));
 		TimingHeap("view open");
 		SoundOpen(gDev.ticksPerSecond);
+		KeysStart(gDev.ticksPerSecond);
 		gFormOpen = true;
 		gDirty = gFull = true;
 		return true;
 	case frmCloseEvent:
 		gFormOpen = false;
 		SoundStop();
+		KeysStop();
 		ViewClose();
 		return false;
 	default:
 		break;
 	}
 	return false;
+}
+
+// A one-off keyboard action (keys.c). Builder orders go to the square
+// under the gunsight.
+static void KeyAction(UInt8 a)
+{
+	if (a >= KA_TREE && a <= KA_MINE) {
+		gAction = (UInt8)(a - KA_TREE);
+		ViewSetAction(gAction);
+		KeysTarget(&gGame, &gBuildX, &gBuildY);
+		gBuild = (UInt8)(gAction + 1);
+	} else if (a == KA_NEAR || a == KA_FAR) {
+		gSight = (Int8)(gSight + (a == KA_NEAR ? -1 : 1));
+	} else if (a == KA_OVERVIEW) {
+		if (PanelToggle())
+			gDirty = gFull = true;
+	} else if (a == KA_MENU) {
+		EvtEnqueueKey(vchrMenu, 0, commandKeyMask);
+	}
 }
 
 // Returns true when the event was dealt with.
@@ -321,9 +342,21 @@ static Boolean HandleEvent(EventType *e)
 		    e->data.keyDown.keyCode == vchrRockerCenter ||
 		    (c == vchrNavChange && (e->data.keyDown.keyCode & navBitSelect))))
 			gFire = 8;
-		if (IsGameKey(c) || c == vchrTxCenter)
+	}
+	// Keyboards and the 5-way's left and right in a game (keys.c);
+	// keyUpEvent is 0x4000.
+	if (gForm == GameForm && gFormOpen && !gMenuOpen &&
+	    (e->eType == keyDownEvent || e->eType == 0x4000)) {
+		UInt8 a = KeysEvent(e);
+
+		if (a & ~KA_EAT)
+			KeyAction((UInt8)(a & ~KA_EAT));
+		if (a & KA_EAT)
 			return true;
 	}
+	if (e->eType == keyDownEvent && (IsGameKey(e->data.keyDown.chr) ||
+	    e->data.keyDown.chr == vchrTxCenter))
+		return true;
 	// A tap on the map sends the builder there with the chosen action. The
 	// button row along the bottom chooses the action or moves the gunsight.
 	if (gForm == GameForm && !gMenuOpen && e->eType == penDownEvent &&
@@ -375,12 +408,14 @@ static Boolean HandleEvent(EventType *e)
 		return false;
 	case menuOpenEvent:
 		gMenuOpen = true;
+		KeysClear();
 		break;
 	case menuEvent:
 		return HandleMenu(e->data.menu.itemID);
 	case winEnterEvent:
 	case winExitEvent:
 		gDirty = gFull = true;
+		KeysClear();
 		break;
 	default:
 		break;
@@ -432,6 +467,7 @@ static GameInput ReadInputs(void)
 		in.keys |= IN_FASTER;
 	if (k & keyBitPageDown)
 		in.keys |= IN_SLOWER;
+	in.keys |= KeysHeld();
 	if ((k & kKeyNavSelect) || gFire) {
 		in.keys |= IN_FIRE;
 		if (gFire)
@@ -441,7 +477,8 @@ static GameInput ReadInputs(void)
 		in.keys |= IN_SIGHT_FAR;
 	else if (gSight < 0)
 		in.keys |= IN_SIGHT_NEAR;
-	gSight = 0;
+	// Each tick takes one step; more taps wait for the next.
+	gSight = (Int8)(gSight > 0 ? gSight - 1 : gSight < 0 ? gSight + 1 : 0);
 	in.build = gBuild;
 	in.buildX = gBuildX;
 	in.buildY = gBuildY;
@@ -850,6 +887,7 @@ static void AppStop(void)
 			FrmAlert(SaveFailAlert);
 	}
 	SoundStop();
+	KeysStop();
 	ViewClose();
 	FrmCloseAllForms();
 	ScreenExit();

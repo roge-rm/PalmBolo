@@ -27,6 +27,18 @@ Default controls:
 
 The four buttons can be changed in Settings.
 
+With a keyboard (the Clié TG50, NX and UX, a Treo or Centro, a Palm Universal or Wireless keyboard, a Stowaway, etc.):
+- O and P, or left and right arrows: turn
+- Q and A, or up and down arrows: faster and slower
+- Space or Enter: fire
+- Tab or Z: lay a mine
+- K and L, or comma and full stop: gunsight nearer and further
+- T, R, W, G and M, or 1 to 5: send the builder to the gunsight for trees, a road, a wall, a pillbox or a mine
+- V: overview map
+- Backspace or Escape: menu
+
+On a Clié the jog dial moves the gunsight and pressing it fires.
+
 ## Building
 
 Needs prc-tools-remix, PilRC, Python 3 and the Palm OS SDK 5r3 in `../palm-os-sdk`.
