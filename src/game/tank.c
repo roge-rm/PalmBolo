@@ -39,25 +39,42 @@ uint8_t SEC_TANK g_speed_at(const GameState *s, uint8_t x, uint8_t y, uint8_t on
 	return t < 16 ? kSpeed[t] : R_SPEED_DEEP_SEA;
 }
 
-static uint8_t SEC_TANK turn_at(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat, uint8_t player)
+// g_speed_at and turn_at together, for one lookup of the square.
+static void SEC_TANK speed_turn(const GameState *s, uint8_t x, uint8_t y, uint8_t onBoat,
+	uint8_t player, uint8_t *speed, uint8_t *turn)
 {
 	int8_t b;
 	uint8_t t;
 
-	if (g_live_pill_at(s, x, y) >= 0)
-		return R_TURN_SOLID;
+	if (g_live_pill_at(s, x, y) >= 0) {
+		*speed = R_SPEED_SOLID;
+		*turn = R_TURN_SOLID;
+		return;
+	}
 	b = g_base_at(s, x, y);
-	if (b >= 0)
-		return bases_cant_drive(s, (uint8_t)b, player) ? R_TURN_SOLID : R_TURN_BASE;
-	if (onBoat)
-		return R_TURN_BOAT;
+	if (b >= 0) {
+		if (bases_cant_drive(s, (uint8_t)b, player)) {
+			*speed = R_SPEED_SOLID;
+			*turn = R_TURN_SOLID;
+		} else {
+			*speed = R_SPEED_BASE;
+			*turn = R_TURN_BASE;
+		}
+		return;
+	}
+	if (onBoat) {
+		*speed = R_SPEED_BOAT;
+		*turn = R_TURN_BOAT;
+		return;
+	}
 	t = game_terrain(x, y);
-	return t < 16 ? kTurn[t] : R_TURN_DEEP_SEA;
+	*speed = t < 16 ? kSpeed[t] : R_SPEED_DEEP_SEA;
+	*turn = t < 16 ? kTurn[t] : R_TURN_DEEP_SEA;
 }
 
 // Solid for a tank's circle: buildings, live pills and bases it can't
 // drive over.
-static uint8_t SEC_TANK solid(const GameState *s, uint8_t x, uint8_t y, uint8_t player)
+static __inline__ uint8_t SEC_TANK solid(const GameState *s, uint8_t x, uint8_t y, uint8_t player)
 {
 	int8_t b;
 	uint8_t t;
@@ -576,29 +593,51 @@ void SEC_TANK tank_create(GameState *s, uint8_t t, uint8_t player)
 // the square. WinBolo does this in doubles; here the distance is in 1/256
 // world units from an integer square root and the push is truncated the
 // same way.
+// For nudge: a[i] is v's distance from the span of square c + i - 1
+// (256 world units), negative before it, 0 inside and positive after.
+#define kFar 0x4000
+static void SEC_TANK nudge_reach(int32_t v, uint8_t c, int16_t *a)
+{
+	int16_t l = (int16_t)(v - ((int32_t)c << 8));       // a push moves at most a radius
+
+	a[0] = c == 0 ? kFar : l < -256 ? (int16_t)(l + 256) : l > 0 ? l : 0;
+	a[1] = l < 0 ? l : l > 256 ? (int16_t)(l - 256) : 0;
+	a[2] = c == 255 ? kFar : l < 256 ? (int16_t)(l - 256) : l > 512 ? (int16_t)(l - 512) : 0;
+}
+
 static uint8_t SEC_TANK nudge(GameState *s, Tank *k)
 {
 	uint8_t pass, hit = 0;
 	int32_t x = k->x, y = k->y;
 
 	for (pass = 0; pass < R_TANK_NUDGE_PASSES; pass++) {
-		uint8_t cx = (uint8_t)(x >> 8), cy = (uint8_t)(y >> 8), pushed = 0;
-		int8_t ox, oy;
+		uint8_t cx = (uint8_t)(x >> 8), cy = (uint8_t)(y >> 8), pushed = 0, ox, oy;
+		// The distance on each axis from the tank's middle to the nearest
+		// point of the column or row of squares before, at and after the
+		// middle one, or kFar for one past the map's edge (it wraps to the
+		// far side). Worked out again after each push.
+		int16_t ax[3], ay[3];
 
-		for (oy = -1; oy <= 1; oy++) {
-			for (ox = -1; ox <= 1; ox++) {
-				uint8_t sx = (uint8_t)(cx + ox), sy = (uint8_t)(cy + oy);
-				int32_t minX = (int32_t)sx << 8, minY = (int32_t)sy << 8, px, py, dx, dy, d2;
+		nudge_reach(x, cx, ax);
+		nudge_reach(y, cy, ay);
+		for (oy = 0; oy < 3; oy++) {
+			for (ox = 0; ox < 3; ox++) {
+				uint8_t sx = (uint8_t)(cx + ox - 1), sy = (uint8_t)(cy + oy - 1);
+				int16_t dx = ax[ox], dy = ay[oy];
+				int32_t minX, minY, d2;
 
-				if (!solid(s, sx, sy, k->player))
+				// Out of reach on either axis is out of reach, solid or
+				// not, so that is checked first.
+				if (dx <= -R_TANK_HIT_RADIUS || dx >= R_TANK_HIT_RADIUS ||
+				    dy <= -R_TANK_HIT_RADIUS || dy >= R_TANK_HIT_RADIUS)
 					continue;
-				px = x < minX ? minX : x > minX + 256 ? minX + 256 : x;
-				py = y < minY ? minY : y > minY + 256 ? minY + 256 : y;
-				dx = x - px;
-				dy = y - py;
-				d2 = dx * dx + dy * dy;
+				d2 = MUL16(dx, dx) + MUL16(dy, dy);
 				if (d2 >= (int32_t)R_TANK_HIT_RADIUS * R_TANK_HIT_RADIUS)
 					continue;
+				if (!solid(s, sx, sy, k->player))
+					continue;
+				minX = (int32_t)sx << 8;
+				minY = (int32_t)sy << 8;
 				hit = 1;
 				pushed = 1;
 				if (d2 == 0) {
@@ -616,8 +655,8 @@ static uint8_t SEC_TANK nudge(GameState *s, Tank *k)
 				} else {
 					int32_t dist = util_isqrt((uint32_t)d2 << 16);   // 1/256 units
 
-					x += dx * ((int32_t)R_TANK_HIT_RADIUS * 256 - dist) / dist;
-					y += dy * ((int32_t)R_TANK_HIT_RADIUS * 256 - dist) / dist;
+					x += div16(MUL16(dx, (int32_t)R_TANK_HIT_RADIUS * 256 - dist), (int16_t)dist);
+					y += div16(MUL16(dy, (int32_t)R_TANK_HIT_RADIUS * 256 - dist), (int16_t)dist);
 				}
 				if (x < 0)
 					x = 0;
@@ -627,6 +666,8 @@ static uint8_t SEC_TANK nudge(GameState *s, Tank *k)
 					y = 0;
 				if (y > 65535)
 					y = 65535;
+				nudge_reach(x, cx, ax);
+				nudge_reach(y, cy, ay);
 			}
 		}
 		if (!pushed)
@@ -652,7 +693,7 @@ static void SEC_TANK tank_push(const GameState *s, uint8_t t, int16_t *px, int16
 	*py = 0;
 	for (i = 0; i < s->numTanks; i++) {
 		const Tank *o = &s->tanks[i];
-		int32_t ox, oy, d2, dist, push;
+		int32_t ox, oy, d2, dist, push, n;
 		int16_t dx, dy;
 
 		if (i == t || o->destroyed)
@@ -675,8 +716,13 @@ static void SEC_TANK tank_push(const GameState *s, uint8_t t, int16_t *px, int16
 		push = ((int32_t)R_TANK_COLLIDE * 256 - dist) / 2;
 		if (push < 256)
 			push = 256;
-		*px = (int16_t)(*px + (int16_t)(dx * push / dist));
-		*py = (int16_t)(*py + (int16_t)(dy * push / dist));
+		// |dx| <= dist / 256, so each share is at most push / 256.
+		n = MUL16(dx, push);
+		*px = (int16_t)(*px + (n >= 0 ? (int16_t)udiv16((uint32_t)n, (uint16_t)dist) :
+			-(int16_t)udiv16((uint32_t)-n, (uint16_t)dist)));
+		n = MUL16(dy, push);
+		*py = (int16_t)(*py + (n >= 0 ? (int16_t)udiv16((uint32_t)n, (uint16_t)dist) :
+			-(int16_t)udiv16((uint32_t)-n, (uint16_t)dist)));
 	}
 }
 
@@ -851,8 +897,13 @@ static void SEC_TANK drive(GameState *s, uint8_t t, const GameInput *in)
 			k->obstructed = 1;
 		}
 	}
-	turn(k, turn_at(s, mx, my, k->boat, k->player), in->keys);
-	accel(k, (int16_t)(g_speed_at(s, mx, my, k->boat, k->player) * 4), in->keys);
+	{
+		uint8_t sp, tr;
+
+		speed_turn(s, mx, my, k->boat, k->player, &sp, &tr);
+		turn(k, tr, in->keys);
+		accel(k, (int16_t)(sp * 4), in->keys);
+	}
 	{
 		uint16_t nx = k->x, ny = k->y;
 

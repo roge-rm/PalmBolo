@@ -2,7 +2,7 @@
 #define RESOURCE_H
 
 // The version, for the VERSION resource, the About alert and the log.
-#define kAppVersion         "0.7.0"
+#define kAppVersion         "0.8.0"
 
 #define MapListForm         1000
 #define MapList             1001

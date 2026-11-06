@@ -15,6 +15,29 @@
 // 16 x 16 to 32 bit multiply, one muls.w on the 68000.
 #define MUL16(a, b)     ((int32_t)(int16_t)(a) * (int16_t)(b))
 
+// n / d rounded towards zero, as C does, for a quotient that fits in 16
+// bits: one divs.w on the 68000 rather than gcc's 32-bit divide routine.
+static __inline__ int16_t div16(int32_t n, int16_t d)
+{
+#ifdef __m68k__
+	__asm__("divs %2,%0" : "=d" (n) : "0" (n), "dm" (d));
+	return (int16_t)n;
+#else
+	return (int16_t)(n / d);
+#endif
+}
+
+// The same for n >= 0 and an unsigned divisor (divu.w).
+static __inline__ uint16_t udiv16(uint32_t n, uint16_t d)
+{
+#ifdef __m68k__
+	__asm__("divu %2,%0" : "=d" (n) : "0" (n), "dm" (d));
+	return (uint16_t)n;
+#else
+	return (uint16_t)(n / d);
+#endif
+}
+
 // WinBolo's utilCalcDistance: speed times the cosine and sine of angle
 // (north is 0, clockwise), each rounded half away from zero. speed is
 // 0..1023. WinBolo works this out in doubles; here it comes from the

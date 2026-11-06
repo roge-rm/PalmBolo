@@ -178,26 +178,30 @@ static void SEC_UI Plot(Coord x, Coord y, IndexedColorType c)
 		}
 		WinDrawPixel(x, y);
 	} else if (c) {
-		WinDrawPixel(x, y);
+		// WinDrawPixel and WinErasePixel are OS 3.5.
+		WinDrawLine(x, y, x, y);
 	} else {
-		WinErasePixel(x, y);
+		WinEraseLine(x, y, x, y);
 	}
 }
 
 // Class of the two by two squares at window pixel px, py: the one that
 // shows most.
+static UInt8 gClassOf[256];     // ClassOf for every terrain byte, made by PanelOpen
+
 static UInt8 SEC_UI BlockClass(Coord px, Coord py)
 {
-	const uint8_t *r0 = mapstore_row((uint8_t)(py * 2)), *r1 = mapstore_row((uint8_t)(py * 2 + 1));
-	UInt8 best = ClassOf(r0[px * 2]), c;
+	const uint8_t *r0 = mapstore_row((uint8_t)(py * 2)) + px * 2;
+	const uint8_t *r1 = mapstore_row((uint8_t)(py * 2 + 1)) + px * 2;
+	UInt8 best = gClassOf[r0[0]], c;
 
-	c = ClassOf(r0[px * 2 + 1]);
+	c = gClassOf[r0[1]];
 	if (c > best)
 		best = c;
-	c = ClassOf(r1[px * 2]);
+	c = gClassOf[r1[0]];
 	if (c > best)
 		best = c;
-	c = ClassOf(r1[px * 2 + 1]);
+	c = gClassOf[r1[1]];
 	if (c > best)
 		best = c;
 	return best;
@@ -310,6 +314,26 @@ static void SEC_UI Dirty(Coord x0, Coord y0, Coord x1, Coord y1)
 		gDy1 = y1;
 }
 
+static BlitWin gOvB;        // the window's pixels, where they can be written directly
+
+// Writes window pixels x0..x1-1 of row y from the map straight into the
+// window, as Plot would draw them.
+static void SEC_UI OvRowDirect(Coord y, Coord x0, Coord x1)
+{
+	UInt8 *row = gOvB.bits + (UInt32)y * gOvB.rowBytes;
+	UInt16 d = gOvB.depth, ppb = 8 / d;
+	UInt8 ones = (UInt8)((1 << d) - 1);
+	Coord x;
+
+	for (x = x0; x < x1; x++) {
+		UInt16 sh = (UInt16)((ppb - 1 - (x & (ppb - 1))) * d);   // first pixel in the top bits
+		UInt8 *p = row + x / ppb;
+
+		*p = (UInt8)((*p & ~(ones << sh)) |
+			((PixelIndex(BlockClass(x, y), x, y) ? ones : 0) << sh));
+	}
+}
+
 // Redraws the whole window from the map.
 static void SEC_UI OvBuild(void)
 {
@@ -319,6 +343,16 @@ static void SEC_UI OvBuild(void)
 
 	if (!gOv)
 		return;
+	if (gOvB.bits) {
+		for (y = 0; y < kOv; y++)
+			OvRowDirect(y, 0, kOv);
+		old = WinSetDrawWindow(gOv);
+		OvItems();
+		WinSetDrawWindow(old);
+		gFore = 0xFFFF;
+		Dirty(0, 0, kOv, kOv);
+		return;
+	}
 	old = WinSetDrawWindow(gOv);
 	gFore = 0xFFFF;
 	for (y = 0; y < kOv; y++) {
@@ -374,9 +408,14 @@ static void SEC_UI OvPatch(Coord x0, Coord y0, Coord w, Coord h)
 		return;
 	old = WinSetDrawWindow(gOv);
 	gFore = 0xFFFF;
-	for (y = y0; y < y0 + h; y++)
+	for (y = y0; y < y0 + h; y++) {
+		if (gOvB.bits) {
+			OvRowDirect(y, x0, x0 + w);
+			continue;
+		}
 		for (x = x0; x < x0 + w; x++)
 			Plot(x, y, PixelIndex(BlockClass(x, y), x, y));
+	}
 	r.topLeft.x = x0;
 	r.topLeft.y = y0;
 	r.extent.x = w;
@@ -441,8 +480,11 @@ Boolean SEC_UI PanelToggle(void)
 void SEC_UI PanelOpen(const DeviceInfo *d, const GameState *game)
 {
 	UInt16 err;
+	UInt16 i;
 
 	gGame = game;
+	for (i = 0; i < 256; i++)
+		gClassOf[i] = ClassOf((UInt8)i);
 	gHiRes = ScreenHiRes();
 	gNewWin = ScreenNewWin();
 	gU = gHiRes ? 2 : 1;
@@ -455,6 +497,9 @@ void SEC_UI PanelOpen(const DeviceInfo *d, const GameState *game)
 	if (gOv)
 		WinDeleteWindow(gOv, false);
 	gOv = WinCreateOffscreenWindow(kOv, kOv, gHiRes ? nativeFormat : screenFormat, &err);
+	gOvB.bits = NULL;
+	if (gOv)
+		BlitFind(gOv, &gOvB);
 #ifdef DEBUG
 	if (gOv && ScreenOs40()) {
 		BitmapType *bmp = WinGetBitmap(gOv);
@@ -476,6 +521,7 @@ void SEC_UI PanelClose(void)
 	if (gOv)
 		WinDeleteWindow(gOv, false);
 	gOv = NULL;
+	gOvB.bits = NULL;
 }
 
 // ---- status ----
@@ -639,29 +685,26 @@ static void SEC_UI DrawBuilder(Coord x, Coord y, Coord w, UInt8 man, UInt8 carry
 	}
 }
 
-static UInt8 SEC_UI Sig(Boolean base, UInt16 i)
+// What a pill or base mark shows, as a byte to compare with the last
+// frame's. viewer is game_viewer().
+static UInt8 SEC_UI Sig(Boolean base, UInt16 i, UInt8 viewer)
 {
 	const MapInfo *m = &gGame->map;
 
 	if (base)
-		return (UInt8)(game_owner_kind(gGame, m->bases[i].owner, game_viewer()) |
+		return (UInt8)(game_owner_kind(gGame, m->bases[i].owner, viewer) |
 			(m->bases[i].armour <= R_BASE_CAPTURE_ARMOUR ? 4 : 0) | (m->bases[i].active ? 0 : 8));
-	return (UInt8)(PillKind(&m->pills[i]) | (m->pills[i].armour == 0 ? 4 : 0) |
-		(m->pills[i].inTank ? 8 : 0));
+	return (UInt8)(game_owner_kind(gGame, m->pills[i].owner, viewer) |
+		(m->pills[i].armour == 0 ? 4 : 0) | (m->pills[i].inTank ? 8 : 0));
 }
 
 // Redraws a gauge when its value changed or its blink ended.
-static void SEC_UI MaybeGauge(UInt8 i, Boolean force, Coord x, Coord y, Coord w)
+static void SEC_UI MaybeGauge(const Tank *k, UInt32 now, UInt8 i, Boolean force, Coord x, Coord y,
+	Coord w)
 {
-	UInt8 v;
-	UInt32 now = TimGetTicks();
+	UInt8 v = i == 0 ? k->armour : i == 1 ? k->shells : i == 2 ? k->mines : k->trees;
 	Boolean changed, ended = false;
 
-	{
-		const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
-
-		v = i == 0 ? k->armour : i == 1 ? k->shells : i == 2 ? k->mines : k->trees;
-	}
 	changed = force || v != gShownV[i];
 	// Running out makes the icon flash once.
 	if (v == 0 && gShownV[i] != 0 && !force)
@@ -680,7 +723,9 @@ static void SEC_UI DrawStatus(Coord py)
 	const MapInfo *m = &gGame->map;
 	Boolean force = !gStatusDrawn, pc = false, bc = false;
 	UInt16 i;
-	UInt8 man = ManState(), v, carry = gGame->tanks[game_viewer_tank(gGame)].numCarry;
+	const Tank *k = &gGame->tanks[game_viewer_tank(gGame)];
+	UInt8 man = ManState(), v, carry = k->numCarry, viewer = game_viewer();
+	UInt32 now = TimGetTicks();
 	FontID old = FntSetFont(stdFont);
 	Coord y, isz = gTs, rowM;
 
@@ -691,13 +736,13 @@ static void SEC_UI DrawStatus(Coord py)
 		gShownPills = gShownBases = 0xFF;
 	}
 	for (i = 0; i < m->numPills; i++) {
-		v = Sig(false, i);
+		v = Sig(false, i, viewer);
 		if (v != gPillSig[i])
 			pc = true;
 		gPillSig[i] = v;
 	}
 	for (i = 0; i < m->numBases; i++) {
-		v = Sig(true, i);
+		v = Sig(true, i, viewer);
 		if (v != gBaseSig[i])
 			bc = true;
 		gBaseSig[i] = v;
@@ -715,7 +760,7 @@ static void SEC_UI DrawStatus(Coord py)
 	// with a gap of gU on each side of a slot.
 	y = py + 2;
 	for (i = 0; i < 4; i++)
-		MaybeGauge((UInt8)i, force, SlotX(i, 5) + gU, y, SlotX(i + 1, 5) - SlotX(i, 5) - 2 * gU);
+		MaybeGauge(k, now, (UInt8)i, force, SlotX(i, 5) + gU, y, SlotX(i + 1, 5) - SlotX(i, 5) - 2 * gU);
 	if (force || man != gShownMan || carry != gShownCarry)
 		DrawBuilder(SlotX(4, 5) + gU, y, gW - SlotX(4, 5) - 2 * gU, man, carry);
 	y += isz + 1;

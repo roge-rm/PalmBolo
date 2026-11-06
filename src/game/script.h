@@ -12,9 +12,9 @@
 // store and s->map before each script, as scripts change the terrain. step, if not NULL, is called after each step with its
 // number. Returns the CRC of the state and terrain checksums after every
 // step.
-uint32_t script_run(GameState *s, uint8_t n,
+uint32_t SEC_SCRIPT script_run(GameState *s, uint8_t n,
 	void (*step)(const GameState *s, uint8_t n, uint8_t i, void *ctx), void *ctx);
 
-const char *script_name(uint8_t n);
+const char * SEC_SCRIPT script_name(uint8_t n);
 
 #endif

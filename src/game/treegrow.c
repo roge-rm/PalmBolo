@@ -99,18 +99,41 @@ static void SEC_BUILDER check_grow(GameState *s)
 	}
 }
 
+// The generator's 16 steps at a time. Each step is linear over bits, so
+// 16 steps of a seed are those of its high byte xor those of its low byte,
+// in two tables made on first use.
+static uint16_t gStepHi[256], gStepLo[256];
+static uint8_t gStepReady;
+
+static uint16_t SEC_BUILDER step16(uint16_t rnd)
+{
+	uint8_t i;
+
+	for (i = 0; i < 16; i++)
+		rnd = (uint16_t)((rnd << 1) ^ (rnd & 0x8000 ? 0x1083 : 0));
+	return rnd;
+}
+
+static void SEC_BUILDER step_init(void)
+{
+	uint16_t i;
+
+	for (i = 0; i < 256; i++) {
+		gStepHi[i] = step16((uint16_t)(i << 8));
+		gStepLo[i] = step16(i);
+	}
+	gStepReady = 1;
+}
+
 // treeGrowUpdate.
 void SEC_BUILDER tree_update(GameState *s)
 {
-	uint16_t rnd = s->treeSeed, old;
-	uint8_t i, x, y;
+	uint16_t rnd = s->treeSeed;
+	uint8_t x, y;
 
-	for (i = 0; i < 16; i++) {
-		old = rnd;
-		rnd = (uint16_t)(rnd << 1);
-		if (old & 0x8000)
-			rnd ^= 0x1083;
-	}
+	if (!gStepReady)
+		step_init();
+	rnd = (uint16_t)(gStepHi[rnd >> 8] ^ gStepLo[rnd & 0xFF]);
 	s->treeSeed = rnd;
 	x = (uint8_t)(rnd >> 8);
 	y = (uint8_t)rnd;

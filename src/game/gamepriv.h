@@ -8,16 +8,64 @@
 #define GAMEPRIV_H
 
 #include "game.h"
+#include "mapstore.h"
+
+// The small lookups below are inline: on the 68k a call costs more than
+// the lookup, more so across code segments.
+
+// game_terrain inline.
+static __inline__ uint8_t g_terrain(uint8_t x, uint8_t y)
+{
+	if (x > MAP_EDGE_LOW && x < MAP_EDGE_HIGH && y > MAP_EDGE_LOW && y < MAP_EDGE_HIGH)
+		return mapstore_get(x, y);
+	return TERRAIN_DEEP_SEA;
+}
+#define game_terrain(x, y) g_terrain(x, y)
+
+// game_allied inline.
+static __inline__ uint8_t g_allied(const GameState *s, uint8_t a, uint8_t b)
+{
+	if (a == b)
+		return 1;
+	if (a >= GAME_MAX_PLAYERS || b >= GAME_MAX_PLAYERS || !s->players[a].inUse)
+		return 0;
+	return (uint8_t)((s->players[a].allies >> b) & 1);
+}
+#define game_allied(s, a, b) g_allied(s, a, b)
 
 // game.c
+// Bit i of g_row_pills[y] and of g_col_pills[x] is set if pill i may be on
+// row y and column x, the same for bases, so the pills that may be on a
+// square are the bits in both. Built at the start of each tick, with pills
+// put down during it added, and used only inside game_tick (g_occ_on);
+// outside it the lookups search every pill and base. Not part of the state.
+extern uint16_t g_row_pills[256], g_col_pills[256], g_row_bases[256], g_col_bases[256];
+extern uint8_t g_occ_on;
+int8_t g_base_find(const GameState *s, uint8_t x, uint8_t y);
+int8_t g_pill_find(const GameState *s, uint8_t x, uint8_t y);
+
 uint8_t g_is_mine(uint8_t x, uint8_t y);
-int8_t g_base_at(const GameState *s, uint8_t x, uint8_t y);
+// The lookups are macros that test the bits inline and call only when a
+// pill or base may be there. The inline parts must not call anything: an
+// inline function's calls are made as if from code segment 1. Arguments
+// are read twice, so pass nothing with side effects.
+static __inline__ uint8_t g_base_maybe(uint8_t x, uint8_t y)
+{
+	return !g_occ_on || (g_row_bases[y] & g_col_bases[x]);
+}
+static __inline__ uint8_t g_pill_maybe(uint8_t x, uint8_t y)
+{
+	return !g_occ_on || (g_row_pills[y] & g_col_pills[x]);
+}
+int8_t g_live_pill_find(const GameState *s, uint8_t x, uint8_t y);
+// An active base at the square, or -1.
+#define g_base_at(s, x, y) (g_base_maybe(x, y) ? g_base_find(s, x, y) : -1)
 // A pill on the map at the square (alive or dead, not carried), or -1.
-int8_t g_pill_at(const GameState *s, uint8_t x, uint8_t y);
+#define g_pill_at(s, x, y) (g_pill_maybe(x, y) ? g_pill_find(s, x, y) : -1)
 // The same, alive only.
-int8_t g_live_pill_at(const GameState *s, uint8_t x, uint8_t y);
-// A pill was put down at x, y during the tick.
-void g_pill_moved(uint8_t x, uint8_t y);
+#define g_live_pill_at(s, x, y) (g_pill_maybe(x, y) ? g_live_pill_find(s, x, y) : -1)
+// Pill was put down during the tick.
+void g_pill_moved(const GameState *s, uint8_t pill);
 void g_explosion(GameState *s, uint16_t wx, uint16_t wy);
 uint8_t g_damage(GameState *s, uint8_t kind, uint8_t x, uint8_t y);
 void g_damage_remove(GameState *s, uint8_t kind, uint8_t x, uint8_t y);

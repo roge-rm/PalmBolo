@@ -55,8 +55,8 @@
 40  enemy_sh       153   0   0  15  3  1
 41  tread           51  51  51  12  3  1
 42  tread_hi       153 153 153   7  2  0
-43  tank_own       238 238 238   0  0  0
-44  tank_own_sh    170 170 170   7  2  1
+43  tank_own       238 238 238   0  2  0
+44  tank_own_sh    170 170 170   7  1  1
 45  tank_ally        0 153 255   5  1  c
 46  tank_ally_sh     0 102 204  10  3  1
 47  tank_enemy     255   0   0  13  3  1

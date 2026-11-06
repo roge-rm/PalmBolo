@@ -48,11 +48,13 @@ def symbols(obj, names):
     """Returns {symbol: (section name or None, is_global_def)}."""
     syms = {}
     for line in run("-t", obj).splitlines():
-        m = re.match(r"\[\s*\d+\]\(sec\s+(-?\d+)\).*\(scl\s+(\d+)\).*0x[0-9a-f]+ (\S+)$", line)
+        m = re.match(r"\[\s*\d+\]\(sec\s+(-?\d+)\).*\(scl\s+(\d+)\).*0x([0-9a-f]+) (\S+)$", line)
         if not m:
             continue
-        sec, scl, name = int(m.group(1)), int(m.group(2)), m.group(3)
+        sec, scl, value, name = int(m.group(1)), int(m.group(2)), int(m.group(3), 16), m.group(4)
         secname = names[sec] if 0 < sec < len(names) else None
+        if sec == 0 and scl == 2 and value:
+            secname = ".bss"    # a common symbol (uninitialised global), linked into .bss
         syms[name] = (secname, scl == 2 and secname is not None)
     return syms
 

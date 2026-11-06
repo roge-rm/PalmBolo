@@ -8,7 +8,7 @@
 #include "mapstore.h"
 #include "util.h"
 
-static uint16_t SEC_PILLS abs_diff(uint16_t a, uint16_t b)
+static __inline__ uint16_t abs_diff(uint16_t a, uint16_t b)
 {
 	return a > b ? (uint16_t)(a - b) : (uint16_t)(b - a);
 }
@@ -51,12 +51,19 @@ static uint16_t SEC_PILLS aim(const GameState *s, uint16_t px, uint16_t py, cons
 	uint8_t speed = (uint8_t)(k->speed >> 2), count = 1, found = 0;
 	uint16_t tx = k->x, ty = k->y, est, sx, sy, r = 0;
 	int16_t ax, ay, hx, hy;
+	// The last square asked about on each axis and its answer, and the
+	// spot est was last worked out for: the walk often stays on a square
+	// or stops against a wall, and these give the same answers again.
+	uint16_t qy = 0, qx = 0, lx, ly;
+	uint8_t cy = 0, cx = 0, have = 0;
 
 	if (speed == 0)
 		return util_angle(px, py, tx, ty);
 	util_distance(&ax, &ay, (uint16_t)(util_dir16(k->angle) * ANGLE_ONE), speed);
 	est = util_angle(px, py, tx, ty);
 	util_distance(&hx, &hy, est, R_SHELL_SPEED);
+	lx = tx;
+	ly = ty;
 	sx = (uint16_t)(px + hx);
 	sy = (uint16_t)(py + hy);
 	while (!found && count < R_PILL_AIM_ITERATIONS) {
@@ -74,12 +81,25 @@ static uint16_t SEC_PILLS aim(const GameState *s, uint16_t px, uint16_t py, cons
 		nby = (uint8_t)((uint16_t)(ty + ay + (ay >= 0 ? R_TANK_SUBTRACT : -R_TANK_SUBTRACT)) >> 8);
 		bmx = (uint8_t)(tx >> 8);
 		bmy = (uint8_t)(ty >> 8);
-		if (aim_can_move(s, bmx, nby, k, speed))
+		if (!have || (uint16_t)(bmx << 8 | nby) != qy) {
+			qy = (uint16_t)(bmx << 8 | nby);
+			cy = aim_can_move(s, bmx, nby, k, speed);
+		}
+		if (cy)
 			ty = (uint16_t)(ty + ay);
-		if (aim_can_move(s, nbx, bmy, k, speed))
+		if (!have || (uint16_t)(nbx << 8 | bmy) != qx) {
+			qx = (uint16_t)(nbx << 8 | bmy);
+			cx = aim_can_move(s, nbx, bmy, k, speed);
+		}
+		have = 1;
+		if (cx)
 			tx = (uint16_t)(tx + ax);
-		est = util_angle(px, py, tx, ty);
-		util_distance(&hx, &hy, est, R_SHELL_SPEED);
+		if (tx != lx || ty != ly) {
+			lx = tx;
+			ly = ty;
+			est = util_angle(px, py, tx, ty);
+			util_distance(&hx, &hy, est, R_SHELL_SPEED);
+		}
 		sx = (uint16_t)(px + MUL16(count + 5, hx));
 		sy = (uint16_t)(py + MUL16(count + 5, hy));
 		r = est;
@@ -101,8 +121,18 @@ static void SEC_PILLS anger(MapPill *p)
 // pillsUpdate.
 void SEC_PILLS pills_update(GameState *s)
 {
-	uint8_t i, t;
+	uint8_t i, t, nt = 0, live[GAME_MAX_TANKS];
+	uint16_t lx[GAME_MAX_TANKS], ly[GAME_MAX_TANKS];
+	const Tank *k;
 
+	// The live tanks, in order: firing at them doesn't change them.
+	for (t = 0, k = s->tanks; t < s->numTanks; t++, k++)
+		if (!k->destroyed) {
+			live[nt] = t;
+			lx[nt] = k->x;
+			ly[nt] = k->y;
+			nt++;
+		}
 	for (i = 0; i < s->map.numPills; i++) {
 		MapPill *p = &s->map.pills[i];
 		uint16_t px, py;
@@ -122,26 +152,27 @@ void SEC_PILLS pills_update(GameState *s)
 		}
 		if (p->armour == 0 || p->reload < p->speed || p->inTank)
 			continue;
-		for (t = 0; t < s->numTanks; t++) {
-			const Tank *k = &s->tanks[t];
+		for (t = 0; t < nt; t++) {
 			uint16_t dx, dy;
 			uint32_t d2;
 
-			if (game_allied(s, p->owner, k->player) || k->destroyed)
-				continue;
-			dx = abs_diff(k->x, px);
-			dy = abs_diff(k->y, py);
 			// utilIsItemInRange: distance at most the range. Checked before
-			// the trees, which give the same answer and cost more.
-			if (dx > R_PILL_RANGE || dy > R_PILL_RANGE)
+			// the side and the trees, which give the same answer and cost
+			// more.
+			dx = abs_diff(lx[t], px);
+			if (dx > R_PILL_RANGE)
+				continue;
+			dy = abs_diff(ly[t], py);
+			k = &s->tanks[live[t]];
+			if (dy > R_PILL_RANGE || game_allied(s, p->owner, k->player))
 				continue;
 			if ((dx >= R_TREE_HIDE_DIST || dy >= R_TREE_HIDE_DIST) && !k->justFired &&
 			    in_trees(s, k->x, k->y))
 				continue;
-			d2 = (uint32_t)dx * dx + (uint32_t)dy * dy;
+			d2 = (uint32_t)(MUL16(dx, dx) + MUL16(dy, dy));     // both at most the range
 			if (d2 <= (uint32_t)R_PILL_RANGE * R_PILL_RANGE && d2 < best) {
 				best = d2;
-				target = (int8_t)t;
+				target = (int8_t)live[t];
 			}
 		}
 		if (target < 0) {
@@ -190,6 +221,12 @@ void SEC_PILLS pills_pickup(GameState *s, uint8_t t)
 	Tank *k = &s->tanks[t];
 	int8_t ox, oy;
 
+	// No pill on any of the squares looked at.
+	if (g_occ_on && !((g_row_pills[(uint8_t)((uint16_t)(k->y - R_TANK_PILL_PICKUP_INSET) >> 8)] |
+	                   g_row_pills[(uint8_t)((uint16_t)(k->y + R_TANK_PILL_PICKUP_INSET) >> 8)]) &
+	                  (g_col_pills[(uint8_t)((uint16_t)(k->x - R_TANK_PILL_PICKUP_INSET) >> 8)] |
+	                   g_col_pills[(uint8_t)((uint16_t)(k->x + R_TANK_PILL_PICKUP_INSET) >> 8)])))
+		return;
 	for (oy = -1; oy <= 1; oy++) {
 		for (ox = -1; ox <= 1; ox++) {
 			uint8_t mx = (uint8_t)((uint16_t)(k->x + ox * R_TANK_PILL_PICKUP_INSET) >> 8);
@@ -268,7 +305,7 @@ uint8_t SEC_PILLS pills_drop_one(GameState *s, uint8_t pill, uint8_t cx, uint8_t
 	p = &s->map.pills[pill];
 	p->x = (uint8_t)x;
 	p->y = (uint8_t)y;
-	g_pill_moved(p->x, p->y);
+	g_pill_moved(s, pill);
 	p->armour = 0;
 	p->owner = owner;
 	p->speed = R_PILL_ATTACK_NORMAL;
@@ -354,6 +391,7 @@ static void SEC_PILLS restock(uint8_t *v, uint8_t full)
 void SEC_PILLS bases_update(GameState *s)
 {
 	uint8_t i, t;
+	uint16_t occupied;
 
 	for (i = 0; i < GAME_MAX_PLAYERS; i++) {
 		if (!s->players[i].inUse)
@@ -376,12 +414,28 @@ void SEC_PILLS bases_update(GameState *s)
 	for (i = 0; i < s->map.numBases; i++)
 		if (s->map.bases[i].active && s->baseTime[i] > 0)
 			s->baseTime[i]--;
+	// The bases with a live tank on them, so the rest skip the tank loop.
+	occupied = 0;
+	for (t = 0; t < s->numTanks; t++) {
+		const Tank *k = &s->tanks[t];
+		int8_t b;
+
+		if (k->destroyed)
+			continue;
+		b = g_base_at(s, (uint8_t)(k->x >> 8), (uint8_t)(k->y >> 8));
+		if (b >= 0)
+			occupied |= 1U << b;
+	}
 	for (i = 0; i < s->map.numBases; i++) {
 		MapBase *b = &s->map.bases[i];
 		uint8_t on = 0;
 
 		if (!b->active)
 			continue;
+		if (!(occupied & (1U << i))) {
+			s->baseStopped[i] = 1;
+			continue;
+		}
 		for (t = 0; t < s->numTanks; t++) {
 			Tank *k = &s->tanks[t];
 

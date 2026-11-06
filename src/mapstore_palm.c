@@ -21,6 +21,7 @@
 static DmOpenRef gDb;
 static UInt8 *gRec[kAllRecords];    // locked record pointers
 static MemHandle gHandle[kAllRecords];
+const uint8_t *mapstore_rows[256];
 
 static void Unlock(void)
 {
@@ -103,6 +104,8 @@ static int OpenLocked(void)
 			return 1;
 		}
 	}
+	for (i = 0; i < 256; i++)
+		mapstore_rows[i] = gRec[i / kRowsPerRecord] + (i % kRowsPerRecord) * 256;
 	return 0;
 }
 
@@ -121,16 +124,6 @@ void mapstore_fill(uint8_t value)
 
 	for (i = 0; i < kRecords; i++)
 		DmSet(gRec[i], 0, kRecordBytes, value);
-}
-
-const uint8_t *mapstore_row(uint8_t y)
-{
-	return gRec[y / kRowsPerRecord] + (UInt32)(y % kRowsPerRecord) * 256;
-}
-
-uint8_t mapstore_get(uint8_t x, uint8_t y)
-{
-	return mapstore_row(y)[x];
 }
 
 void mapstore_set(uint8_t x, uint8_t y, uint8_t terrain)

@@ -1,0 +1,34 @@
+# IIIx screenshots: title, Settings, map list, new game, a 3-bot game with
+# the overview, then results (build with -DTEST_TIME_LIMIT=600).
+1500 snapshot "title.png"
+2000 pen-down 40 137
+2150 pen-up
+3500 snapshot "settings.png"
+4000 pen-down 125 150
+4150 pen-up
+5000 pen-down 40 120
+5150 pen-up
+6500 snapshot "maplist.png"
+7000 pen-down 34 150
+7150 pen-up
+8500 snapshot "newgame.png"
+9000 pen-down 34 150
+9150 pen-up
+25000 snapshot "game.png"
+25500 key-down up
+30000 key-up up
+30100 key-down hard2
+30800 key-up hard2
+30900 snapshot "game-shot.png"
+31500 key-down hard1
+32200 key-up hard1
+32300 key-down up
+36000 key-up up
+36100 snapshot "game-turned.png"
+37000 pen-down 60 136
+37150 pen-up
+39000 snapshot "overview.png"
+39500 pen-down 60 136
+39650 pen-up
+41000 snapshot "game-back.png"
+75000 snapshot "results.png"

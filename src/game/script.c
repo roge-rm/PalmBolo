@@ -220,7 +220,7 @@ static const char kNames[] =
 	"mine wreck\0base wreck\0collide\0tank kill\0pill near\0pill ally\0mine other\0"
 	"bots\0takeover\0boat bank\0tourn back\0";
 
-const char *script_name(uint8_t n)
+const char * SEC_SCRIPT script_name(uint8_t n)
 {
 	const char *p = kNames;
 
@@ -231,7 +231,7 @@ const char *script_name(uint8_t n)
 }
 
 // For the refuel script the square must be a base; for the rest, terrain.
-static uint8_t find(GameState *s, Tank *k, const Op *o)
+static uint8_t SEC_SCRIPT find(GameState *s, Tank *k, const Op *o)
 {
 	uint8_t x, y, i, ok;
 
@@ -265,7 +265,7 @@ static uint8_t find(GameState *s, Tank *k, const Op *o)
 	return 0;
 }
 
-static void place(Tank *k, uint8_t x, uint8_t y)
+static void SEC_SCRIPT place(Tank *k, uint8_t x, uint8_t y)
 {
 	k->x = (uint16_t)(((uint16_t)x << 8) + 128U);
 	k->y = (uint16_t)(((uint16_t)y << 8) + 128U);
@@ -276,7 +276,7 @@ static void place(Tank *k, uint8_t x, uint8_t y)
 }
 
 // The first base with no live pill within 9 squares.
-static int8_t find_base(GameState *s)
+static int8_t SEC_SCRIPT find_base(GameState *s)
 {
 	uint8_t i, j, ok;
 
@@ -298,7 +298,7 @@ static int8_t find_base(GameState *s)
 	return -1;
 }
 
-static uint8_t open_ground(GameState *s, uint8_t x, uint8_t y)
+static uint8_t SEC_SCRIPT open_ground(GameState *s, uint8_t x, uint8_t y)
 {
 	uint8_t t = game_terrain(x, y);
 
@@ -307,7 +307,7 @@ static uint8_t open_ground(GameState *s, uint8_t x, uint8_t y)
 }
 
 // The first pill with open ground from d squares west of it up to it.
-static int8_t find_pill(GameState *s, uint8_t d)
+static int8_t SEC_SCRIPT find_pill(GameState *s, uint8_t d)
 {
 	uint8_t i, j, ok;
 
@@ -323,7 +323,7 @@ static int8_t find_pill(GameState *s, uint8_t d)
 	return -1;
 }
 
-uint32_t script_run(GameState *s, uint8_t n,
+uint32_t SEC_SCRIPT script_run(GameState *s, uint8_t n,
 	void (*step)(const GameState *s, uint8_t n, uint8_t i, void *ctx), void *ctx)
 {
 	const Op *o = kScripts;

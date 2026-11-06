@@ -5,8 +5,14 @@
 static uint8_t gMap[256][256];  // [y][x]
 static uint8_t gFlag[MS_PLANES][8192];  // bit x & 7 of [y * 32 + x / 8]
 
+const uint8_t *mapstore_rows[256];
+
 int mapstore_open(uint8_t value)
 {
+	int y;
+
+	for (y = 0; y < 256; y++)
+		mapstore_rows[y] = gMap[y];
 	memset(gMap, value, sizeof(gMap));
 	memset(gFlag, 0, sizeof(gFlag));
 	return 0;
@@ -19,11 +25,6 @@ void mapstore_fill(uint8_t value)
 	memset(gMap, value, sizeof(gMap));
 }
 
-uint8_t mapstore_get(uint8_t x, uint8_t y)
-{
-	return gMap[y][x];
-}
-
 void mapstore_set(uint8_t x, uint8_t y, uint8_t terrain)
 {
 	gMap[y][x] = terrain;
@@ -34,11 +35,6 @@ void mapstore_set_bytes(uint8_t x, uint8_t y, uint16_t n, const uint8_t *src)
 	if (x + n > 256)
 		n = (uint16_t)(256 - x);
 	memcpy(&gMap[y][x], src, n);
-}
-
-const uint8_t *mapstore_row(uint8_t y)
-{
-	return gMap[y];
 }
 
 uint8_t mapstore_flag(uint8_t plane, uint8_t x, uint8_t y)

@@ -22,7 +22,10 @@
 #define SEC_PILLS   __attribute__((section("pills")))
 #define SEC_BUILDER __attribute__((section("builder")))
 #define SEC_BOTS    __attribute__((section("bots")))
+// The scripted games, debug builds only.
+#define SEC_SCRIPT  __attribute__((section("detect")))
 #else
+#define SEC_SCRIPT
 #define SEC_TANK
 #define SEC_SHELLS
 #define SEC_PILLS

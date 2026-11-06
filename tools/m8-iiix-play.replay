@@ -1,0 +1,30 @@
+# IIIx: New game, Next, Start with the default 3 bots, then drive about.
+2000 pen-down 40 120
+2150 pen-up
+3500 snapshot "maplist.png"
+4000 pen-down 34 150
+4150 pen-up
+5500 snapshot "newgame.png"
+6000 pen-down 34 150
+6150 pen-up
+20000 snapshot "game-start.png"
+20500 key-down up
+26000 key-up up
+26500 snapshot "game-drive.png"
+27000 key-down hard1
+27600 key-up hard1
+27700 key-down up
+31000 key-up up
+31100 key-down hard2
+32000 key-up hard2
+32100 snapshot "game-fire.png"
+33000 pen-down 60 136
+33150 pen-up
+35000 snapshot "overview.png"
+35500 pen-down 60 136
+35650 pen-up
+37000 key-down hard4
+37800 key-up hard4
+38000 key-down up
+45000 key-up up
+45500 snapshot "game-later.png"

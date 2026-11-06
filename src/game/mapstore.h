@@ -19,7 +19,12 @@ void mapstore_close(void);
 // Sets every square to value.
 void mapstore_fill(uint8_t value);
 
-uint8_t mapstore_get(uint8_t x, uint8_t y);
+// Row y's 256 bytes, set while the store is open. Read only: write through
+// mapstore_set. Read straight from the table, as a call each costs a lot
+// on the 68k.
+extern const uint8_t *mapstore_rows[256];
+#define mapstore_get(x, y)  (mapstore_rows[(uint8_t)(y)][(uint8_t)(x)])
+
 void mapstore_set(uint8_t x, uint8_t y, uint8_t terrain);
 
 // Writes n squares of row y starting at x. x + n must not pass 256.
@@ -27,7 +32,7 @@ void mapstore_set_bytes(uint8_t x, uint8_t y, uint16_t n, const uint8_t *src);
 
 // The 256 bytes of row y, for fast reading. Valid until mapstore_close and
 // must not be written through.
-const uint8_t *mapstore_row(uint8_t y);
+#define mapstore_row(y)     (mapstore_rows[(uint8_t)(y)])
 
 // Two bit planes beside the terrain, one bit a square, for which mines are
 // known: MS_KNOWN to the rules, MS_SEEN to the player on this screen.

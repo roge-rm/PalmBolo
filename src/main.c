@@ -19,6 +19,8 @@ static UInt8 gAction;       // builder action chosen, LGM_TREE to LGM_MINE
 static UInt8 gBuild, gBuildX, gBuildY;  // builder order to send next tick
 #ifdef DEBUG
 static Boolean gTimedFull;
+static UInt32 gStartTicks;  // when Start was tapped
+static UInt16 gDropped;     // catch-ups that hit the limit and dropped time
 #endif
 
 // The app's own settings, kept in its preferences.
@@ -173,7 +175,14 @@ static Boolean HandleMenu(UInt16 id)
 
 void AppOpenMap(UInt16 index, const Char *name)
 {
-	Int16 err = MapLoad(index, name, &gGame);
+	Int16 err;
+
+#ifdef DEBUG
+	gStartTicks = TimGetTicks();
+	gTimedFull = false;
+	TimingHeap("new game");
+#endif
+	err = MapLoad(index, name, &gGame);
 
 	if (err != MAP_OK) {
 		LOG(("map %s: error %d", name, err));
@@ -200,7 +209,13 @@ void AppOpenMap(UInt16 index, const Char *name)
 				for (j = 0; j < n; j++)
 					if (i != j && (i < half) == (j < half))
 						setup.allies[i] = (UInt16)(setup.allies[i] | (1 << j));
+		LOG(("start: map loaded %lu sys ticks after Start", TimGetTicks() - gStartTicks));
+#ifdef DRAW_BENCH
+		game_init(&gGame, 4321, &setup);
+#else
 		game_init(&gGame, TimGetSeconds(), &setup);
+#endif
+		LOG(("start: game set up %lu sys ticks after Start", TimGetTicks() - gStartTicks));
 	}
 #if defined(DEBUG) && defined(TEST_TIME_LIMIT)
 	gGame.timeLimit = TEST_TIME_LIMIT;
@@ -243,6 +258,10 @@ void AppOpenMap(UInt16 index, const Char *name)
 
 void AppResume(void)
 {
+#ifdef DEBUG
+	gStartTicks = TimGetTicks();
+	gTimedFull = false;
+#endif
 	if (!SaveRead(&gGame)) {
 		SaveDrop();
 		FrmAlert(ResumeAlert);
@@ -261,11 +280,14 @@ static Boolean GameHandler(EventType *e)
 	switch (e->eType) {
 	case frmOpenEvent:
 		FrmDrawForm(FrmGetActiveForm());
+		LOG(("start: form drawn %lu sys ticks after Start", TimGetTicks() - gStartTicks));
 		if (!ViewOpen(&gDev, &gGame)) {
 			gInGame = false;
 			FrmGotoForm(TitleForm);
 			return true;
 		}
+		LOG(("start: view open %lu sys ticks after Start", TimGetTicks() - gStartTicks));
+		TimingHeap("view open");
 		SoundOpen(gDev.ticksPerSecond);
 		gFormOpen = true;
 		gDirty = gFull = true;
@@ -474,6 +496,10 @@ static void SEC_UI BenchBots(void)
 	GameInput none[GAME_MAX_TANKS], keys[GAME_MAX_TANKS];
 	UInt32 a, d, bots, seen = 0, copy, worst = 0, sum = 0;
 	UInt16 i, r, n = 0, at = 0;
+#ifdef BENCH_RULES
+	UInt32 rw = 0, rsum = 0;
+	UInt16 rat = 0;
+#endif
 	UInt8 mask = gGame.botMask;
 
 	if (!c || !w || !rec) {
@@ -501,9 +527,14 @@ static void SEC_UI BenchBots(void)
 			d = t;
 	}
 	bots = a > d ? a - d : 0;
+	LOG(("bench rules alone x%d: %lu sys ticks (%lu.%02lu ms a tick)", BENCH_TICKS, d,
+		d * 10 / BENCH_TICKS, d * 1000 / BENCH_TICKS % 100));
 	LOG(("bench %d tanks %d bots x%d: %lu sys ticks, bots seen %lu, bots %lu (%lu.%02lu ms a bot a tick)",
 		(Int16)c->numTanks, (Int16)n, BENCH_TICKS, a, seen, bots,
 		bots * 10 / n / BENCH_TICKS, bots * 1000 / n / BENCH_TICKS % 100));
+#ifdef BENCH_QUICK
+	goto done;
+#endif
 	// The worst tick, in hundredths of a sys tick for all the bots.
 	MemMove(c, &gGame, sizeof(GameState));
 	a = TimGetTicks();
@@ -524,6 +555,22 @@ static void SEC_UI BenchBots(void)
 			at = i;
 		}
 		game_bot_inputs(c, none, keys);
+#ifdef BENCH_RULES
+		// The rules alone on the same tick, with the keys the bots made.
+		a = TimGetTicks();
+		for (r = 0; r < BENCH_REPS; r++) {
+			MemMove(w, c, sizeof(GameState));
+			w->botMask = 0;
+			game_tick(w, keys);
+		}
+		d = (TimGetTicks() - a) * 100;
+		d = d > copy ? (d - copy) / BENCH_REPS : 0;
+		rsum += d;
+		if (d > rw) {
+			rw = d;
+			rat = i;
+		}
+#endif
 		c->botMask = 0;
 		game_tick(c, keys);
 		c->botMask = mask;
@@ -531,6 +578,11 @@ static void SEC_UI BenchBots(void)
 	// sum is in hundredths of a sys tick of 10 ms over BENCH_WORST ticks.
 	LOG(("bench worst x%d reps %d: sum %lu (%lu us a bot a tick), worst %lu at %d (%lu us all bots), copy %lu",
 		BENCH_WORST, BENCH_REPS, sum, sum * 100 / BENCH_WORST / n, worst, at, worst * 100, copy));
+#ifdef BENCH_RULES
+	LOG(("bench rules x%d reps %d: %lu us a tick average, worst %lu us at %d",
+		BENCH_WORST, BENCH_REPS, rsum * 100 / BENCH_WORST, rw * 100, rat));
+#endif
+	TimingHeap("bench");
 done:
 	if (rec)
 		MemPtrFree(rec);
@@ -555,7 +607,13 @@ static void SelfTest(void)
 	v = DetectTableCheck();
 	HexStr(v, hex);
 	LOG(("const table detect %s %s", hex, v == DETECT_TABLE_CHECK ? "ok" : "WRONG"));
-	for (n = 0; n < SCRIPT_COUNT; n++) {
+#ifndef SELFTEST_FIRST
+#define SELFTEST_FIRST 0
+#endif
+#ifndef SELFTEST_LAST
+#define SELFTEST_LAST (SCRIPT_COUNT - 1)
+#endif
+	for (n = SELFTEST_FIRST; n <= SELFTEST_LAST; n++) {
 		if (MapLoad(0, name, &gGame) != MAP_OK) {
 			LOG(("script %d: map load failed", (Int16)n));
 			return;
@@ -573,6 +631,24 @@ static void SelfTest(void)
 }
 #endif
 
+#ifdef DRAW_BENCH
+static void DrawBench(void);
+#endif
+#ifdef TICK_PARTS
+// Debug: sys ticks spent in each part of game_tick, part n ending at
+// tick_part(n).
+static UInt32 gTickPart[9], gTickPartT;
+
+void tick_part(uint8_t n)
+{
+	UInt32 now = TimGetTicks();
+
+	if (n)
+		gTickPart[n] += now - gTickPartT;
+	gTickPartT = now;
+}
+#endif
+
 static void EventLoop(void)
 {
 	EventType e;
@@ -580,7 +656,10 @@ static void EventLoop(void)
 #if defined(DEBUG) && defined(TEST_LEAVE_AT)
 	Boolean left = false;
 #endif
-	UInt32 last = TimGetTicks(), now, acc = 0, t0, t1;
+	UInt32 last = TimGetTicks(), now, acc = 0;
+#ifdef DEBUG
+	UInt32 t1;
+#endif
 	UInt16 n;
 #ifdef AUTOQUIT_SECONDS
 	UInt32 startSeconds = TimGetSeconds();
@@ -596,14 +675,19 @@ static void EventLoop(void)
 		if (TimGetSeconds() - startSeconds >= AUTOQUIT_SECONDS)
 			gQuit = true;
 #endif
-		EvtGetEvent(&e, 1);
+#ifdef DEBUG
+		t1 = TimGetTicks();
+#endif
+		// No wait for an event when a game tick is already due.
+		EvtGetEvent(&e, gForm == GameForm && gFormOpen &&
+			acc + (TimGetTicks() - last) * GAME_TICKS_PER_SECOND >= tps ? 0 : 1);
 		HandleEvent(&e);
+		TimingEvent(TimGetTicks() - t1);
 
 		now = TimGetTicks();
 		acc += (now - last) * GAME_TICKS_PER_SECOND;
 		last = now;
 		n = 0;
-		t0 = now;
 		while (acc >= tps && n < kMaxCatchUp && gForm == GameForm && gFormOpen && !gGame.over) {
 			GameInput all[GAME_MAX_TANKS];
 			UInt8 vt = game_viewer_tank(&gGame);
@@ -612,8 +696,14 @@ static void EventLoop(void)
 			// Bot tanks ignore their entry; the rest have nobody at the keys.
 			MemSet(all, sizeof(all), 0);
 			all[vt] = in;
-			game_tick(&gGame, all);
 #ifdef DEBUG
+			t1 = TimGetTicks();
+			game_tick(&gGame, all);
+			TimingTick(TimGetTicks() - t1);
+#else
+			game_tick(&gGame, all);
+#endif
+#if defined(DEBUG) && !defined(QUIET_TICKS)
 			if (gGame.tick % 50 == 0) {
 				const Tank *k = &gGame.tanks[vt];
 
@@ -641,8 +731,12 @@ static void EventLoop(void)
 			acc -= tps;
 			n++;
 		}
-		if (n == kMaxCatchUp)
+		if (n == kMaxCatchUp) {
 			acc = 0;
+#ifdef DEBUG
+			gDropped++;
+#endif
+		}
 #if defined(DEBUG) && defined(TEST_LEAVE_AT)
 		if (!left && gInGame && gForm == GameForm && gGame.tick >= TEST_LEAVE_AT) {
 			left = true;
@@ -658,10 +752,6 @@ static void EventLoop(void)
 		}
 		if (gForm == GameForm && gFormOpen)
 			SoundFrame(&gGame);
-		if (n) {
-			t1 = TimGetTicks();
-			TimingTicks(t0, t1, n);
-		}
 
 		// A menu or alert is on top, so leave the screen alone.
 		if (gForm == GameForm && gFormOpen && !gQuit && !gMenuOpen &&
@@ -673,13 +763,63 @@ static void EventLoop(void)
 #ifdef DEBUG
 			if (full && !gTimedFull) {
 				gTimedFull = true;
+				LOG(("start: first frame %lu sys ticks after Start", TimGetTicks() - gStartTicks));
+				TimingHeap("first frame");
+#ifdef TIME_FULL
 				ViewTimeFull(8);
+#endif
+#ifdef DRAW_BENCH
+				DrawBench();
+#endif
 			}
 #endif
 		}
-		TimingMaybeLog();
+#ifdef DEBUG
+		// Logging every 5 s, kept out of the times it reports.
+		if (TimingDue()) {
+			if (gDropped) {
+				LOG(("fell behind: ticks dropped %u times", gDropped));
+				gDropped = 0;
+			}
+			TimingMaybeLog();
+		}
+#endif
 	}
 }
+
+#ifdef DRAW_BENCH
+// Debug: 200 frames of 5 ticks each from a fixed seed and fixed keys, the
+// same on every run, timing the drawing and the ticks apart.
+static void DrawBench(void)
+{
+	UInt32 draw = 0, ticks = 0, t0;
+	UInt16 f, t;
+
+	for (f = 0; f < 200 && !gGame.over; f++) {
+		for (t = 0; t < 5; t++) {
+			GameInput all[GAME_MAX_TANKS];
+
+			MemSet(all, sizeof(all), 0);
+			all[game_viewer_tank(&gGame)].keys = (UInt8)(IN_FASTER | (f % 40 < 6 ? IN_LEFT : 0) |
+				(f % 10 == 0 && t == 0 ? IN_FIRE : 0));
+			t0 = TimGetTicks();
+			game_tick(&gGame, all);
+			ticks += TimGetTicks() - t0;
+		}
+		t0 = TimGetTicks();
+		ViewFrame(false, true);
+		draw += TimGetTicks() - t0;
+	}
+	LOG(("draw bench check: %u view bytes differ from a full redraw", ViewCheck()));
+#ifdef TICK_PARTS
+	LOG(("tick parts: occ %lu bots %lu tanks %lu men %lu pills %lu bases %lu shells etc %lu trees %lu",
+		gTickPart[1], gTickPart[2], gTickPart[3], gTickPart[4], gTickPart[5], gTickPart[6],
+		gTickPart[7], gTickPart[8]));
+#endif
+	LOG(("draw bench %u frames x5 ticks: draw %lu sys ticks (%lu ms a frame), ticks %lu sys ticks",
+		f, draw, draw * 10 / f, ticks));
+}
+#endif
 
 static void AppStart(void)
 {

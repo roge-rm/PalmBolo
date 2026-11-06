@@ -26,9 +26,11 @@ void SEC_DETECT DeviceDetect(DeviceInfo *d)
 	MemHeapFreeBytes(heap, &d->heapFree, &d->heapMax);
 	d->heapTotal = MemHeapSize(heap);
 
-	// The window manager version feature and WinScreenMode are OS 3.5.
-	if (d->rom >= kRom35) {
+	// WinScreenMode is ScrDisplayMode on OS 3.0 to 3.3 (the same trap),
+	// with 1 and 2 bits on grey Palms. The window manager version is 3.5.
+	if (d->rom >= kRom35)
 		d->winVersion = GetFtr(sysFtrCreator, sysFtrNumWinVersion, 0);
+	if (d->rom >= kMinRomVersion) {
 		if (WinScreenMode(winScreenModeGetSupportedDepths, NULL, NULL,
 		        &depths, NULL) != errNone)
 			depths = 1;

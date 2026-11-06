@@ -56,22 +56,43 @@ void SEC_UI LogClear(void);
 // Logs every detected value.
 void SEC_UI LogDevice(const DeviceInfo *d);
 
-// Tick and draw timer. Times are in 1/100 ms.
+// Tick and draw timer, in system ticks.
 void SEC_UI TimingInit(UInt16 ticksPerSecond);
-void SEC_UI TimingTicks(UInt32 startTicks, UInt32 endTicks, UInt16 count);
+void SEC_UI TimingTick(UInt32 ticks);
 void SEC_UI TimingDraw(UInt32 startTicks, UInt32 endTicks);
-UInt32 SEC_UI TimingTickX100(void);
-UInt32 SEC_UI TimingDrawX100(void);
-// Logs the averages about every 5 seconds.
+// Time getting and handling one event.
+void SEC_UI TimingEvent(UInt32 ticks);
+// Logs the free heap at where, and keeps the least seen.
+void SEC_UI TimingHeap(const Char *where);
+// True about every 5 seconds, when TimingMaybeLog has something to log.
+Boolean SEC_UI TimingDue(void);
+// Logs averages, worst times, frame rate and heap, and starts the next
+// period after the logging, so its own time is left out.
 void SEC_UI TimingMaybeLog(void);
 #define LOG(args) LogF args
 #else
 #define LOG(args) ((void)0)
 #define TimingInit(t) ((void)0)
-#define TimingTicks(a, b, c) ((void)0)
+#define TimingTick(a) ((void)0)
 #define TimingDraw(a, b) ((void)0)
+#define TimingEvent(a) ((void)0)
+#define TimingHeap(a) ((void)0)
 #define TimingMaybeLog() ((void)0)
 #endif
+
+// A window's pixels for drawing into directly (blit.c), OS 3.0 to 3.3 at
+// 1 and 2 bits only. bits is NULL when the OS calls must be used.
+typedef struct BlitWin {
+	UInt8 *bits;        // the window's top left pixel
+	UInt16 rowBytes, depth;
+	Coord w, h;
+	WinHandle win;
+} BlitWin;
+Boolean SEC_UI BlitFind(WinHandle w, BlitWin *b);
+void SEC_UI BlitCell(const BlitWin *src, Coord sx, Coord sy, const BlitWin *dst,
+	Coord x, Coord y, const RectangleType *clip);
+void SEC_UI BlitSprite(const BlitWin *mask, Coord mx, Coord my, const BlitWin *spr,
+	Coord sx, Coord sy, const BlitWin *dst, Coord x, Coord y, const RectangleType *clip);
 
 // Screen. ScreenInit picks the depth and coordinate system, ScreenExit
 // restores them.
@@ -125,6 +146,7 @@ Int16 SEC_UI ViewTap(Coord x, Coord y, UInt8 *mx, UInt8 *my);
 #ifdef DEBUG
 // Draws the whole view count times and logs the average time.
 void SEC_UI ViewTimeFull(UInt16 count);
+UInt16 SEC_UI ViewCheck(void);
 #endif
 
 // Status panel and overview map (panel.c). The view calls these.

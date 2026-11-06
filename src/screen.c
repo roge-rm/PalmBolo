@@ -32,7 +32,7 @@ void SEC_UI ScreenInit(const DeviceInfo *d)
 	gHiRes = d->winVersion >= 4 && d->density == kDensityDouble;
 	gDepth = 1;
 
-	if (gNewWin) {
+	if (d->rom >= kMinRomVersion) {
 		// Deepest supported depth up to 8 bits.
 		depth = 1;
 		for (i = 8; i >= 1; i--) {
@@ -41,6 +41,9 @@ void SEC_UI ScreenInit(const DeviceInfo *d)
 				break;
 			}
 		}
+#if defined(DEBUG) && defined(FORCE_DEPTH)
+		depth = FORCE_DEPTH;
+#endif
 		if (WinScreenMode(winScreenModeGet, NULL, NULL, &gOldDepth, NULL) == errNone) {
 			if (WinScreenMode(winScreenModeSet, NULL, NULL, &depth, NULL) == errNone) {
 				gDepthSet = true;

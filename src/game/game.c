@@ -41,7 +41,7 @@ uint8_t game_take_sounds(GameSound *out, uint8_t max)
 	return n;
 }
 
-uint8_t game_terrain(uint8_t x, uint8_t y)
+uint8_t (game_terrain)(uint8_t x, uint8_t y)
 {
 	if (x > MAP_EDGE_LOW && x < MAP_EDGE_HIGH && y > MAP_EDGE_LOW && y < MAP_EDGE_HIGH)
 		return mapstore_get(x, y);
@@ -191,78 +191,129 @@ uint8_t game_mine_shown(const GameState *s, uint8_t x, uint8_t y)
 	return !s->hiddenMines || mapstore_flag(MS_SEEN, x, y);
 }
 
-// Columns and rows that may hold a pill or base, a bit each, so most
-// lookups miss without a search. Built from the state at the start of each
-// tick, with pills put down during it added, and used only inside
-// game_tick; outside it the lookups search. Not part of the state.
-static uint8_t gOccX[32], gOccY[32], gOccOn;
+uint16_t g_row_pills[256], g_col_pills[256], g_row_bases[256], g_col_bases[256];
+uint8_t g_occ_on;
+// Rows and columns with bits set, to clear at the next build.
+#define OCC_USED 96
+static uint8_t gOccUsed[OCC_USED], gOccCount, gOccOver;
 
-static void occ_add(uint8_t x, uint8_t y)
+static void occ_add(uint16_t *row, uint16_t *col, uint8_t x, uint8_t y, uint8_t i)
 {
-	gOccX[x >> 3] = (uint8_t)(gOccX[x >> 3] | (1 << (x & 7)));
-	gOccY[y >> 3] = (uint8_t)(gOccY[y >> 3] | (1 << (y & 7)));
+	if (gOccCount + 2 <= OCC_USED) {
+		gOccUsed[gOccCount++] = x;
+		gOccUsed[gOccCount++] = y;
+	} else {
+		gOccOver = 1;
+	}
+	row[y] = (uint16_t)(row[y] | (1U << i));
+	col[x] = (uint16_t)(col[x] | (1U << i));
+}
+
+// The pill and base squares the bits were built from, so a tick with
+// nothing moved keeps them. Bits only ever cover more squares than the
+// pills are on, never fewer, so a pill put down during a tick only adds.
+static uint8_t gOccPos[2 * (MAP_MAX_PILLS + MAP_MAX_BASES)], gOccPills = 255, gOccBases;
+
+static uint8_t occ_same(const GameState *s)
+{
+	const uint8_t *q = gOccPos;
+	const MapPill *p = s->map.pills;
+	const MapBase *b = s->map.bases;
+	uint8_t i;
+
+	if (s->map.numPills != gOccPills || s->map.numBases != gOccBases)
+		return 0;
+	for (i = gOccPills; i; i--, q += 2, p++)
+		if (q[0] != p->x || q[1] != p->y)
+			return 0;
+	for (i = gOccBases; i; i--, q += 2, b++)
+		if (q[0] != b->x || q[1] != b->y)
+			return 0;
+	return 1;
 }
 
 static void occ_build(const GameState *s)
 {
-	uint8_t i;
+	uint8_t i, *q = gOccPos;
+	uint16_t j;
 
-	for (i = 0; i < 32; i++) {
-		gOccX[i] = 0;
-		gOccY[i] = 0;
+	if (occ_same(s)) {
+		g_occ_on = 1;
+		return;
 	}
-	for (i = 0; i < s->map.numPills; i++)
-		occ_add(s->map.pills[i].x, s->map.pills[i].y);
-	for (i = 0; i < s->map.numBases; i++)
-		occ_add(s->map.bases[i].x, s->map.bases[i].y);
-	gOccOn = 1;
+	if (gOccOver) {
+		for (j = 0; j < 256; j++) {
+			g_row_pills[j] = 0;
+			g_col_pills[j] = 0;
+			g_row_bases[j] = 0;
+			g_col_bases[j] = 0;
+		}
+		gOccOver = 0;
+	} else {
+		// Each entry is a row or a column; clearing both at it is safe.
+		for (i = 0; i < gOccCount; i++) {
+			uint8_t v = gOccUsed[i];
+
+			g_row_pills[v] = 0;
+			g_col_pills[v] = 0;
+			g_row_bases[v] = 0;
+			g_col_bases[v] = 0;
+		}
+	}
+	gOccCount = 0;
+	for (i = 0; i < s->map.numPills; i++, q += 2) {
+		q[0] = s->map.pills[i].x;
+		q[1] = s->map.pills[i].y;
+		occ_add(g_row_pills, g_col_pills, q[0], q[1], i);
+	}
+	for (i = 0; i < s->map.numBases; i++, q += 2) {
+		q[0] = s->map.bases[i].x;
+		q[1] = s->map.bases[i].y;
+		occ_add(g_row_bases, g_col_bases, q[0], q[1], i);
+	}
+	gOccPills = s->map.numPills;
+	gOccBases = s->map.numBases;
+	g_occ_on = 1;
 }
 
-void g_pill_moved(uint8_t x, uint8_t y)
+void g_pill_moved(const GameState *s, uint8_t pill)
 {
-	occ_add(x, y);
+	occ_add(g_row_pills, g_col_pills, s->map.pills[pill].x, s->map.pills[pill].y, pill);
 }
 
-static uint8_t occ_maybe(uint8_t x, uint8_t y)
+// The lowest numbered match, as a search of every base would find.
+int8_t g_base_find(const GameState *s, uint8_t x, uint8_t y)
 {
-	return !gOccOn || ((gOccX[x >> 3] >> (x & 7)) & (gOccY[y >> 3] >> (y & 7)) & 1);
-}
+	const MapBase *b = s->map.bases;
+	uint8_t i, n = s->map.numBases;
+	uint16_t m = g_occ_on ? g_row_bases[y] & g_col_bases[x] : 0xFFFF;
 
-int8_t g_base_at(const GameState *s, uint8_t x, uint8_t y)
-{
-	uint8_t i;
-
-	if (!occ_maybe(x, y))
-		return -1;
-	for (i = 0; i < s->map.numBases; i++)
-		if (s->map.bases[i].x == x && s->map.bases[i].y == y && s->map.bases[i].active)
+	for (i = 0; i < n && m; i++, b++, m >>= 1)
+		if ((m & 1) && b->x == x && b->y == y && b->active)
 			return (int8_t)i;
 	return -1;
 }
 
-int8_t g_pill_at(const GameState *s, uint8_t x, uint8_t y)
+int8_t g_pill_find(const GameState *s, uint8_t x, uint8_t y)
 {
-	uint8_t i;
+	const MapPill *p = s->map.pills;
+	uint8_t i, n = s->map.numPills;
+	uint16_t m = g_occ_on ? g_row_pills[y] & g_col_pills[x] : 0xFFFF;
 
-	if (!occ_maybe(x, y))
-		return -1;
-	for (i = 0; i < s->map.numPills; i++) {
-		const MapPill *p = &s->map.pills[i];
-
-		if (p->x == x && p->y == y && p->active && !p->inTank)
+	for (i = 0; i < n && m; i++, p++, m >>= 1)
+		if ((m & 1) && p->x == x && p->y == y && p->active && !p->inTank)
 			return (int8_t)i;
-	}
 	return -1;
 }
 
-int8_t g_live_pill_at(const GameState *s, uint8_t x, uint8_t y)
+int8_t g_live_pill_find(const GameState *s, uint8_t x, uint8_t y)
 {
-	int8_t p = g_pill_at(s, x, y);
+	int8_t p = g_pill_find(s, x, y);
 
 	return p >= 0 && s->map.pills[p].armour > 0 ? p : -1;
 }
 
-uint8_t game_allied(const GameState *s, uint8_t a, uint8_t b)
+uint8_t (game_allied)(const GameState *s, uint8_t a, uint8_t b)
 {
 	if (a == b)
 		return 1;
@@ -771,6 +822,14 @@ uint16_t game_random_below(GameState *s, uint16_t n)
 // Order as WinBolo's server tick: tanks with their builder orders, the
 // builders, pills, bases and refuelling, wrecks, shells, mines, explosions,
 // flooding, then tree growth once for each tank.
+#ifdef TICK_PARTS
+// Debug: the Palm build times the parts of a tick.
+extern void tick_part(uint8_t n);
+#define TP(n) tick_part(n)
+#else
+#define TP(n) ((void)0)
+#endif
+
 void game_tick(GameState *s, const GameInput *in)
 {
 	GameInput bin[GAME_MAX_TANKS];
@@ -778,34 +837,42 @@ void game_tick(GameState *s, const GameInput *in)
 
 	if (s->over)
 		return;
+	TP(0);
 	occ_build(s);
+	TP(1);
 	// Bots make their tanks' keys first, all from the state at the start
 	// of the tick.
 	if (s->botMask) {
 		bots_tick(s, in, bin);
 		in = bin;
 	}
-
+	TP(2);
 	for (i = 0; i < s->numTanks; i++) {
 		tank_update(s, i, &in[i]);
 		if (in[i].build != BUILD_NONE && in[i].build <= BUILD_MINE)
 			lgm_request(s, i, in[i].buildX, in[i].buildY, (uint8_t)(in[i].build - 1));
 	}
+	TP(3);
 	for (i = 0; i < s->numTanks; i++)
 		lgm_update(s, i);
+	TP(4);
 	pills_update(s);
+	TP(5);
 	bases_update(s);
+	TP(6);
 	tk_explosions_update(s);
 	shells_update(s);
 	mines_update(s);
 	explosions_update(s);
 	flood_update(s);
+	TP(7);
 	for (i = 0; i < s->numTanks; i++)
 		tree_update(s);
+	TP(8);
 	s->tick++;
 	if (s->timeLimit && s->tick >= s->timeLimit)
 		s->over = 1;
-	gOccOn = 0;
+	g_occ_on = 0;
 }
 
 static uint32_t c8(uint32_t crc, uint8_t v)
