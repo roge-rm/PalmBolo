@@ -2,7 +2,7 @@
 #define RESOURCE_H
 
 // The version, for the VERSION resource, the About alert and the log.
-#define kAppVersion         "0.8.0"
+#define kAppVersion         "0.9.0"
 
 #define MapListForm         1000
 #define MapList             1001
@@ -27,6 +27,7 @@
 #define NgTeamsList         1041
 #define NgStart             1042
 #define NgBack              1043
+#define NgHost              1044
 #define SettingsForm        1050
 #define SetName             1051
 #define SetSound            1052
@@ -40,6 +41,16 @@
 #define SetCancel           1060
 #define ResultsForm         1070
 #define ResultsOK           1071
+#define LobbyForm           1080
+#define LobLinkTrig         1081
+#define LobLinkList         1082
+#define LobStart            1083
+#define LobCancel           1084
+#define JoinForm            1090
+#define JoinLinkTrig        1091
+#define JoinLinkList        1092
+#define JoinGo              1093
+#define JoinBack            1094
 #define GameForm            1010
 #define EverardMapRes       2000
 #define MainMenu            1000

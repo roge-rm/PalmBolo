@@ -150,6 +150,33 @@ UInt16 SEC_COLD MapListBuild(Char names[][kMapNameLen]);
 // Returns a map error code (MAP_OK is 0), or -1 when it can't be opened.
 Int16 SEC_COLD MapLoad(UInt16 index, const Char *name, struct GameState *game);
 
+// Maps in network play are known by the CRC-32 of the file's bytes and
+// their length. MapFileSum gives those of map index (named name).
+Boolean SEC_COLD MapFileSum(UInt16 index, const Char *name, UInt32 *sum, UInt32 *len);
+// Finds the map with these bytes and fills name: returns 0 for Everard
+// Island, 1 for a Map database (only looked through if dbs), -1 if none.
+Int16 SEC_COLD MapFind(UInt32 sum, UInt32 len, Char *name, Boolean dbs);
+// The host reads a map's bytes to send them (MapBytesGet suits LsMapGet).
+typedef struct MapBytes {
+	MemHandle res;
+	DmOpenRef db;
+} MapBytes;
+Boolean SEC_COLD MapBytesOpen(MapBytes *m, UInt16 index, const Char *name);
+void SEC_COLD MapBytesGet(void *ctx, UInt16 off, UInt8 *dst, UInt8 n);
+void SEC_COLD MapBytesClose(MapBytes *m);
+// A joiner keeps a map as it comes (MapInPut suits LsMapPut), in a
+// database of its own until MapInKeep makes it a Map database named after
+// the map, with a number after the name if that is taken. saved gets the
+// name (kMapNameLen bytes). MapInDrop throws it away.
+typedef struct MapIn {
+	DmOpenRef db;
+	UInt32 len;
+} MapIn;
+Boolean SEC_COLD MapInOpen(MapIn *w, UInt32 len);
+UInt8 SEC_COLD MapInPut(void *ctx, UInt16 off, const UInt8 *src, UInt8 n);
+Boolean SEC_COLD MapInKeep(MapIn *w, const Char *name, Char *saved);
+void SEC_COLD MapInDrop(MapIn *w);
+
 // Tile view. ViewOpen sizes the view to the window and centres it on the
 // tank, or shows an alert and returns false if it can't draw (no memory for
 // the art, a 16-bit screen). ViewClose gives back the input area.
@@ -159,6 +186,8 @@ Boolean SEC_COLD ViewOpen(const DeviceInfo *d, const struct GameState *game);
 void SEC_COLD ViewClose(void);
 void SEC_COLD ViewResized(void);
 void SEC_UI ViewFrame(Boolean full, Boolean ticked);
+// A line shown in place of the button row until cleared with NULL.
+void SEC_UI ViewMessage(const Char *msg);
 Boolean SEC_UI ViewSetInputArea(Boolean closed);
 void SEC_UI ViewPins(Boolean on);
 void SEC_UI ViewFormInputArea(Boolean closed);
@@ -263,14 +292,19 @@ void AppSetSound(Boolean on);
 void SEC_COLD AppOpenMap(UInt16 index, const Char *name);
 // Carries on the saved game.
 void SEC_COLD AppResume(void);
+// The game state, for network play to set up.
+struct GameState *AppGame(void);
+// Goes to a network game set up in AppGame (netgame.h).
+void SEC_COLD AppNetGame(void);
 // Minutes of the time limit choice (0 off) .
 UInt16 AppTimeMinutes(UInt8 choice);
 
 // The start screens and the saved game (front.c, its own segment). The
 // handler is for the form with that ID, or NULL.
 FormEventHandlerType *SEC_FRONT FrontHandler(UInt16 formId);
-// Shows the results of a game that ended and goes on to the title.
-void SEC_FRONT FrontResults(const struct GameState *g);
+// Shows the results of a game that ended and goes on to the title. net
+// is true for a network game, whose names come from netgame.h.
+void SEC_FRONT FrontResults(const struct GameState *g, Boolean net);
 // The saved game: the game state in a database of its own and the map
 // store kept beside it.
 Boolean SEC_FRONT SaveExists(void);

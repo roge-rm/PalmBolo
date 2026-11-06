@@ -45,14 +45,14 @@ void mapstore_close(void)
 }
 
 // Opens the cache database, creating it if it is missing or the wrong size.
-static DmOpenRef OpenCache(void)
+static DmOpenRef OpenCacheAs(const Char *name, UInt32 type)
 {
 	DmOpenRef db;
 	LocalID id;
 	UInt16 i, index;
 	MemHandle h;
 
-	db = DmOpenDatabaseByTypeCreator(kCacheType, kCreator, dmModeReadWrite);
+	db = DmOpenDatabaseByTypeCreator(type, kCreator, dmModeReadWrite);
 	if (db) {
 		Boolean ok = DmNumRecords(db) == kAllRecords;
 
@@ -63,13 +63,13 @@ static DmOpenRef OpenCache(void)
 		if (ok)
 			return db;
 		DmCloseDatabase(db);
-		id = DmFindDatabase(0, kCacheName);
+		id = DmFindDatabase(0, (Char *)name);
 		if (id)
 			DmDeleteDatabase(0, id);
 	}
-	if (DmCreateDatabase(0, kCacheName, kCreator, kCacheType, false) != errNone)
+	if (DmCreateDatabase(0, name, kCreator, type, false) != errNone)
 		return NULL;
-	db = DmOpenDatabaseByTypeCreator(kCacheType, kCreator, dmModeReadWrite);
+	db = DmOpenDatabaseByTypeCreator(type, kCreator, dmModeReadWrite);
 	if (!db)
 		return NULL;
 	for (i = 0; i < kAllRecords; i++) {
@@ -77,7 +77,7 @@ static DmOpenRef OpenCache(void)
 		h = DmNewRecord(db, &index, i < kRecords ? kRecordBytes : kFlagBytes);
 		if (!h) {
 			DmCloseDatabase(db);
-			id = DmFindDatabase(0, kCacheName);
+			id = DmFindDatabase(0, (Char *)name);
 			if (id)
 				DmDeleteDatabase(0, id);
 			return NULL;
@@ -85,6 +85,28 @@ static DmOpenRef OpenCache(void)
 		DmReleaseRecord(db, index, true);
 	}
 	return db;
+}
+
+#ifdef LOOPBACK_TEST
+// Which cache the store opens; mapstore_peer_swap swaps it too.
+static const Char *gCacheName = kCacheName;
+static UInt32 gCacheType = kCacheType;
+#else
+#define gCacheName kCacheName
+#define gCacheType kCacheType
+#endif
+
+static DmOpenRef OpenCache(void)
+{
+	return OpenCacheAs(gCacheName, gCacheType);
+}
+
+static void SetRows(void)
+{
+	UInt16 i;
+
+	for (i = 0; i < 256; i++)
+		mapstore_rows[i] = gRec[i / kRowsPerRecord] + (i % kRowsPerRecord) * 256;
 }
 
 // Opens the cache and locks all its records. Non-zero on failure.
@@ -104,8 +126,7 @@ static int OpenLocked(void)
 			return 1;
 		}
 	}
-	for (i = 0; i < 256; i++)
-		mapstore_rows[i] = gRec[i / kRowsPerRecord] + (i % kRowsPerRecord) * 256;
+	SetRows();
 	return 0;
 }
 
@@ -248,3 +269,49 @@ int mapstore_resume(void)
 		mapstore_close();
 	return ok ? 0 : 1;
 }
+
+#ifdef LOOPBACK_TEST
+// A second store for the loopback test's second copy of the game, in a
+// database of its own. mapstore_peer_swap swaps it with the open store, so
+// the calls above, mapstore_open too, work on it until swapped back.
+#define kPeerName       "PalmBoloPeerMap"
+#define kPeerType       'Peer'
+static DmOpenRef gPeerDb;
+static UInt8 *gPeerRec[kAllRecords];
+static MemHandle gPeerHandle[kAllRecords];
+static const Char *gPeerName = kPeerName;
+static UInt32 gPeerType = kPeerType;
+
+void mapstore_peer_swap(void)
+{
+	DmOpenRef db = gDb;
+	const Char *name = gCacheName;
+	UInt32 type = gCacheType;
+	UInt16 i;
+
+	gDb = gPeerDb;
+	gPeerDb = db;
+	gCacheName = gPeerName;
+	gPeerName = name;
+	gCacheType = gPeerType;
+	gPeerType = type;
+	for (i = 0; i < kAllRecords; i++) {
+		UInt8 *r = gRec[i];
+		MemHandle h = gHandle[i];
+
+		gRec[i] = gPeerRec[i];
+		gHandle[i] = gPeerHandle[i];
+		gPeerRec[i] = r;
+		gPeerHandle[i] = h;
+	}
+	if (gRec[0])
+		SetRows();
+}
+
+void mapstore_peer_close(void)
+{
+	mapstore_peer_swap();
+	mapstore_close();
+	mapstore_peer_swap();
+}
+#endif

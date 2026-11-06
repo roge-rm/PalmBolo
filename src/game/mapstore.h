@@ -54,4 +54,11 @@ int mapstore_resume(void);
 int mapstore_have_save(void);
 void mapstore_drop_save(void);
 
+#ifdef LOOPBACK_TEST
+// Palm debug only: a second store, and swapping the two. mapstore_open on
+// the swapped store opens the second one.
+void mapstore_peer_swap(void);
+void mapstore_peer_close(void);
+#endif
+
 #endif

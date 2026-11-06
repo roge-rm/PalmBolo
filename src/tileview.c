@@ -1151,6 +1151,26 @@ void SEC_UI ViewIcon(UInt16 cell, Coord x, Coord y)
 // The button row, when the chosen action changed or on a full redraw. Each
 // button is an icon on the panel colour; the chosen one is on a black
 // plate and the highlight colour.
+// A line shown in place of the button row (network play's "waiting for").
+static Char gMsg[48];
+static Boolean gMsgOn, gMsgNew;
+
+void SEC_UI ViewMessage(const Char *msg)
+{
+	if (!msg) {
+		if (gMsgOn) {
+			gMsgOn = false;
+			gMsgNew = true;
+		}
+		return;
+	}
+	if (gMsgOn && StrCompare(msg, gMsg) == 0)
+		return;
+	StrNCopy(gMsg, msg, sizeof(gMsg) - 1);
+	gMsg[sizeof(gMsg) - 1] = 0;
+	gMsgOn = gMsgNew = true;
+}
+
 static void SEC_UI DrawBar(Boolean force)
 {
 	const Char *p = kButtonText;
@@ -1160,16 +1180,22 @@ static void SEC_UI DrawBar(Boolean force)
 	FontID old;
 	IndexedColorType oldBack = 0;
 
-	if (!force && gBarShown == gAction)
+	if (!force && gBarShown == gAction && !gMsgNew)
 		return;
 	gBarShown = gAction;
+	gMsgNew = false;
 	old = FntSetFont(stdFont);
 	if (ScreenNewWin())
 		oldBack = WinSetBackColor(PanelBg());
 	Fill(0, gBarY, gW, gBarH, PanelBg());
 	Fill(0, gBarY, gW, 1, gBlack);
 	Fill(0, gBarY + 1, gW, 1, gWhite);
-	for (i = 0; i < kButtons; i++, p += len + 1) {
+	if (gMsgOn) {
+		len = StrLen(gMsg);
+		WinDrawChars(gMsg, len, (gW - FntCharsWidth(gMsg, len)) / 2, gBarY + 2 + (gBarH - 2 - gLine) / 2);
+		p = NULL;
+	}
+	for (i = 0; p && i < kButtons; i++, p += len + 1) {
 		Boolean sel = i == gAction;
 
 		x0 = (Coord)((Int32)gW * i / kButtons);
@@ -1485,8 +1511,15 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 	UInt32 t0 = TimGetTicks();
 #endif
 
-	if (!full && !ticked)
+	if (!full && !ticked) {
+		// A new line can come while nothing moves.
+		if (gMsgNew) {
+			NativeOn();
+			DrawBar(false);
+			NativeOff();
+		}
 		return;
+	}
 #ifdef DRAW_PARTS
 	gPartT = TimGetTicks();
 #endif

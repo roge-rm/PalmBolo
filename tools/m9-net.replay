@@ -1,0 +1,76 @@
+# Milestone 9 network play on a TX through the loopback link. Hosts a game
+# on Joust, which the second copy in the app doesn't have, so it gets the
+# map; leaves at tick 1500; then joins the second copy's game on Joust and
+# gets the map from it. Debug build with EXTRA="-DLOOPBACK_TEST
+# -DTEST_LEAVE_AT=1500 -DAUTOQUIT_SECONDS=95"; install Joust.pdb (made by
+# tools/map2pdb.py) with the app. Times are ms after launch and settle.
+0 snapshot "01-title.png"
+2000 pen-down 160 246
+2100 pen-up
+3500 pen-down 100 68
+3600 pen-up
+4200 snapshot "02-maplist.png"
+4500 pen-down 68 428
+4600 pen-up
+6000 snapshot "03-newgame.png"
+6500 pen-down 160 428
+6600 pen-up
+9000 snapshot "04-host-lobby.png"
+9500 pen-down 68 428
+9600 pen-up
+9700 snapshot "05-sending-00.png"
+9850 snapshot "05-sending-01.png"
+10000 snapshot "05-sending-02.png"
+10150 snapshot "05-sending-03.png"
+10300 snapshot "05-sending-04.png"
+10450 snapshot "05-sending-05.png"
+10600 snapshot "05-sending-06.png"
+10750 snapshot "05-sending-07.png"
+10900 snapshot "05-sending-08.png"
+11050 snapshot "05-sending-09.png"
+11200 snapshot "05-sending-10.png"
+11350 snapshot "05-sending-11.png"
+14000 snapshot "06-host-game.png"
+14100 key-down up
+18000 key-down hard4
+18600 key-up hard4
+20000 snapshot "06b-host-game.png"
+22000 key-down hard1
+22700 key-up hard1
+30000 snapshot "06c-host-game.png"
+38000 snapshot "06d-host-game.png"
+40000 key-up up
+47000 snapshot "07-title.png"
+48000 pen-down 160 286
+48100 pen-up
+49500 snapshot "08-join.png"
+50000 pen-down 68 428
+50100 pen-up
+52500 snapshot "09-join-lobby.png"
+55000 snapshot "10-getting-00.png"
+55150 snapshot "10-getting-01.png"
+55300 snapshot "10-getting-02.png"
+55450 snapshot "10-getting-03.png"
+55600 snapshot "10-getting-04.png"
+55750 snapshot "10-getting-05.png"
+55900 snapshot "10-getting-06.png"
+56050 snapshot "10-getting-07.png"
+56200 snapshot "10-getting-08.png"
+56350 snapshot "10-getting-09.png"
+56500 snapshot "10-getting-10.png"
+56650 snapshot "10-getting-11.png"
+56800 snapshot "10-getting-12.png"
+56950 snapshot "10-getting-13.png"
+57100 snapshot "10-getting-14.png"
+57250 snapshot "10-getting-15.png"
+57400 snapshot "10-getting-16.png"
+57550 snapshot "10-getting-17.png"
+57700 snapshot "10-getting-18.png"
+57850 snapshot "10-getting-19.png"
+62000 snapshot "11-join-game.png"
+62100 key-down up
+66000 key-down hard4
+66600 key-up hard4
+70000 snapshot "11b-join-game.png"
+80000 snapshot "11c-join-game.png"
+88000 snapshot "11d-join-game.png"

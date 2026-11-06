@@ -1,0 +1,55 @@
+# Milestone 9 loopback lockstep on a TX: hosts a game on Joust (second map
+# in the list) with the second copy of the game in the app joining, and
+# drives about. Debug build with EXTRA="-DLOOPBACK_TEST -DAUTOQUIT_SECONDS=42"
+# and LOOPBACK_DROP_AT=12 or LOOPBACK_DESYNC_AT=700 to see a bot take over or
+# the game stop out of step. Install Joust.pdb (tools/map2pdb.py) with the
+# app. Times are ms after launch and settle.
+0 snapshot "01-title.png"
+2000 pen-down 160 246
+2100 pen-up
+3500 pen-down 100 68
+3600 pen-up
+4500 pen-down 68 428
+4600 pen-up
+6500 pen-down 160 428
+6600 pen-up
+9000 pen-down 68 428
+9100 pen-up
+13000 key-down up
+18000 snapshot "g00.png"
+18500 snapshot "g01.png"
+19000 snapshot "g02.png"
+19500 snapshot "g03.png"
+20000 snapshot "g04.png"
+20500 snapshot "g05.png"
+21000 snapshot "g06.png"
+21500 snapshot "g07.png"
+22000 snapshot "g08.png"
+22500 snapshot "g09.png"
+23000 snapshot "g10.png"
+23500 snapshot "g11.png"
+24000 snapshot "g12.png"
+24500 snapshot "g13.png"
+25000 snapshot "g14.png"
+25500 snapshot "g15.png"
+26000 snapshot "g16.png"
+26500 snapshot "g17.png"
+27000 snapshot "g18.png"
+27500 snapshot "g19.png"
+28000 snapshot "g20.png"
+28500 snapshot "g21.png"
+29000 snapshot "g22.png"
+29500 snapshot "g23.png"
+30000 snapshot "g24.png"
+30000 key-up up
+30500 snapshot "g25.png"
+31000 snapshot "g26.png"
+31500 snapshot "g27.png"
+32000 snapshot "g28.png"
+32500 snapshot "g29.png"
+33000 snapshot "g30.png"
+33500 snapshot "g31.png"
+34000 snapshot "g32.png"
+34500 snapshot "g33.png"
+35000 snapshot "g34.png"
+35500 snapshot "g35.png"

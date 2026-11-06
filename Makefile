@@ -13,6 +13,10 @@
 # screen in a new game.
 # EXTRA="-DTEST_TIME_LIMIT=1000" ends a debug game after that many ticks.
 # EXTRA="-DTEST_LEAVE_AT=500" leaves a debug game for the title at that tick.
+# EXTRA="-DLOOPBACK_TEST" (debug only) adds a loopback link to Host and
+# Join game, with a second copy of the game in the app at the other end.
+# -DLOOPBACK_DROP_AT=N makes the second copy go silent after N seconds,
+# -DLOOPBACK_DESYNC_AT=N changes its state at tick N.
 # EXTRA="-DBOT_COUNT=3 -DBOT_LEVEL=2" sets the bots in a new game (level
 # 1 easy, 2 normal, 3 hard; 3 normal bots by default).
 
@@ -33,13 +37,15 @@ ART      = build/art
 CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES) -I$(ART) -Isrc
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
-SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound front blit keys compose
+SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound front blit keys compose netgame looptest
 GAMESRCS = game tank shells pills lgm treegrow util map bot
 # The scripted games are for the debug self-test only.
 ifdef DEBUG
 GAMESRCS += script
 endif
-OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS)))
+# Network play, segment net.
+NETSRCS  = lockstep link
+OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS) $(NETSRCS)))
 
 all: build/$(PRC)
 
@@ -59,10 +65,13 @@ art-preview: $(ARTSRC)
 	mkdir -p $(ART)/preview
 	python3 tools/art2palm.py $(ART) --preview $(ART)/preview
 
-$(BUILD)/%.o: src/%.c src/palmbolo.h src/resource.h src/game/*.h src/tilepick.h $(ART)/art.h | $(BUILD)
+$(BUILD)/%.o: src/%.c src/palmbolo.h src/resource.h src/game/*.h src/net/*.h src/*.h $(ART)/art.h | $(BUILD)
 	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
 
 $(addprefix $(BUILD)/,$(addsuffix .o,$(GAMESRCS))): $(BUILD)/%.o: src/game/%.c src/game/*.h | $(BUILD)
+	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
+
+$(addprefix $(BUILD)/,$(addsuffix .o,$(NETSRCS))): $(BUILD)/%.o: src/net/%.c src/net/*.h src/game/*.h | $(BUILD)
 	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/palmbolo-sections.s $(BUILD)/palmbolo-sections.ld: src/palmbolo.def | $(BUILD)
@@ -88,9 +97,10 @@ host-test: build/hosttest
 	build/hosttest
 
 HOSTSRC  = src/game/game.c src/game/bot.c src/game/tank.c src/game/shells.c src/game/pills.c src/game/lgm.c src/game/treegrow.c src/game/script.c src/game/util.c src/game/map.c host/mapstore_host.c
+HOSTNET  = src/net/lockstep.c src/net/link.c host/locktest.c
 
-build/hosttest: host/hosttest.c $(HOSTSRC) src/game/*.h | $(BUILD)
-	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) -lm -o $@
+build/hosttest: host/hosttest.c $(HOSTSRC) $(HOSTNET) src/game/*.h src/net/*.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/hosttest.c $(HOSTSRC) $(HOSTNET) -lm -o $@
 
 # maprender reads the colour sheets from build/art at run time.
 build/maprender: host/maprender.c src/tilepick.c src/tilepick.h $(HOSTSRC) src/game/*.h $(ART)/stamp | $(BUILD)

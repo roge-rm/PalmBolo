@@ -8,6 +8,7 @@
 #include "game/game.h"
 #include "game/mapstore.h"
 #include "game/util.h"
+#include "netgame.h"
 
 #define kSaveDbName     "PalmBoloSavedGame"
 #define kSaveDbType     'Sgam'
@@ -185,10 +186,10 @@ static Coord gMidShift;     // how far the form's contents have moved down
 static Coord gBotShift;     // and its bottom buttons
 
 // The form's 160 high layout on a taller screen. Everything but the title
-// bar and the two bottom buttons moves down half the extra height, the
-// buttons go to the bottom. With a list id given, the contents stay and that
+// bar and the bottom buttons (up to three) moves down half the extra
+// height, the buttons go to the bottom. With a list id given, the contents stay and that
 // list gets the extra rows instead. reset is true on a freshly loaded form.
-static void SEC_FRONT TallLayout(FormType *frm, UInt16 bot1, UInt16 bot2,
+static void SEC_FRONT TallLayout(FormType *frm, UInt16 bot1, UInt16 bot2, UInt16 bot3,
 	UInt16 list, Boolean reset)
 {
 	RectangleType r;
@@ -220,10 +221,10 @@ static void SEC_FRONT TallLayout(FormType *frm, UInt16 bot1, UInt16 bot2,
 		FrmGetObjectPosition(frm, i, &x, &y);
 		if (kind == frmListObj) {
 			LstSetPosition((ListType *)FrmGetObjectPtr(frm, i), x,
-				(Coord)(y + (id == bot1 || id == bot2 ? db : dm)));
+				(Coord)(y + (id == bot1 || id == bot2 || id == bot3 ? db : dm)));
 			continue;
 		}
-		if (id == bot1 || id == bot2) {
+		if (id == bot1 || id == bot2 || id == bot3) {
 			if (db)
 				FrmSetObjectPosition(frm, i, x, (Coord)(y + db));
 		} else if (dm) {
@@ -232,6 +233,20 @@ static void SEC_FRONT TallLayout(FormType *frm, UInt16 bot1, UInt16 bot2,
 	}
 	gMidShift = mid;
 	gBotShift = bot;
+}
+
+// ---- links ----
+
+static UInt8 gLinkKinds[kNetMaxLinks];
+static const Char *gLinkNames[kNetMaxLinks];
+static UInt8 gNumLinks, gLinkSel;
+
+static UInt8 SEC_FRONT FindLinks(void)
+{
+	gNumLinks = NetLinks(gLinkKinds, gLinkNames);
+	if (gLinkSel >= gNumLinks)
+		gLinkSel = 0;
+	return gNumLinks;
 }
 
 // ---- title ----
@@ -309,7 +324,7 @@ static Boolean SEC_FRONT TitleHandler(EventType *e)
 	case frmOpenEvent:
 		FitForm(frm, false);
 		TitleLayout(frm, SaveExists());
-		CtlSetEnabled(Obj(frm, TitleJoin), false);
+		CtlSetEnabled(Obj(frm, TitleJoin), FindLinks() > 0);
 		TitleDraw(frm);
 		return true;
 	case winDisplayChangedEvent:
@@ -329,7 +344,7 @@ static Boolean SEC_FRONT TitleHandler(EventType *e)
 		RectangleType b;
 
 		FrmGetObjectBounds(frm, FrmGetObjectIndex(frm, TitleJoin), &b);
-		if (RctPtInRectangle(e->screenX, e->screenY, &b)) {
+		if (!gNumLinks && RctPtInRectangle(e->screenX, e->screenY, &b)) {
 			FrmAlert(JoinAlert);
 			return true;
 		}
@@ -341,12 +356,13 @@ static Boolean SEC_FRONT TitleHandler(EventType *e)
 			AppResume();
 			return true;
 		case TitleNew:
-			if (SaveExists() && FrmAlert(ReplaceAlert) != 0)
-				return true;
 			Go(MapListForm);
 			return true;
 		case TitleSettings:
 			Go(SettingsForm);
+			return true;
+		case TitleJoin:
+			Go(JoinForm);
 			return true;
 		}
 		return false;
@@ -382,7 +398,7 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 				sel = i;
 		}
 		LstSetListChoices(lst, gNamePtrs, gNumMaps);
-		TallLayout(frm, MapNext, MapBack, MapList, true);
+		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, true);
 		LstSetSelection(lst, sel);
 		FrmDrawForm(frm);
 		return true;
@@ -407,7 +423,7 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 		return false;
 	case winDisplayChangedEvent:
 		FitWindow(frm);
-		TallLayout(frm, MapNext, MapBack, MapList, false);
+		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, false);
 		FrmDrawForm(frm);
 		return true;
 	default:
@@ -433,7 +449,9 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 	switch (e->eType) {
 	case frmOpenEvent:
 		FitForm(frm, false);
-		TallLayout(frm, NgStart, NgBack, 0xFFFF, true);
+		TallLayout(frm, NgStart, NgBack, NgHost, 0xFFFF, true);
+		if (!FindLinks())
+			FrmHideObject(frm, FrmGetObjectIndex(frm, NgHost));
 		SetPopup(frm, NgTypeTrig, NgTypeList, p->gameType);
 		CtlSetValue((ControlType *)Obj(frm, NgMines), p->hiddenMines);
 		SetPopup(frm, NgTimeTrig, NgTimeList, p->timeLimit);
@@ -458,6 +476,9 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 		if (e->data.ctlSelect.controlID == NgStart) {
 			p->hiddenMines = (UInt8)CtlGetValue((ControlType *)Obj(frm, NgMines));
 			AppPrefsSave();
+			// Network games aren't saved, so only this asks.
+			if (SaveExists() && FrmAlert(ReplaceAlert) != 0)
+				return true;
 			AppOpenMap(gMapIndex, gNames[gMapIndex]);
 			return true;
 		}
@@ -467,11 +488,238 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 			Go(MapListForm);
 			return true;
 		}
+		if (e->data.ctlSelect.controlID == NgHost) {
+			p->hiddenMines = (UInt8)CtlGetValue((ControlType *)Obj(frm, NgMines));
+			AppPrefsSave();
+			if (!FindLinks())
+				return true;
+			if (!NetHost(gLinkKinds[gLinkSel], gMapIndex, gNames[gMapIndex], AppGame())) {
+				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
+				return true;
+			}
+			Go(LobbyForm);
+			return true;
+		}
 		return false;
 	case winDisplayChangedEvent:
 		FitWindow(frm);
-		TallLayout(frm, NgStart, NgBack, 0xFFFF, false);
+		TallLayout(frm, NgStart, NgBack, NgHost, 0xFFFF, false);
 		FrmDrawForm(frm);
+		return true;
+	default:
+		break;
+	}
+	return false;
+}
+
+// ---- lobby: hosting and joining ----
+
+static void SEC_FRONT Cell(const Char *s, Coord right, Coord y);
+
+static UInt16 gLobbySeq;
+
+// The map, a row for each tank and the status, between the link and the
+// buttons.
+static void SEC_FRONT LobbyDraw(void)
+{
+	RectangleType r;
+	Char name[kNameLen], note[20], line[48];
+	UInt8 i, n;
+	Coord y = (Coord)(30 + gMidShift);
+	FontID old = FntSetFont(stdFont);
+
+	gLobbySeq = NetLobbySeq();
+	r.topLeft.x = 0;
+	r.topLeft.y = y;
+	r.extent.x = 160;
+	r.extent.y = 113;
+	WinEraseRectangle(&r, 0);
+	if (NetMapName()[0]) {
+		Int16 w = 132;
+		UInt16 len = (UInt16)StrLen(NetMapName());
+		Boolean cut = false;
+
+		WinDrawChars("Map", 3, 4, y);
+		FntCharsInWidth(NetMapName(), &w, &len, &cut);
+		WinDrawChars(NetMapName(), len, 28, y);
+	}
+	y = (Coord)(y + 14);
+	n = NetRows();
+	for (i = 0; i < n && i < GAME_MAX_TANKS; i++) {
+		Int16 w = 96;
+		UInt16 len;
+		Boolean cut = false;
+
+		NetRow(i, name, note);
+		len = (UInt16)StrLen(name);
+		FntCharsInWidth(name, &w, &len, &cut);
+		WinDrawChars(name, len, 4, y);
+		Cell(note, 156, y);
+		y = (Coord)(y + 11);
+	}
+	NetStatus(line);
+	{
+		Int16 w = 152;
+		UInt16 len = (UInt16)StrLen(line);
+		Boolean cut = false;
+
+		FntCharsInWidth(line, &w, &len, &cut);
+		WinDrawChars(line, len, 4, (Coord)(133 + gMidShift - 1));
+	}
+	FntSetFont(old);
+}
+
+static void SEC_FRONT LinkPopup(FormType *frm, UInt16 trig, UInt16 list)
+{
+	ListType *lst = (ListType *)Obj(frm, list);
+
+	FindLinks();
+	LstSetListChoices(lst, (Char **)gLinkNames, gNumLinks);
+	LstSetHeight(lst, gNumLinks);
+	if (gNumLinks)
+		SetPopup(frm, trig, list, gLinkSel);
+}
+
+// Polls the network while a lobby form shows. Goes to the game when it
+// starts, or says why it stopped and goes to the title.
+static void SEC_FRONT LobbyIdle(void)
+{
+	UInt8 phase = NetPoll();
+
+	if (phase == NET_PLAY) {
+		AppNetGame();
+		return;
+	}
+	if (phase == NET_STOPPED) {
+		Char why[48];
+
+		StrCopy(why, NetWhy());
+		NetEnd();
+		if (why[0])
+			FrmCustomAlert(ViewAlert, why, "", "");
+		Go(TitleForm);
+		return;
+	}
+	if (NetLobbySeq() != gLobbySeq)
+		LobbyDraw();
+}
+
+static void SEC_FRONT ShowObj(FormType *frm, UInt16 id, Boolean show)
+{
+	UInt16 i = FrmGetObjectIndex(frm, id);
+
+	if (show)
+		FrmShowObject(frm, i);
+	else
+		FrmHideObject(frm, i);
+}
+
+static Boolean SEC_FRONT LobbyHandler(EventType *e)
+{
+	FormType *frm = FrmGetActiveForm();
+
+	switch (e->eType) {
+	case frmOpenEvent:
+		FitForm(frm, false);
+		TallLayout(frm, LobStart, LobCancel, 0xFFFF, 0xFFFF, true);
+		LinkPopup(frm, LobLinkTrig, LobLinkList);
+		FrmDrawForm(frm);
+		LobbyDraw();
+		return true;
+	case nilEvent:
+		LobbyIdle();
+		return true;
+	case popSelectEvent:
+		if (e->data.popSelect.listID == LobLinkList &&
+		    e->data.popSelect.selection != gLinkSel && NetPhase() == NET_LOBBY) {
+			gLinkSel = (UInt8)e->data.popSelect.selection;
+			if (!NetHost(gLinkKinds[gLinkSel], gMapIndex, gNames[gMapIndex], AppGame())) {
+				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
+				Go(NewGameForm);
+				return true;
+			}
+			LobbyDraw();
+		}
+		return false;
+	case ctlSelectEvent:
+		if (e->data.ctlSelect.controlID == LobStart) {
+			if (!NetCanStart())
+				return true;
+			if (!NetStart()) {
+				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
+				return true;
+			}
+			ShowObj(frm, LobStart, false);
+			LobbyDraw();
+			return true;
+		}
+		if (e->data.ctlSelect.controlID == LobCancel) {
+			NetEnd();
+			Go(NewGameForm);
+			return true;
+		}
+		return false;
+	case winDisplayChangedEvent:
+		FitWindow(frm);
+		TallLayout(frm, LobStart, LobCancel, 0xFFFF, 0xFFFF, false);
+		FrmDrawForm(frm);
+		LobbyDraw();
+		return true;
+	default:
+		break;
+	}
+	return false;
+}
+
+static Boolean SEC_FRONT JoinHandler(EventType *e)
+{
+	FormType *frm = FrmGetActiveForm();
+
+	switch (e->eType) {
+	case frmOpenEvent:
+		FitForm(frm, false);
+		TallLayout(frm, JoinGo, JoinBack, 0xFFFF, 0xFFFF, true);
+		LinkPopup(frm, JoinLinkTrig, JoinLinkList);
+		FrmDrawForm(frm);
+		LobbyDraw();
+		return true;
+	case nilEvent:
+		if (NetPhase() != NET_OFF)
+			LobbyIdle();
+		return true;
+	case popSelectEvent:
+		if (e->data.popSelect.listID == JoinLinkList &&
+		    e->data.popSelect.selection != gLinkSel) {
+			// Another link: look again from the start.
+			gLinkSel = (UInt8)e->data.popSelect.selection;
+			NetEnd();
+			ShowObj(frm, JoinGo, true);
+			LobbyDraw();
+		}
+		return false;
+	case ctlSelectEvent:
+		if (e->data.ctlSelect.controlID == JoinGo) {
+			if (!gNumLinks)
+				return true;
+			if (!NetJoin(gLinkKinds[gLinkSel], AppGame())) {
+				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
+				return true;
+			}
+			ShowObj(frm, JoinGo, false);
+			LobbyDraw();
+			return true;
+		}
+		if (e->data.ctlSelect.controlID == JoinBack) {
+			NetEnd();
+			Go(TitleForm);
+			return true;
+		}
+		return false;
+	case winDisplayChangedEvent:
+		FitWindow(frm);
+		TallLayout(frm, JoinGo, JoinBack, 0xFFFF, 0xFFFF, false);
+		FrmDrawForm(frm);
+		LobbyDraw();
 		return true;
 	default:
 		break;
@@ -516,7 +764,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 
 		// Closed, so the keyboard doesn't pop up on its own.
 		FitForm(frm, false);
-		TallLayout(frm, SetOK, SetCancel, 0xFFFF, true);
+		TallLayout(frm, SetOK, SetCancel, 0xFFFF, 0xFFFF, true);
 		ViewInputTrigger();
 		if (h) {
 			StrCopy((Char *)MemHandleLock(h), p->name);
@@ -581,7 +829,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 	}
 	case winDisplayChangedEvent:
 		FitWindow(frm);
-		TallLayout(frm, SetOK, SetCancel, 0xFFFF, false);
+		TallLayout(frm, SetOK, SetCancel, 0xFFFF, 0xFFFF, false);
 		FrmDrawForm(frm);
 		GsiSetLocation(75, (Coord)(146 + gBotShift));
 		return true;
@@ -594,6 +842,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 // ---- results ----
 
 static const GameState *gResults;
+static Boolean gResultsNet;
 
 static void SEC_FRONT Cell(const Char *s, Coord right, Coord y)
 {
@@ -620,7 +869,9 @@ static void SEC_FRONT ResultsDraw(void)
 		const Tank *k = &g->tanks[i];
 		UInt16 bases = 0, pills = 0;
 
-		if (i == 0)
+		if (gResultsNet && NetName((UInt8)i)[0])
+			StrCopy(buf, NetName((UInt8)i));
+		else if (i == 0 && !gResultsNet)
 			StrCopy(buf, p->name);
 		else
 			StrPrintF(buf, "Bot %d", i);
@@ -655,7 +906,7 @@ static Boolean SEC_FRONT ResultsHandler(EventType *e)
 	switch (e->eType) {
 	case frmOpenEvent:
 		FitForm(frm, false);
-		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, true);
+		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, 0xFFFF, true);
 		FrmDrawForm(frm);
 		ResultsDraw();
 		return true;
@@ -668,7 +919,7 @@ static Boolean SEC_FRONT ResultsHandler(EventType *e)
 		return false;
 	case winDisplayChangedEvent:
 		FitWindow(frm);
-		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, false);
+		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, 0xFFFF, false);
 		FrmDrawForm(frm);
 		ResultsDraw();
 		return true;
@@ -678,9 +929,10 @@ static Boolean SEC_FRONT ResultsHandler(EventType *e)
 	return false;
 }
 
-void SEC_FRONT FrontResults(const GameState *g)
+void SEC_FRONT FrontResults(const GameState *g, Boolean net)
 {
 	gResults = g;
+	gResultsNet = net;
 	FrmGotoForm(ResultsForm);
 }
 
@@ -692,6 +944,8 @@ FormEventHandlerType *SEC_FRONT FrontHandler(UInt16 formId)
 	case NewGameForm: return NewGameHandler;
 	case SettingsForm: return SettingsHandler;
 	case ResultsForm: return ResultsHandler;
+	case LobbyForm: return LobbyHandler;
+	case JoinForm: return JoinHandler;
 	}
 	return NULL;
 }

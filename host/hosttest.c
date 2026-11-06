@@ -1,5 +1,6 @@
 // Host test for the game rules.
 //   hosttest               built-in checks, using res/everard.map
+//   hosttest --lockstep [SEEDS [TICKS]]  lockstep games over the loopback
 //   hosttest FILE_OR_DIR.. also parses every .map file given (or found in
 //                          a directory) and prints one line for each
 #include <dirent.h>
@@ -15,6 +16,8 @@
 #include "../src/game/util.h"
 
 static int gFails;
+
+int lockstep_tests(const uint8_t *ev, uint32_t len, int seeds, uint32_t ticks);
 
 #define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL %s\n", msg); gFails++; } } while (0)
 
@@ -1284,11 +1287,20 @@ int main(int argc, char **argv)
 			printf(gFails ? "%d checks failed\n" : "ok\n", gFails);
 			return gFails != 0;
 		}
+		if (argc > 1 && strcmp(argv[1], "--lockstep") == 0) {
+			int seeds = argc > 2 ? atoi(argv[2]) : 1, ticks = argc > 3 ? atoi(argv[3]) : 6000;
+
+			gFails += lockstep_tests(ev, len, seeds, (uint32_t)ticks);
+			free(ev);
+			printf(gFails ? "%d checks failed\n" : "ok\n", gFails);
+			return gFails != 0;
+		}
 		scripts(ev, len);
 		winbolo_numbers(ev, len);
 		hidden_mines(ev, len);
 		bot_checks(ev, len);
 		save_resume(ev, len);
+		gFails += lockstep_tests(ev, len, 1, 3000);
 		fuzz(ev, len);
 		free(ev);
 	}

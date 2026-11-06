@@ -3,9 +3,11 @@
 #include "game/game.h"
 #include "game/script.h"
 #include "game/util.h"
+#include "netgame.h"
 
 static DeviceInfo gDev;
 static GameState gGame;
+static Boolean gNet;        // the game is a network game (netgame.h)
 static Boolean gQuit;
 static Boolean gFormOpen;
 static Boolean gDirty;
@@ -137,11 +139,21 @@ static void SEC_COLD ShowAbout(void)
 static void SEC_COLD SelfTest(void);
 #endif
 
+GameState *AppGame(void)
+{
+	return &gGame;
+}
+
 // Leaves a game in progress for the title, saving it unless it is over.
+// A network game isn't saved.
 static void SEC_COLD LeaveGame(void)
 {
 	if (gInGame && gForm == GameForm) {
-		if (!gGame.over && !SaveWrite(&gGame)) {
+		if (gNet) {
+			NetEnd();
+			gNet = false;
+			ViewMessage(NULL);
+		} else if (!gGame.over && !SaveWrite(&gGame)) {
 			// Stay in the game, it is untouched.
 			FrmAlert(SaveFailAlert);
 			return;
@@ -156,7 +168,9 @@ static Boolean SEC_COLD HandleMenu(UInt16 id)
 {
 	switch (id) {
 	case MainMenuAbout:
-		ShowAbout();
+		// An alert would hold up everyone in a network game.
+		if (!(gNet && gInGame))
+			ShowAbout();
 		return true;
 	case MainMenuTitle:
 		LeaveGame();
@@ -264,6 +278,21 @@ void SEC_COLD AppOpenMap(UInt16 index, const Char *name)
 	FrmGotoForm(GameForm);
 }
 
+// The lobby set up a network game in gGame: play it.
+void SEC_COLD AppNetGame(void)
+{
+#ifdef DEBUG
+	gStartTicks = TimGetTicks();
+	gTimedFull = false;
+#endif
+	gNet = true;
+	gInGame = true;
+	ViewMessage(NULL);
+	game_set_viewer(NetSlot());
+	gBuild = BUILD_NONE;
+	FrmGotoForm(GameForm);
+}
+
 void SEC_COLD AppResume(void)
 {
 #ifdef DEBUG
@@ -289,11 +318,19 @@ static Boolean GameHandler(EventType *e)
 	case frmOpenEvent:
 		FrmDrawForm(FrmGetActiveForm());
 		LOG(("start: form drawn %lu sys ticks after Start", TimGetTicks() - gStartTicks));
+		if (gNet)
+			NetPoll();
 		if (!ViewOpen(&gDev, &gGame)) {
+			if (gNet) {
+				NetEnd();
+				gNet = false;
+			}
 			gInGame = false;
 			FrmGotoForm(TitleForm);
 			return true;
 		}
+		if (gNet)
+			NetPoll();
 		LOG(("start: view open %lu sys ticks after Start", TimGetTicks() - gStartTicks));
 		TimingHeap("view open");
 		SoundOpen(gDev.ticksPerSecond);
@@ -840,6 +877,27 @@ static void Pace(UInt16 tps, UInt32 now, Boolean behind)
 	PaceSet(s, busy);
 }
 
+// Polls a network game and puts who it waits for over the game. When it
+// has stopped, says why and goes to the title, returning false.
+static Boolean SEC_COLD NetTurns(void)
+{
+	Char line[48];
+
+	if (NetPoll() != NET_STOPPED) {
+		ViewMessage(NetLine(&gGame, line) ? line : NULL);
+		return true;
+	}
+	StrCopy(line, NetWhy());
+	NetEnd();
+	gNet = false;
+	gFormOpen = false;
+	gInGame = false;
+	ViewMessage(NULL);
+	FrmCustomAlert(ViewAlert, line, "", "");
+	FrmGotoForm(TitleForm);
+	return false;
+}
+
 static void EventLoop(void)
 {
 	EventType e;
@@ -929,10 +987,16 @@ static void EventLoop(void)
 			gPaceTicks = gPaceFrames = 0;
 			gPaceBehind = false;
 		}
+		if (gNet && gInGame && gForm == GameForm && gFormOpen && !NetTurns())
+			run = false;
 		for (n = 0; run && n < (gStride + gStrideOdd) >> 1; n++) {
 			GameInput all[GAME_MAX_TANKS];
 			UInt8 vt = game_viewer_tank(&gGame);
-			GameInput in = ReadInputs();
+			GameInput in;
+
+			if (gNet && !NetReady())
+				break;
+			in = ReadInputs();
 
 			// Bot tanks ignore their entry; the rest have nobody at the keys.
 			MemSet(all, sizeof(all), 0);
@@ -940,11 +1004,14 @@ static void EventLoop(void)
 			MARK(LP_INPUT);
 #ifdef DEBUG
 			t1 = TimGetTicks();
-			game_tick(&gGame, all);
+#endif
+			if (gNet)
+				NetTick(&gGame, &in);
+			else
+				game_tick(&gGame, all);
+#ifdef DEBUG
 			MARK(LP_TICK);
 			TimingTick(TimGetTicks() - t1);
-#else
-			game_tick(&gGame, all);
 #endif
 #if defined(DEBUG) && !defined(QUIET_TICKS)
 			if (gGame.tick % 50 == 0) {
@@ -974,6 +1041,8 @@ static void EventLoop(void)
 #endif
 			acc -= tps;
 		}
+		if (gNet && gInGame && gForm == GameForm && gFormOpen)
+			NetTurns();
 		t1 = TimGetTicks();
 		gPaceTicks += n;
 		if (n)
@@ -1003,8 +1072,14 @@ static void EventLoop(void)
 		if (gInGame && gForm == GameForm && gGame.over) {
 			gInGame = false;
 			gFormOpen = false;
-			SaveDrop();
-			FrontResults(&gGame);
+			if (gNet) {
+				NetFinish(&gGame);
+				ViewMessage(NULL);
+			} else {
+				SaveDrop();
+			}
+			FrontResults(&gGame, gNet);
+			gNet = false;
 		}
 		MARK(LP_OTHER);
 		if (gForm == GameForm && gFormOpen)
@@ -1129,7 +1204,13 @@ static void SEC_COLD AppStart(void)
 
 static void SEC_COLD AppStop(void)
 {
-	// Leaving the app in the middle of a game saves it.
+	// Leaving the app in the middle of a game saves it, unless it's a
+	// network game.
+	if (gNet) {
+		gInGame = false;
+		gNet = false;
+	}
+	NetEnd();
 	if (gInGame && !gGame.over) {
 		gInGame = false;
 		if (!SaveWrite(&gGame))

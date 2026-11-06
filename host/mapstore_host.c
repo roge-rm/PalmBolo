@@ -2,8 +2,15 @@
 #include <string.h>
 #include "../src/game/mapstore.h"
 
-static uint8_t gMap[256][256];  // [y][x]
-static uint8_t gFlag[MS_PLANES][8192];  // bit x & 7 of [y * 32 + x / 8]
+// Banks of terrain, so the lockstep test can run several games side by
+// side; mapstore_host_bank picks the one the calls see.
+#define BANKS 5
+static uint8_t gMapBank[BANKS][256][256];       // [y][x]
+static uint8_t gFlagBank[BANKS][MS_PLANES][8192];   // bit x & 7 of [y * 32 + x / 8]
+static uint8_t (*gMap)[256] = gMapBank[0];
+static uint8_t (*gFlag)[8192] = gFlagBank[0];
+#define MAP_BYTES   (256 * 256)
+#define FLAG_BYTES  (MS_PLANES * 8192)
 
 const uint8_t *mapstore_rows[256];
 
@@ -13,16 +20,26 @@ int mapstore_open(uint8_t value)
 
 	for (y = 0; y < 256; y++)
 		mapstore_rows[y] = gMap[y];
-	memset(gMap, value, sizeof(gMap));
-	memset(gFlag, 0, sizeof(gFlag));
+	memset(gMap, value, MAP_BYTES);
+	memset(gFlag, 0, FLAG_BYTES);
 	return 0;
+}
+
+void mapstore_host_bank(int n)
+{
+	int y;
+
+	gMap = gMapBank[n];
+	gFlag = gFlagBank[n];
+	for (y = 0; y < 256; y++)
+		mapstore_rows[y] = gMap[y];
 }
 
 void mapstore_close(void) {}
 
 void mapstore_fill(uint8_t value)
 {
-	memset(gMap, value, sizeof(gMap));
+	memset(gMap, value, MAP_BYTES);
 }
 
 void mapstore_set(uint8_t x, uint8_t y, uint8_t terrain)
@@ -59,7 +76,7 @@ const uint8_t *mapstore_flags(uint8_t plane)
 
 void mapstore_clear_flags(void)
 {
-	memset(gFlag, 0, sizeof(gFlag));
+	memset(gFlag, 0, FLAG_BYTES);
 }
 
 // The saved game: a copy of the arrays.
@@ -69,8 +86,8 @@ static int gHaveSave;
 
 int mapstore_save(void)
 {
-	memcpy(gSaveMap, gMap, sizeof(gMap));
-	memcpy(gSaveFlag, gFlag, sizeof(gFlag));
+	memcpy(gSaveMap, gMap, MAP_BYTES);
+	memcpy(gSaveFlag, gFlag, FLAG_BYTES);
 	gHaveSave = 1;
 	return 0;
 }
@@ -79,8 +96,8 @@ int mapstore_resume(void)
 {
 	if (!gHaveSave)
 		return 1;
-	memcpy(gMap, gSaveMap, sizeof(gMap));
-	memcpy(gFlag, gSaveFlag, sizeof(gFlag));
+	memcpy(gMap, gSaveMap, MAP_BYTES);
+	memcpy(gFlag, gSaveFlag, FLAG_BYTES);
 	return 0;
 }
 
