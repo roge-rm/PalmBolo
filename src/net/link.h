@@ -14,6 +14,7 @@
 #define SEC_NET     __attribute__((section("net")))
 #else
 #define SEC_NET
+
 #endif
 
 #define LINK_FRAME_MAX  64      // IrLib's frame size
@@ -57,5 +58,12 @@ void SEC_NET loop_cut(uint8_t node, uint8_t cut);
 // Frames sent and lost so far.
 uint32_t SEC_NET loop_sent(void);
 uint32_t SEC_NET loop_lost(void);
+
+#ifndef __palmos__
+// Host tests: limit queued frames from each node, or reject its next sends.
+void loop_limit(uint16_t frames);
+void loop_reject(uint8_t node, uint16_t sends);
+uint32_t loop_rejected(void);
+#endif
 
 #endif

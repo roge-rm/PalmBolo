@@ -375,8 +375,34 @@ static Boolean HandleEvent(EventType *e)
 	UInt16 err;
 	FormType *frm;
 
+	// MenuHandleEvent can consume this before the application's switch.
+	if (e->eType == menuOpenEvent) {
+		gMenuOpen = true;
+		KeysClear();
+	}
+
+	// A menu drag-cancel can be consumed without posting menuEvent.
+	// Resume when the game window actually becomes active again.
+	if (e->eType == winEnterEvent && gForm == GameForm) {
+		frm = FrmGetFormPtr(GameForm);
+		if (frm && e->data.winEnter.enterWindow == FrmGetWindowHandle(frm) &&
+		    WinGetActiveWindow() == e->data.winEnter.enterWindow) {
+			gMenuOpen = false;
+			gDirty = gFull = true;
+			KeysClear();
+		}
+	}
+
 	if (e->eType == keyDownEvent) {
 		WChar c = e->data.keyDown.chr;
+
+		// Older menus do not send menuOpenEvent before drawing their bar.
+		if (gForm == GameForm && c == vchrMenu &&
+		    !(e->data.keyDown.modifiers & autoRepeatKeyMask)) {
+			gMenuOpen = !gMenuOpen;
+			gDirty = gFull = true;
+			KeysClear();
+		}
 
 		if (!(e->data.keyDown.modifiers & autoRepeatKeyMask))
 			LOG(("key chr %x code %x mods %x", (UInt16)c, e->data.keyDown.keyCode,
@@ -405,30 +431,31 @@ static Boolean HandleEvent(EventType *e)
 	// A tap on the map sends the builder there with the chosen action. The
 	// button row along the bottom chooses the action or moves the gunsight.
 	if (gForm == GameForm && !gMenuOpen && e->eType == penDownEvent &&
-	    e->screenY >= 0) {
-		UInt8 mx, my;
-		Int16 b = ViewTap(e->screenX, e->screenY, &mx, &my);
+	    e->screenX >= 0 && e->screenY >= 0) {
+		RectangleType bounds;
 
-		if (b < 0) {
-			gBuild = (UInt8)(gAction + 1);
-			gBuildX = mx;
-			gBuildY = my;
-			LOG(("build %u at %u,%u", (UInt16)gBuild, (UInt16)mx, (UInt16)my));
-		} else if (b == kTapPanel) {
-			if (PanelToggle())
-				gDirty = gFull = true;
-		} else if (b <= LGM_MINE) {
-			gAction = (UInt8)b;
-			ViewSetAction(gAction);
-		} else {
-			gSight = b == LGM_MINE + 1 ? -1 : 1;
+		FrmGetFormBounds(FrmGetActiveForm(), &bounds);
+		// The TX status bar sends positive coordinates outside the form.
+		if (e->screenX < bounds.extent.x && e->screenY < bounds.extent.y) {
+			UInt8 mx, my;
+			Int16 b = ViewTap(e->screenX, e->screenY, &mx, &my);
+
+			if (b < 0) {
+				gBuild = (UInt8)(gAction + 1);
+				gBuildX = mx;
+				gBuildY = my;
+				LOG(("build %u at %u,%u", (UInt16)gBuild, (UInt16)mx, (UInt16)my));
+			} else if (b == kTapPanel) {
+				if (PanelToggle())
+					gDirty = gFull = true;
+			} else if (b <= LGM_MINE) {
+				gAction = (UInt8)b;
+				ViewSetAction(gAction);
+			} else {
+				gSight = b == LGM_MINE + 1 ? -1 : 1;
+			}
+			return true;
 		}
-		return true;
-	}
-	// A tap or a chosen item closes the menu, and the screen is repainted.
-	if (gMenuOpen && (e->eType == penDownEvent || e->eType == menuEvent)) {
-		gMenuOpen = false;
-		gDirty = gFull = true;
 	}
 	MARK(LP_HANDLE);
 	if (SysHandleEvent(e)) {
@@ -438,6 +465,11 @@ static Boolean HandleEvent(EventType *e)
 	MARK(LP_SYS);
 	if (MenuHandleEvent(0, e, &err))
 		return true;
+	// A menu selection or a tap outside it returns control to the view.
+	if (gMenuOpen && (e->eType == penDownEvent || e->eType == menuEvent)) {
+		gMenuOpen = false;
+		gDirty = gFull = true;
+	}
 
 	switch (e->eType) {
 	case appStopEvent:
@@ -455,10 +487,6 @@ static Boolean HandleEvent(EventType *e)
 			gDirty = gFull = true;
 		}
 		return false;
-	case menuOpenEvent:
-		gMenuOpen = true;
-		KeysClear();
-		break;
 	case menuEvent:
 		return HandleMenu(e->data.menu.itemID);
 	case winEnterEvent:

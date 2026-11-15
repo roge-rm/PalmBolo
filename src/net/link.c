@@ -2,7 +2,7 @@
 // host, and on the Palm only for LOOPBACK_TEST.
 #include "link.h"
 #include "netutil.h"
-#if defined(__palmos__) && defined(DEBUG)
+#ifdef __palmos__
 #include "infrared.h"
 #endif
 
@@ -30,6 +30,14 @@ static uint32_t gNow, gSeq, gRng = 1, gSent, gLost;
 static uint32_t gLast[LINK_MAX_NODES][LINK_MAX_NODES];  // latest at sent from, to
 static uint16_t gMin, gMax, gLoss;
 static uint8_t gReorder, gOpen, gCut;
+#ifndef __palmos__
+static uint16_t gLimit, gReject[LINK_MAX_NODES];
+static uint32_t gRejected;
+
+void loop_limit(uint16_t frames) { gLimit = frames; }
+void loop_reject(uint8_t node, uint16_t sends) { gReject[node] = sends; }
+uint32_t loop_rejected(void) { return gRejected; }
+#endif
 static uint16_t gWaiting[LINK_MAX_NODES];  // frames queued to each node
 
 static uint32_t SEC_NET loop_rand(void)
@@ -52,6 +60,11 @@ void loop_reset(uint32_t seed, uint16_t minMs, uint16_t maxMs, uint16_t lossPm, 
 	gReorder = reorder;
 	gOpen = gCut = 0;
 	gSeq = gSent = gLost = 0;
+#ifndef __palmos__
+	gLimit = 0;
+	net_zero(gReject, sizeof(gReject));
+	gRejected = 0;
+#endif
 }
 
 void loop_time(uint32_t ms)
@@ -103,6 +116,24 @@ static int SEC_NET loop_put(uint8_t from, uint8_t to, const uint8_t *buf, uint8_
 
 static int SEC_NET loop_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 {
+#ifndef __palmos__
+	if (gReject[l->node]) {
+		gReject[l->node]--;
+		gRejected++;
+		return 1;
+	}
+	if (gLimit) {
+		uint16_t i, queued = 0;
+
+		for (i = 0; i < LOOP_QUEUE; i++)
+			if (gQ[i].used && gQ[i].from == l->node)
+				queued++;
+		if (queued >= gLimit) {
+			gRejected++;
+			return 1;
+		}
+	}
+#endif
 	gSent++;
 	if (((gCut >> l->node) | (gCut >> to)) & 1)
 		return 0;
@@ -156,7 +187,7 @@ int link_open(Link *l, uint8_t kind, uint8_t role)
 {
 	net_zero(l, sizeof(*l));
 	l->kind = kind;
-#if defined(__palmos__) && defined(DEBUG)
+#ifdef __palmos__
 	if (kind == LINK_IR)
 		return ir_open(l, role);
 #endif
@@ -185,7 +216,7 @@ int link_open(Link *l, uint8_t kind, uint8_t role)
 
 int link_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 {
-#if defined(__palmos__) && defined(DEBUG)
+#ifdef __palmos__
 	if (l->kind == LINK_IR && len && len <= LINK_FRAME_MAX)
 		return ir_send(l, to, buf, len);
 #endif
@@ -203,7 +234,7 @@ int link_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 
 uint8_t link_recv(Link *l, uint8_t *from, uint8_t *buf)
 {
-#if defined(__palmos__) && defined(DEBUG)
+#ifdef __palmos__
 	if (l->kind == LINK_IR)
 		return ir_recv(l, from, buf);
 #endif
@@ -220,7 +251,7 @@ uint8_t link_recv(Link *l, uint8_t *from, uint8_t *buf)
 
 void link_close(Link *l)
 {
-#if defined(__palmos__) && defined(DEBUG)
+#ifdef __palmos__
 	if (l->kind == LINK_IR)
 		ir_close();
 #endif

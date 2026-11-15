@@ -172,6 +172,8 @@ static int run(const Scenario *sc, const uint8_t *ev, uint32_t len, uint32_t see
 	char name[24];
 
 	loop_reset(seed * 2654435761u + 1, sc->minMs, sc->maxMs, sc->lossPm, sc->reorder);
+	if (strcmp(sc->name, "backpressure") == 0)
+		loop_limit(1);
 	memset(gDev, 0, sizeof(gDev));
 	for (i = 0; i < n; i++) {
 		Dev *d = &gDev[i];
@@ -434,6 +436,15 @@ static int run(const Scenario *sc, const uint8_t *ev, uint32_t len, uint32_t see
 			LCHECK(gDev[i].gone || ((gDev[i].waitSeen >> who) & 1), "%s seed %u: device %d waited for %02x",
 				sc->name, (unsigned)seed, i, gDev[i].waitSeen);
 	}
+	if (strcmp(sc->name, "backpressure") == 0) {
+		LCHECK(loop_rejected() > 100, "bounded queue did not reject enough frames: %u",
+			(unsigned)loop_rejected());
+		LCHECK(compared == ticks / (LS_TICKS * LS_SUM_TURNS),
+			"bounded queue lost checksum comparisons: %u", (unsigned)compared);
+		LCHECK(gDev[0].ls.humans == 3 && gDev[0].g.botMask == 4,
+			"bounded queue handed a player to a bot");
+		printf("lockstep backpressure: %u rejected sends recovered\n", (unsigned)loop_rejected());
+	}
 	LCHECK(desyncs == 0, "%s: %d desyncs", sc->name, desyncs);
 	if (sc->fetch)
 		printf("lockstep %-10s seed %u: map of %u bytes in %u ms\n", sc->name, (unsigned)seed,
@@ -445,6 +456,136 @@ static int run(const Scenario *sc, const uint8_t *ev, uint32_t len, uint32_t see
 		(unsigned)loop_sent(), (unsigned)loop_lost(), (unsigned)gDev[0].g.botMask,
 		(unsigned long)sums[0], (unsigned long)terr[0]);
 	return gLsFails != fails;
+}
+
+// Rejected frames leave the queued input, checksum and control state intact.
+static void backpressure_state(void)
+{
+	Lockstep *ls = &gDev[1].ls;
+	Link host, join;
+	uint8_t b[LINK_FRAME_MAX], from, map[122] = { 0 };
+	uint32_t sent, ack, last;
+
+	loop_reset(1, 0, 0, 0, 0);
+	link_open(&host, LINK_LOOP, LINK_ROLE_HOST);
+	link_open(&join, LINK_LOOP, LINK_ROLE_JOIN);
+	ls_join_open(ls, &join, "joiner");
+	ls->state = LS_PLAYING;
+	ls->slot = 1;
+	ls->start.delay = 2;
+	ls->start.dropSecs = 3;
+	ls->turn = 1;
+	ls->sentNext[0] = ls->ackNext[0] = 2;
+	ls->ringTurn[2] = 2;
+	ls->have[2] = 2;
+	ls->in[2][1].keys[0] = IN_FASTER;
+	ls->sumPos = 1;
+	ls->sumTick[0] = 4;
+	ls->sumVal[0] = 123;
+	ls->sumLeft[0] = 1;
+	loop_time(10);
+	loop_reject(1, 4);
+	ls_poll(ls, 10);
+	LCHECK(ls->sumLeft[0] == 1 && ls->sentNext[0] == 2 && ls->lastSend[0] == 0,
+		"rejected input consumed checksum, turn or send time");
+	loop_reject(1, 0);
+	ls_poll(ls, 11);
+	LCHECK(ls->sumLeft[0] == 0 && ls->sentNext[0] == 3 && ls->lastSend[0] == 11,
+		"accepted input did not commit send state");
+	LCHECK(link_recv(&host, &from, b) == 20 && b[0] == 5 && (b[6] & 0x80),
+		"recovered input/checksum frame missing");
+	// The retransmit timer also waits for acceptance.
+	sent = ls->sentNext[0]; ack = ls->ackTime[0]; last = ls->lastSend[0];
+	loop_reject(1, 4);
+	ls_poll(ls, 250);
+	LCHECK(ls->sentNext[0] == sent && ls->ackTime[0] == ack && ls->lastSend[0] == last,
+		"rejected retransmit changed send state");
+	// READY and MAPGET must survive a full queue independently.
+	ls->gotStart = 2;
+	ls->fetch = LS_MAP_GOT;
+	ls->mapHave = 61;
+	loop_reject(1, 8);
+	ls_poll(ls, 251);
+	LCHECK(ls->gotStart == 2 && ls->mapAsked == 0 && ls->mapAskAt == 0,
+		"rejected READY or map acknowledgement consumed");
+	loop_reject(1, 0);
+	ls_poll(ls, 252);
+	LCHECK(ls->gotStart == 1 && ls->mapAsked == 61 && ls->mapAskAt == 252,
+		"READY or map acknowledgement did not recover");
+	ls_leave(ls);
+	loop_reject(1, 4);
+	ls_poll(ls, 253);
+	LCHECK(ls->stopLeft == 3, "rejected LEAVE consumed stop attempt");
+	loop_reject(1, 0);
+	ls_poll(ls, 254);
+	LCHECK(ls->stopLeft == 2, "accepted LEAVE did not consume stop attempt");
+	// Host turns and partial STOP rounds obey the same acceptance rule.
+	loop_reset(1, 0, 0, 0, 0);
+	link_open(&host, LINK_LOOP, LINK_ROLE_HOST);
+	link_open(&join, LINK_LOOP, LINK_ROLE_JOIN);
+	ls_host_open(ls, &host, "host");
+	ls->state = LS_PLAYING;
+	ls->node[1] = 1;
+	ls->seated = ls->humans = 3;
+	ls->start.dropSecs = 3;
+	ls->turn = 1;
+	ls->bundled = 3;
+	ls->ackNext[1] = ls->sentNext[1] = 2;
+	ls->ringTurn[2] = 2;
+	ls->done[2] = 1;
+	ls->act[2] = 3;
+	ls->sumPos = 1;
+	ls->sumTick[0] = 4;
+	ls->sumVal[0] = 123;
+	ls->sumLeft[1] = 1;
+	loop_reject(0, 4);
+	ls_poll(ls, 10);
+	LCHECK(ls->sumLeft[1] == 1 && ls->sentNext[1] == 2 && ls->lastSend[1] == 0,
+		"rejected host turn consumed checksum, turn or send time");
+	loop_reject(0, 0);
+	ls_poll(ls, 11);
+	LCHECK(ls->sumLeft[1] == 0 && ls->sentNext[1] == 3 && ls->lastSend[1] == 11,
+		"accepted host turn did not commit send state");
+	LCHECK(link_recv(&join, &from, b) == 20 && b[0] == 6 && (b[5] & 0x80),
+		"recovered host turn/checksum frame missing");
+	ls->node[2] = 2;
+	ls->seated = 7;
+	ls_leave(ls);
+	loop_limit(1);
+	ls_poll(ls, 12);
+	LCHECK(ls->stopLeft == 3 && ls->stopPending == 4, "partial STOP round was consumed");
+	link_recv(&join, &from, b);
+	ls_poll(ls, 13);
+	LCHECK(ls->stopLeft == 2 && ls->stopPending == 6, "partial STOP round did not recover");
+	// Ping timers move only when queued.
+	ls_host_open(ls, &host, "host");
+	ls->seated = 3;
+	ls->node[1] = 1;
+	ls->heard[1] = 1000;
+	loop_reject(0, 8);
+	ls_poll(ls, 1000);
+	LCHECK(ls->pingAt[1] == 0, "rejected ping consumed timer");
+	// A failed map retransmit keeps its position and retry timer.
+	loop_reset(1, 0, 0, 0, 0);
+	ls_host_open(ls, &host, "host");
+	ls->state = LS_STARTING;
+	ls->node[1] = 1;
+	ls->seated = 3;
+	ls->ready = 1;
+	ls->fetching = 2;
+	ls->start.mapLen = sizeof(map);
+	ls->mapGet = map_get;
+	ls->mapCtx = map;
+	ls->mapSent[1] = 61;
+	loop_reject(0, 8);
+	ls_poll(ls, 2500);
+	LCHECK(ls->mapSent[1] == 61 && ls->mapAckAt[1] == 0 && ls->lastSend[1] == 0,
+		"rejected map retransmit consumed position or timer");
+	loop_reject(0, 0);
+	ls_poll(ls, 2501);
+	LCHECK(ls->mapSent[1] == sizeof(map) && ls->mapAckAt[1] == 2501,
+		"map retransmit did not recover");
+	printf("lockstep backpressure: rejected inputs, turns, checksums, retries, READY, maps, pings and stops checked\n");
 }
 
 //                name          devs bots min  max loss reord delay gone    leave   bad      slow    teams hidden
@@ -465,6 +606,8 @@ static const Scenario kScenarios[] = {
 	{ "pause-udp",  3, 0,  0, 150, 100, 1, 0, -1, 0,  -1, 0,  -1, 0,     -1, 0,  0, 0,  0, 0, 0, 0,  1, 1000, 5000, 0 },
 	{ "timed",      3, 1,  5,  60,  50, 1, 0, -1, 0,  -1, 0,  -1, 0,      2, 24, 0, 0,  0, 0, 0, 0, -1, 0,    0,    1 },
 	{ "timed-ir",   2, 2,  5,  40,   0, 0, 0, -1, 0,  -1, 0,  -1, 0,     -1, 0,  1, 0,  0, 0, 0, 0, -1, 0,    0,    1 },
+	{ "backpressure",2, 1,  5,  40,   0, 0, 0, -1, 0,  -1, 0,  -1, 0,     -1, 0,  0, 0,  1, 0, 0, 0, -1, 0, 0, 0 },
+
 };
 
 #define BIG_MAP 20000
@@ -479,6 +622,8 @@ int lockstep_tests(const uint8_t *ev, uint32_t len, int seeds, uint32_t ticks)
 	uint32_t k, r;
 
 	gLsFails = 0;
+	if (!getenv("LOCK_ONLY") || strcmp(getenv("LOCK_ONLY"), "backpressure") == 0)
+		backpressure_state();
 	{
 		// Inputs come back as they went.
 		LCHECK(ls_delay_for(0) == 2 && ls_delay_for(100) == 3 && ls_delay_for(2000) == LS_MAX_DELAY,

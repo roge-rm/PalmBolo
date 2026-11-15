@@ -11,7 +11,7 @@
 UInt32 SEC_NET NetNowMs(void);
 
 // Links this Palm can use, in the order shown. The loopback is only in
-// LOOPBACK_TEST builds; experimental IrLib is in DEBUG builds.
+// LOOPBACK_TEST builds; IrLib supports two Palms.
 #define kNetMaxLinks    4
 UInt8 SEC_NET NetLinks(UInt8 *kinds, const Char **names);
 

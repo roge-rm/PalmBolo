@@ -106,6 +106,7 @@ typedef struct Lockstep {
 	char mapName[LS_MAPNAME];
 	uint8_t lobbyBots, lobbyTeams;
 	uint8_t inLobby;        // joiner: SEATS came, so the host has seated us
+	uint8_t setupNext[LS_SLOTS]; // next frame in a partial roster or START batch
 	uint8_t rosterNew;      // host: slots to send the roster to now
 	uint32_t rosterAt;      // host: when the roster last went to everyone
 
@@ -142,6 +143,7 @@ typedef struct Lockstep {
 	uint32_t pingAt[LS_SLOTS];
 	uint16_t rtt[LS_SLOTS];         // round trip, smoothed, ms; 0 until measured
 	uint8_t sumLeft[LS_SLOTS];      // frames still to carry our latest checksum
+	uint8_t stopPending;            // peers still owed the current STOP round
 	uint8_t stopLeft;               // STOP frames still to send
 
 	// Checksums: our last few, and one from each other side waiting for ours.

@@ -2,7 +2,7 @@
 
 PalmBolo is Bolo for Palm OS. Drive a tank around an island, capture bases and pillboxes, and send your builder out to build roads, walls, boats and pillboxes of your own.
 
-The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.9.0 is single-player against up to 7 bots. The network game underneath is in, and play over infrared, Bluetooth and Wi-Fi comes next.
+The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. The current source is 0.10.0, with two-player infrared games and up to 7 bots in single-player. It is unreleased. The latest published version is 0.9.0, with single-player games. Bluetooth and Wi-Fi play come later.
 
 Let me know what works and what doesn't, or open an issue here.
 
@@ -42,7 +42,9 @@ Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
 ## Playing
 
-New game picks a map, game type, hidden mines, time limit, bots, bot level and teams. Leaving a game saves it and Resume carries on.
+New game picks a map, game type, hidden mines, time limit, bots, bot level and teams. Leaving a single-player game saves it and Resume carries on.
+
+For two-player infrared, point the Palms at each other. On one Palm choose New game, pick the map and settings, then Host. On the other choose Join game, select Infrared and tap Join. Tap Start on the host once both players are in the lobby. The joiner receives the map if needed and keeps it for later. If the joiner leaves, a bot takes over. If the host leaves, the game ends. Multiplayer games cannot be resumed.
 
 Controls:
 - Up and down: faster and slower

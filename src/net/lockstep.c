@@ -190,6 +190,7 @@ void ls_host_lobby(Lockstep *ls, const char *mapName, uint8_t bots, uint8_t team
 	ls->mapGet = get;
 	ls->mapCtx = ctx;
 	ls->rosterNew = 0xFE;
+	net_zero(ls->setupNext, sizeof(ls->setupNext));
 }
 
 void ls_join_open(Lockstep *ls, const Link *link, const char *name)
@@ -260,6 +261,7 @@ void ls_host_start(Lockstep *ls, const LsStart *start)
 		ls->start.botLevel = BOT_NORMAL;
 	ls->ready = 1;
 	ls->state = LS_STARTING;
+	net_zero(ls->setupNext, sizeof(ls->setupNext));
 	for (i = 0; i < LS_SLOTS; i++) {
 		ls->heard[i] = ls->now;
 		ls->lastSend[i] = ls->now - 100000UL;     // START goes out at the next poll
@@ -313,6 +315,7 @@ static void SEC_NET stop(Lockstep *ls, uint8_t why)
 	ls->state = LS_STOPPED;
 	ls->stop = why;
 	ls->stopLeft = STOP_SENDS;
+	ls->stopPending = ls->host ? (uint8_t)(ls->seated & ~1) : 1;
 }
 
 static void SEC_NET desync(Lockstep *ls, uint8_t slot, uint32_t tick, uint32_t local, uint32_t remote)
@@ -480,22 +483,24 @@ static uint8_t SEC_NET slot_of(const Lockstep *ls, uint8_t node)
 	return 255;
 }
 
-static void SEC_NET send(Lockstep *ls, uint8_t peer, const uint8_t *b, uint8_t len)
+static uint8_t SEC_NET send(Lockstep *ls, uint8_t peer, const uint8_t *b, uint8_t len)
 {
 	uint8_t node = ls->host ? ls->node[peer] : LINK_HOST;
 
-	link_send(&ls->link, node, b, len);
+	if (link_send(&ls->link, node, b, len) != 0)
+		return 0;
 	ls->lastSend[peer] = ls->now;
+	return 1;
 }
 
-static void SEC_NET send_stop(Lockstep *ls, uint8_t node, uint8_t why)
+static uint8_t SEC_NET send_stop(Lockstep *ls, uint8_t node, uint8_t why)
 {
 	uint8_t b[15];
 
 	net_zero(b, sizeof(b));
 	b[0] = MSG_STOP;
 	b[1] = why;
-	link_send(&ls->link, node, b, sizeof(b));
+	return link_send(&ls->link, node, b, sizeof(b)) == 0;
 }
 
 static void SEC_NET got_hello(Lockstep *ls, uint8_t node, const uint8_t *b, uint8_t len)
@@ -528,6 +533,7 @@ static void SEC_NET got_hello(Lockstep *ls, uint8_t node, const uint8_t *b, uint
 	ls->pingAt[s] = ls->now;
 	ls->rtt[s] = 0;
 	ls->rosterNew = 0xFE;
+	net_zero(ls->setupNext, sizeof(ls->setupNext));
 }
 
 // Host, in the lobby: a joiner who left or went silent loses their seat
@@ -547,6 +553,7 @@ static void SEC_NET unseat(Lockstep *ls, uint8_t s)
 	ls->rtt[LS_SLOTS - 1] = 0;
 	ls->seated = (uint8_t)((1 << (bits(ls->seated) - 1)) - 1);
 	ls->rosterNew = 0xFE;
+	net_zero(ls->setupNext, sizeof(ls->setupNext));
 }
 
 static void SEC_NET got_start(Lockstep *ls, const uint8_t *b, uint8_t len)
@@ -875,10 +882,12 @@ static void SEC_NET got_mapget(Lockstep *ls, uint8_t s, const uint8_t *b, uint8_
 	if (ls->mapSent[s] < ls->mapAck[s])
 		ls->mapSent[s] = ls->mapAck[s];
 	if (len >= 4 && b[3] && ls->now - ls->mapFast[s] >= (ls->rtt[s] > 60 ? ls->rtt[s] : 60)) {
-		ls->mapFast[s] = ls->now;
 		for (off = have; off < ls->mapSent[s]; off = (uint16_t)(off + LS_CHUNK))
-			if (!((b[3] >> (off / LS_CHUNK % LS_MAP_WIN)) & 1))
-				send_chunk(ls, s, off);
+			if (!((b[3] >> (off / LS_CHUNK % LS_MAP_WIN)) & 1)) {
+				if (!send_chunk(ls, s, off))
+					break;
+				ls->mapFast[s] = ls->now;
+			}
 	}
 }
 
@@ -924,8 +933,8 @@ static void SEC_NET receive(Lockstep *ls)
 				// Their tank is a bot's now: they hear only that, so they
 				// stop rather than wait on turns that never come.
 				if (b[0] != MSG_STOP && b[0] != MSG_LEAVE && ls->now - ls->lastSend[s] >= 200) {
-					send_stop(ls, node, LS_STOP_DROPPED);
-					ls->lastSend[s] = ls->now;
+					if (send_stop(ls, node, LS_STOP_DROPPED))
+						ls->lastSend[s] = ls->now;
 				}
 				continue;
 			}
@@ -1019,9 +1028,8 @@ static uint8_t SEC_NET due(Lockstep *ls, uint8_t peer, uint32_t avail, uint32_t 
 {
 	uint8_t fresh;
 
-	if (ls->sentNext[peer] < ls->ackNext[peer])
-		ls->sentNext[peer] = ls->ackNext[peer];
-	fresh = ls->sentNext[peer] < avail;
+	*first = ls->sentNext[peer] < ls->ackNext[peer] ? ls->ackNext[peer] : ls->sentNext[peer];
+	fresh = *first < avail;
 	if (!ls->link.reliable) {
 		*first = ls->ackNext[peer];
 		return (uint8_t)(fresh || (ls->ackNext[peer] < avail && ls->now - ls->lastSend[peer] >= LOSSY_MS) ||
@@ -1029,11 +1037,9 @@ static uint8_t SEC_NET due(Lockstep *ls, uint8_t peer, uint32_t avail, uint32_t 
 	}
 	if (ls->ackNext[peer] < ls->sentNext[peer] &&
 	    ls->now - ls->ackTime[peer] >= resend_ms(ls, peer)) {
-		ls->sentNext[peer] = ls->ackNext[peer];
-		ls->ackTime[peer] = ls->now;
+		*first = ls->ackNext[peer];
 		fresh = 1;
 	}
-	*first = ls->sentNext[peer];
 	return (uint8_t)(fresh || ls->sumLeft[peer] || ls->now - ls->lastSend[peer] >= KEEPALIVE_MS);
 }
 
@@ -1061,7 +1067,6 @@ static uint8_t SEC_NET put_sum(Lockstep *ls, uint8_t peer, uint8_t *b, uint8_t *
 	net_put32(b + *pos, ls->sumTick[last]);
 	net_put32(b + *pos + 4, ls->sumVal[last]);
 	*pos = (uint8_t)(*pos + SUM_LEN);
-	ls->sumLeft[peer]--;
 	return F_SUM;
 }
 
@@ -1085,13 +1090,16 @@ static void SEC_NET send_inputs(Lockstep *ls)
 	net_put16(b + 2, (uint16_t)next_needed(ls, 0));
 	net_put16(b + 4, (uint16_t)first);
 	b[6] = (uint8_t)(n | put_sum(ls, 0, b, &pos));
-	if (first + n > ls->sentNext[0])
-		ls->sentNext[0] = first + n;
-	// Lossy: what didn't fit waits for LOSSY_MS or something new, rather
-	// than going every poll to someone who isn't answering.
+	if (!send(ls, 0, b, pos))
+		return;
+	if (b[6] & F_SUM)
+		ls->sumLeft[0]--;
+	if (ls->link.reliable && first < ls->sentNext[0])
+		ls->ackTime[0] = ls->now;
+	ls->sentNext[0] = first + n;
+	// Lossy: what didn't fit waits for LOSSY_MS or something new.
 	if (!ls->link.reliable)
 		ls->sentNext[0] = end;
-	send(ls, 0, b, pos);
 }
 
 // Host: turns put together that joiner s doesn't have.
@@ -1128,11 +1136,15 @@ static void SEC_NET send_turns(Lockstep *ls, uint8_t s)
 	net_put16(b + 1, (uint16_t)next_needed(ls, s));
 	net_put16(b + 3, (uint16_t)first);
 	b[5] = (uint8_t)(n | (wait ? F_WAIT : 0) | put_sum(ls, s, b, &pos));
-	if (first + n > ls->sentNext[s])
-		ls->sentNext[s] = first + n;
+	if (!send(ls, s, b, pos))
+		return;
+	if (b[5] & F_SUM)
+		ls->sumLeft[s]--;
+	if (ls->link.reliable && first < ls->sentNext[s])
+		ls->ackTime[s] = ls->now;
+	ls->sentNext[s] = first + n;
 	if (!ls->link.reliable)
 		ls->sentNext[s] = ls->bundled;
-	send(ls, s, b, pos);
 }
 
 // Host: START and every name, to a joiner not ready yet.
@@ -1160,18 +1172,25 @@ static void SEC_NET send_start(Lockstep *ls, uint8_t s)
 		b[22 + i] = st->allies[i];
 	for (j = 0; j < LS_MAPNAME - 1 && ls->mapName[j]; j++)
 		b[START_LEN + j] = (uint8_t)ls->mapName[j];
-	send(ls, s, b, (uint8_t)(START_LEN + j));
-	for (i = 0; i < st->numPlayers; i++) {
+	if (!ls->setupNext[s]) {
+		if (!send(ls, s, b, (uint8_t)(START_LEN + j)))
+			return;
+		ls->setupNext[s] = 1;
+	}
+	for (i = (uint8_t)(ls->setupNext[s] - 1); i < st->numPlayers; i++) {
 		b[0] = MSG_NAME;
 		b[1] = (uint8_t)(i | NAME_START);
 		for (j = 0; j < LS_NAME - 1 && st->names[i][j]; j++)
 			b[2 + j] = (uint8_t)st->names[i][j];
-		send(ls, s, b, (uint8_t)(2 + j));
+		if (!send(ls, s, b, (uint8_t)(2 + j)))
+			return;
+		ls->setupNext[s] = (uint8_t)(i + 2);
 	}
+	ls->setupNext[s] = 0;
 }
 
 // Host: the lobby to joiner s, their slot, who is seated and their names.
-static void SEC_NET send_roster(Lockstep *ls, uint8_t s)
+static uint8_t SEC_NET send_roster(Lockstep *ls, uint8_t s)
 {
 	uint8_t b[LINK_FRAME_MAX], i, j;
 
@@ -1182,36 +1201,47 @@ static void SEC_NET send_roster(Lockstep *ls, uint8_t s)
 	b[4] = ls->lobbyTeams;
 	for (j = 0; j < LS_MAPNAME - 1 && ls->mapName[j]; j++)
 		b[5 + j] = (uint8_t)ls->mapName[j];
-	send(ls, s, b, (uint8_t)(5 + j));
-	for (i = 0; i < LS_SLOTS; i++) {
+	if (!ls->setupNext[s]) {
+		if (!send(ls, s, b, (uint8_t)(5 + j)))
+			return 0;
+		ls->setupNext[s] = 1;
+	}
+	for (i = (uint8_t)(ls->setupNext[s] - 1); i < LS_SLOTS; i++) {
 		if (!((ls->seated >> i) & 1) || i == s)
 			continue;
 		b[0] = MSG_NAME;
 		b[1] = i;
 		for (j = 0; j < LS_NAME - 1 && ls->start.names[i][j]; j++)
 			b[2 + j] = (uint8_t)ls->start.names[i][j];
-		send(ls, s, b, (uint8_t)(2 + j));
+		if (!send(ls, s, b, (uint8_t)(2 + j)))
+			return 0;
+		ls->setupNext[s] = (uint8_t)(i + 2);
 	}
+	ls->setupNext[s] = 0;
+	return 1;
 }
 
 // Host: map chunks to joiner s, up to LS_MAP_WIN ahead of what they have.
 // When what they have doesn't move for a while, from there again.
 static void SEC_NET send_map(Lockstep *ls, uint8_t s)
 {
-	uint8_t n;
-	uint16_t len = ls->start.mapLen;
+	uint8_t n, retry;
+	uint16_t off = ls->mapSent[s], len = ls->start.mapLen;
 	uint32_t wait = ls->link.reliable ? 2000 : (uint32_t)resend_ms(ls, s) + 100;
 
-	if (ls->mapSent[s] > ls->mapAck[s] && ls->now - ls->mapAckAt[s] >= wait) {
-		ls->mapSent[s] = ls->mapAck[s];
-		ls->mapAckAt[s] = ls->now;
-	}
-	while (ls->mapSent[s] < len &&
-	    (uint32_t)ls->mapSent[s] < (uint32_t)ls->mapAck[s] + LS_MAP_WIN * LS_CHUNK) {
-		n = send_chunk(ls, s, ls->mapSent[s]);
+	retry = off > ls->mapAck[s] && ls->now - ls->mapAckAt[s] >= wait;
+	if (retry)
+		off = ls->mapAck[s];
+	while (off < len && (uint32_t)off < (uint32_t)ls->mapAck[s] + LS_MAP_WIN * LS_CHUNK) {
+		n = send_chunk(ls, s, off);
 		if (!n)
 			break;
-		ls->mapSent[s] = (uint16_t)(ls->mapSent[s] + n);
+		if (retry) {
+			ls->mapAckAt[s] = ls->now;
+			retry = 0;
+		}
+		off = (uint16_t)(off + n);
+		ls->mapSent[s] = off;
 	}
 }
 
@@ -1227,17 +1257,22 @@ static void SEC_NET send_stops(Lockstep *ls)
 	net_put32(b + 11, ls->badRemote);
 	if (ls->host) {
 		for (i = 1; i < LS_SLOTS; i++)
-			if ((ls->seated >> i) & 1)
-				send(ls, i, b, sizeof(b));
+			if (((ls->stopPending >> i) & 1) && send(ls, i, b, sizeof(b)))
+				ls->stopPending = (uint8_t)(ls->stopPending & ~(1 << i));
 	} else if (ls->stop == LS_STOP_NONE) {
 		// We left: LEAVE rather than STOP.
 		b[0] = MSG_LEAVE;
 		b[1] = ls->slot;
-		send(ls, 0, b, 2);
+		if (send(ls, 0, b, 2))
+			ls->stopPending = 0;
 	} else {
-		send(ls, 0, b, sizeof(b));
+		if (send(ls, 0, b, sizeof(b)))
+			ls->stopPending = 0;
 	}
-	ls->stopLeft--;
+	if (!ls->stopPending) {
+		ls->stopLeft--;
+		ls->stopPending = ls->host ? (uint8_t)(ls->seated & ~1) : 1;
+	}
 }
 
 static void SEC_NET send_ping(Lockstep *ls, uint8_t peer)
@@ -1246,10 +1281,10 @@ static void SEC_NET send_ping(Lockstep *ls, uint8_t peer)
 
 	if (ls->now - ls->pingAt[peer] < PING_MS)
 		return;
-	ls->pingAt[peer] = ls->now;
 	b[0] = MSG_PING;
 	net_put32(b + 1, ls->now);
-	send(ls, peer, b, 5);
+	if (send(ls, peer, b, 5))
+		ls->pingAt[peer] = ls->now;
 }
 
 void ls_poll(Lockstep *ls, uint32_t now)
@@ -1277,8 +1312,8 @@ void ls_poll(Lockstep *ls, uint32_t now)
 			}
 			for (i = 1; i < LS_SLOTS; i++)
 				if (((ls->seated & ls->rosterNew) >> i) & 1)
-					send_roster(ls, i);
-			ls->rosterNew = 0;
+					if (send_roster(ls, i))
+						ls->rosterNew = (uint8_t)(ls->rosterNew & ~(1 << i));
 		}
 		if (ls->state == LS_STARTING) {
 			// A joiner that never answers START plays as a bot.
@@ -1302,7 +1337,7 @@ void ls_poll(Lockstep *ls, uint32_t now)
 			if (ls->state == LS_STARTING && !((ls->ready >> i) & 1)) {
 				if ((ls->fetching >> i) & 1)
 					send_map(ls, i);
-				else if (now - ls->lastSend[i] >= resend_ms(ls, i))
+				else if (ls->setupNext[i] || now - ls->lastSend[i] >= resend_ms(ls, i))
 					send_start(ls, i);
 			} else if (ls->state == LS_PLAYING && ((ls->humans >> i) & 1)) {
 				send_turns(ls, i);
@@ -1341,10 +1376,11 @@ void ls_poll(Lockstep *ls, uint32_t now)
 				b[0] = MSG_MAPGET;
 				net_put16(b + 1, have);
 				b[3] = ls->fetch == LS_MAP_GETTING ? ls->mapEarly : 0;
-				send(ls, 0, b, 4);
-				ls->mapAsked = have;
-				ls->mapAskAt = now;
-				ls->mapNack = 0;
+				if (send(ls, 0, b, 4)) {
+					ls->mapAsked = have;
+					ls->mapAskAt = now;
+					ls->mapNack = 0;
+				}
 			}
 		}
 		if (ls->state == LS_PLAYING) {
@@ -1358,8 +1394,8 @@ void ls_poll(Lockstep *ls, uint32_t now)
 
 				b[0] = MSG_READY;
 				b[1] = ls->slot;
-				send(ls, 0, b, 2);
-				ls->gotStart = 1;
+				if (send(ls, 0, b, 2))
+					ls->gotStart = 1;
 			}
 			send_inputs(ls);
 		}

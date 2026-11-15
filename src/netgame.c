@@ -48,12 +48,10 @@ UInt8 NetLinks(UInt8 *kinds, const Char **names)
 	kinds[n] = LINK_LOOP;
 	names[n++] = "Loopback";
 #endif
-#ifdef DEBUG
 	if (ir_available()) {
 		kinds[n] = LINK_IR;
 		names[n++] = "Infrared";
 	}
-#endif
 	(void)kinds;
 	(void)names;
 	return n;
@@ -378,7 +376,6 @@ UInt8 NetPoll(void)
 
 void NetService(void)
 {
-#ifdef DEBUG
 	if (!NetServiceActive())
 		return;
 	ir_service();
@@ -386,16 +383,11 @@ void NetService(void)
 	// inspect a game whose tick is still running.
 	if (gPhase == NET_PLAY && !gInPoll && !gInTick)
 		NetPoll();
-#endif
 }
 
 Boolean NetServiceActive(void)
 {
-#ifdef DEBUG
 	return gKind == LINK_IR && gPhase != NET_OFF && gPhase != NET_STOPPED;
-#else
-	return false;
-#endif
 }
 
 UInt8 NetPhase(void)
@@ -500,14 +492,23 @@ void NetStatus(Char *buf)
 
 void NetEnd(void)
 {
-	UInt8 i;
+	UInt32 until;
 
 	if (gPhase == NET_OFF)
 		return;
-	// LEAVE or STOP goes out a few times.
+#if defined(DEBUG) && defined(IR_TEST_CLOSE_QUEUE)
+	if (gKind == LINK_IR)
+		ir_test_close_queue();
+#endif
+	// Keep offering control frames as the transport makes queue space.
 	ls_leave(&gLs);
-	for (i = 0; i < 4 && gLs.stopLeft; i++)
+	until = NetNowMs() + 2000;
+	do {
 		ls_poll(&gLs, NetNowMs());
+		if (!gLs.stopLeft)
+			break;
+		SysTaskDelay(1);
+	} while ((Int32)(NetNowMs() - until) < 0);
 	link_close(&gLink);
 #ifdef LOOPBACK_TEST
 	if (gKind == LINK_LOOP) {

@@ -15,6 +15,8 @@ A link carries frames of up to 64 bytes between nodes. The host is node 0; each 
 - IrLAP and L2CAP links are reliable: frames arrive in order and none are lost. Each turn and each input is sent once, and sent again from what the other side has only when nothing new has been acknowledged for twice the round trip plus 40 ms (200 ms before a round trip is measured).
 - A UDP link can lose, repeat and reorder frames. Then every frame carries all the turns or inputs the other side hasn't acknowledged, and one goes out when there's something new or 60 ms after the last.
 
+Send positions, checksum copies and retry timers advance when the link accepts a frame. A full send queue leaves them pending. Roster and START batches resume at the first name still waiting, and each STOP round waits for every peer to accept its frame.
+
 Turn numbers in frames tell the receiver where things go, so the same messages work on both kinds of link. The loopback link (`LINK_LOOP`) can act as either.
 
 ## Turns and delay
@@ -63,7 +65,7 @@ A joiner that has no map with START's checksum and length asks for it (`ls_join_
 - The joiner checks the CRC of the whole map against START; a mismatch, or no room to keep it, stops it with reason 6, and the host hands its tank to a bot. With the map in, MAPGET says so and the host sends START again until READY.
 - On the Palm the bytes go into the database `PalmBoloMapIn` as they come, and the whole map becomes a `Map ` database, as a HotSync'd map, named after the map, with " 2", " 3" and so on after it if that name is taken. Maps are found by checksum, so two maps with the same name don't get mixed up.
 
-Over the loopback with 5 to 40 ms of delay a 20 KB map takes about 2.5 s; with 15% of frames lost and reordering about 10 s. Infrared at 9600 bps is slower, about 1 KB a second.
+Over the loopback with 5 to 40 ms of delay a 20 KB map takes about 2.5 s; with 15% of frames lost and reordering about 10 s. Infrared throughput depends on the negotiated baud rate and packet size.
 
 ## Messages
 
@@ -108,4 +110,5 @@ A turn of 8 players with keys changing every tick and builder orders is 58 bytes
 - `make host-test` runs each lockstep game once for 3000 ticks; `build/hosttest --lockstep SEEDS TICKS` runs them for more seeds and longer. The games: IR-like and UDP-like links (delay, loss, repeats, reordering), a slow device, a player who goes silent, one who leaves, and a desync made on a joiner and on the host. Every Palm still playing must end with the same checksum and the same state byte for byte, and the desyncs must be caught at the first checksum after them. Every joiner must see the lobby as the host has it before the start.
 - The map games (map-ir, map-udp with 15% loss and reordering, lobby-drop) start with joiners that lack the map: a 20000 byte map (Everard Island with bytes after it) must arrive byte for byte and the games end the same. map-udp has a player leave the lobby, lobby-drop one go silent in it, and in map-ir and lobby-drop someone tries to join after the start and must be turned away.
 - pause and pause-udp stop polling a joiner for 4 or 5 s, as with a menu open, and then go on: it must stop with reason 7 and its tank be a bot's. timed and timed-ir play a one minute game: every Palm must end on the same tick with the same state, no bots for players, the host with reason 8 and joiners quietly, each within 2.5 s of its end.
+- `LOCK_ONLY=backpressure build/hosttest --lockstep 1 1024` checks rejected send state and runs a reliable game with one queued frame per sender. The lobby, START names and 20000 byte map must arrive, and both peers must finish with matching states and checksum comparisons. `LOCK_ONLY=name` selects any other scenario.
 - On the Palm, a debug build with `EXTRA=-DLOOPBACK_TEST` adds a "Loopback" link to Host and Join game, with a second copy of the game in the app at the other end on a map store of its own. When you host it joins and gets the map (it has only Everard Island); when you join it hosts on the map last picked, starts 5 s after you join, and you get the map from it. Add `-DLOOPBACK_DROP_AT=N` (the second copy goes silent after N seconds) or `-DLOOPBACK_DESYNC_AT=N` (its state changes at tick N). `tools/m9-net.replay` hosts and then joins a game on a TX in Frond.

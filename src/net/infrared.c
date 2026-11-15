@@ -14,33 +14,57 @@ typedef struct IrFrame {
 } IrFrame;
 
 static UInt16 gRef;
-static Boolean gOpen, gBound, gBusy, gEver;
+static Boolean gOpen, gBound, gBusy, gControlBusy, gEver;
 static Boolean gServicing;
 static UInt8 gRole, gState, gEvent, gQueryDone, gQueryStatus, gPick;
 static UInt32 gRetry;
 #ifdef DEBUG
 static UInt32 gDiagAt;
-static UInt16 gSent, gReceived, gFailed;
+static UInt16 gSent, gReceived, gFailed, gFragments, gMaxWire, gMaxFrame;
 #endif
 static IrConnect gCon;
-static IrPacket gPacket;
+static IrPacket gPacket, gControlPacket;
+static UInt8 gControlWire[1];
 static UInt8 gWire[LINK_FRAME_MAX], gTxOffset;
+static UInt16 gWireLen;
 static IrFrame gTx[IR_QUEUE], gRx[IR_QUEUE];
 static UInt8 gTxHead, gTxCount, gRxHead, gRxCount, gRxOffset;
+#if defined(DEBUG) && defined(IR_TEST_CLOSE_QUEUE)
+static UInt32 gCloseHoldUntil;
+static Boolean gCloseHolding;
+static UInt16 gCloseRejected;
+
+void ir_test_close_queue(void)
+{
+	if (!gOpen || gState != IR_UP)
+		return;
+	// Unknown payloads are ignored by lockstep. Hold a full queue for 100 ms.
+	while (gTxCount < IR_QUEUE) {
+		IrFrame *f = &gTx[(gTxHead + gTxCount) % IR_QUEUE];
+		f->len = 2;
+		f->data[0] = 255;
+		f->data[1] = 0;
+		gTxCount++;
+	}
+	gCloseRejected = 0;
+	gCloseHoldUntil = TimGetTicks() + (SysTicksPerSecond() + 9) / 10;
+	gCloseHolding = true;
+}
+#endif
 static IrDeviceAddr gDevice;
 static IrIasObject gObject;
 static IrIasAttribute gAttr;
 static UInt8 gValue[5];
 static IrIasQuery gQuery;
 static UInt8 gResult[32];
-#ifdef IR_TRACE
+#if defined(DEBUG) && defined(IR_TRACE)
 typedef struct IrTrace {
-	UInt32 packet;
+	UInt32 packet, buffer;
 	UInt16 len;
 	UInt8 event, status, first, second;
 } IrTrace;
 static IrTrace gTrace[32];
-static UInt8 gTraceHead, gTraceCount;
+static UInt8 gTraceHead, gTraceCount, gSendNotices;
 
 // Callbacks only record memory; polling writes the database log.
 static void SEC_NET Trace(UInt8 event, UInt8 status, IrPacket *packet,
@@ -50,7 +74,8 @@ static void SEC_NET Trace(UInt8 event, UInt8 status, IrPacket *packet,
 	t->event = event;
 	t->status = status;
 	t->packet = (UInt32)packet;
-	t->len = len;
+	t->buffer = packet ? (UInt32)packet->buff : 0;
+	t->len = packet && event == LEVENT_PACKET_HANDLED ? packet->len : len;
 	t->first = len && data ? data[0] : 0;
 	t->second = len > 1 && data ? data[1] : 0;
 	gTraceHead = (gTraceHead + 1) % 32;
@@ -97,11 +122,16 @@ static void IrQueryBody(IrStatus status)
 static void IrCallbackBody(IrCallBackParms *p)
 {
 	UInt16 i;
-#ifdef IR_TRACE
-	Trace(p->event, p->status,
-		p->event == LEVENT_PACKET_HANDLED ? p->packet : 0,
-		p->event == LEVENT_DATA_IND ? p->rxLen : 0,
-		p->event == LEVENT_DATA_IND ? p->rxBuff : 0);
+	if (!p)
+		return;
+#if defined(DEBUG) && defined(IR_TRACE)
+	if (p->event != LEVENT_LM_SEND_IND || gSendNotices < 4)
+		Trace(p->event, p->status,
+			p->event == LEVENT_PACKET_HANDLED ? p->packet : 0,
+			p->event == LEVENT_DATA_IND ? p->rxLen : 0,
+			p->event == LEVENT_DATA_IND ? p->rxBuff : 0);
+	if (p->event == LEVENT_LM_SEND_IND && gSendNotices < 4)
+		gSendNotices++;
 #endif
 	if (!gOpen)
 		return;
@@ -128,14 +158,19 @@ static void IrCallbackBody(IrCallBackParms *p)
 		gEvent = 4;
 		break;
 	case LEVENT_PACKET_HANDLED:
-		if (p->packet == &gPacket)
+		if (!p->packet)
+			break;
+		// OS 5 may copy IrPacket; its application buffer and length stay intact.
+		if (gBusy && p->packet->buff == gWire && p->packet->len == gWireLen)
 			gBusy = false;
+		if (gControlBusy && p->packet->buff == gControlWire && !p->packet->len)
+			gControlBusy = false;
 		break;
 	case LEVENT_LM_DISCON_IND:
 	case LEVENT_LAP_DISCON_IND:
 		gBusy = false;
 		gTxCount = gRxCount = gTxOffset = gRxOffset = 0;
-		gState = gEver ? IR_DEAD : IR_LISTEN;
+		gState = gEver || gControlBusy ? IR_DEAD : IR_LISTEN;
 		gEvent = 0;
 		break;
 	case LEVENT_DATA_IND:
@@ -189,6 +224,9 @@ void ir_close(void)
 		IrWaitForEvent(gRef, 1);
 	}
 	gOpen = false;
+#if defined(DEBUG) && defined(IR_TEST_CLOSE_QUEUE)
+	LOG(("ir: close queue rejected %u controls", gCloseRejected));
+#endif
 	IrDisconnectIrLap(gRef);
 	if (gBound)
 		IrUnbind(gRef, &gCon);
@@ -209,10 +247,17 @@ int ir_open(Link *l, uint8_t role)
 		return 1;
 	}
 	gOpen = true;
-	gEver = gBusy = false;
+	gEver = gBusy = gControlBusy = false;
+#if defined(DEBUG) && defined(IR_TEST_CLOSE_QUEUE)
+	gCloseHolding = false;
+	gCloseRejected = 0;
+#endif
+#if defined(DEBUG) && defined(IR_TRACE)
+	gTraceHead = gTraceCount = gSendNotices = 0;
+#endif
 #ifdef DEBUG
 	gDiagAt = TimGetTicks();
-	gSent = gReceived = gFailed = 0;
+	gSent = gReceived = gFailed = gFragments = gMaxWire = gMaxFrame = 0;
 #endif
 	gRole = role;
 	gState = IR_LISTEN;
@@ -221,6 +266,9 @@ int ir_open(Link *l, uint8_t role)
 	gTxHead = gTxCount = gRxHead = gRxCount = gTxOffset = gRxOffset = 0;
 	MemSet(&gCon, sizeof(gCon), 0);
 	MemSet(&gPacket, sizeof(gPacket), 0);
+	MemSet(&gControlPacket, sizeof(gControlPacket), 0);
+	// Connect storage stays separate from data until the library returns it.
+	gControlPacket.buff = gControlWire;
 	if (IrBind(gRef, &gCon, IrCallback) != IR_STATUS_SUCCESS) {
 		ir_close();
 		return 1;
@@ -273,16 +321,16 @@ static void SEC_NET IrPump(void)
 #ifdef DEBUG
 	if (TimGetTicks() - gDiagAt >= SysTicksPerSecond()) {
 		gDiagAt = TimGetTicks();
-#ifdef IR_TRACE
+#if defined(DEBUG) && defined(IR_TRACE)
 		while (gTraceCount) {
 			IrTrace t = gTrace[(gTraceHead + 32 - gTraceCount) % 32];
 			gTraceCount--;
-			LOG(("irtrace: event %u status %u packet %lx len %u data %x %x",
-				t.event, t.status, t.packet, t.len, t.first, t.second));
+			LOG(("irtrace: event %u status %u packet %lx buffer %lx len %u data %x %x",
+				t.event, t.status, t.packet, t.buffer, t.len, t.first, t.second));
 		}
 #endif
-		LOG(("ir: state %u busy %u tx %u rx %u sent %u received %u failed %u",
-			gState, gBusy, gTxCount, gRxCount, gSent, gReceived, gFailed));
+		LOG(("ir: state %u busy %u tx %u rx %u sent %u received %u failed %u fragments %u maxwire %u maxframe %u",
+			gState, gBusy, gTxCount, gRxCount, gSent, gReceived, gFailed, gFragments, gMaxWire, gMaxFrame));
 	}
 #endif
 	if (ev)
@@ -304,12 +352,17 @@ static void SEC_NET IrPump(void)
 			IrDisconnectIrLap(gRef);
 	} else if (ev == 3 || ev == 4) {
 		if (ev == 3) {
-			gPacket.buff = gWire;
-			gPacket.len = 0;
-			gBusy = true;
-			status = IrConnectRsp(gRef, &gCon, &gPacket, 0);
+			if (gControlBusy) {
+				gState = IR_DEAD;
+				return;
+			}
+			gControlBusy = true;
+			status = IrConnectRsp(gRef, &gCon, &gControlPacket, 0);
+#if defined(DEBUG) && defined(IR_TRACE)
+			Trace(129, status, &gControlPacket, 0, NULL);
+#endif
 			if (status != IR_STATUS_PENDING) {
-				gBusy = false;
+				gControlBusy = false;
 				IrDisconnectIrLap(gRef);
 				return;
 			}
@@ -325,12 +378,18 @@ static void SEC_NET IrPump(void)
 		    IrIAS_GetType(&gQuery) == IAS_ATTRIB_INTEGER &&
 		    IrIAS_GetIntLsap(&gQuery) <= IR_MAX_LSAP) {
 			gCon.rLsap = IrIAS_GetIntLsap(&gQuery);
-			gPacket.buff = gWire;
-			gPacket.len = 0;
-			gBusy = true;
+			if (gControlBusy) {
+				gState = IR_DEAD;
+				return;
+			}
+			gControlBusy = true;
 			gState = IR_CONNECT;
-			if (IrConnectReq(gRef, &gCon, &gPacket, 0) != IR_STATUS_PENDING) {
-				gBusy = false;
+			status = IrConnectReq(gRef, &gCon, &gControlPacket, 0);
+#if defined(DEBUG) && defined(IR_TRACE)
+			Trace(130, status, &gControlPacket, 0, NULL);
+#endif
+			if (status != IR_STATUS_PENDING) {
+				gControlBusy = false;
 				IrDisconnectIrLap(gRef);
 			}
 		} else {
@@ -344,12 +403,26 @@ static void SEC_NET IrPump(void)
 		if (IrDiscoverReq(gRef, &gCon) != IR_STATUS_PENDING)
 			gState = IR_LISTEN;
 	}
+#if defined(DEBUG) && defined(IR_TEST_CLOSE_QUEUE)
+	if (gCloseHolding) {
+		if ((Int32)(TimGetTicks() - gCloseHoldUntil) < 0)
+			return;
+		gCloseHolding = false;
+	}
+#endif
 	if (gState == IR_UP && !gBusy && gTxCount) {
 		IrFrame *f = &gTx[gTxHead];
 		UInt16 max = IrMaxTxSize(gRef, &gCon), n = 0;
 		UInt8 offset = gTxOffset;
 		if (max > sizeof(gWire))
 			max = sizeof(gWire);
+#if defined(DEBUG) && defined(IR_TEST_MAX_PACKET)
+#if IR_TEST_MAX_PACKET < 1 || IR_TEST_MAX_PACKET > 64
+#error IR_TEST_MAX_PACKET must be between 1 and 64
+#endif
+		if (max > IR_TEST_MAX_PACKET)
+			max = IR_TEST_MAX_PACKET;
+#endif
 		if (!max) {
 			gState = IR_DEAD;
 			return;
@@ -360,9 +433,10 @@ static void SEC_NET IrPump(void)
 		}
 		gPacket.buff = gWire;
 		gPacket.len = n;
+		gWireLen = n;
 		gBusy = true;
 		status = IrDataReq(gRef, &gCon, &gPacket);
-#ifdef IR_TRACE
+#if defined(DEBUG) && defined(IR_TRACE)
 		Trace(128, status, &gPacket, n, gWire);
 #endif
 		if (status != IR_STATUS_PENDING) {
@@ -376,6 +450,10 @@ static void SEC_NET IrPump(void)
 
 #ifdef DEBUG
 		gSent++;
+		if (offset <= f->len)
+			gFragments++;
+		if (n > gMaxWire)
+			gMaxWire = n;
 #endif
 		gTxOffset = offset;
 		if (offset > f->len) {
@@ -389,12 +467,21 @@ static void SEC_NET IrPump(void)
 int ir_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 {
 	IrFrame *f;
-	if (!gOpen || to != (l->node ^ 1) || gState != IR_UP || gTxCount == IR_QUEUE)
+	if (!gOpen || to != (l->node ^ 1) || gState != IR_UP || gTxCount == IR_QUEUE) {
+#if defined(DEBUG) && defined(IR_TEST_CLOSE_QUEUE)
+		if (gTxCount == IR_QUEUE)
+			gCloseRejected++;
+#endif
 		return 1;
+	}
 	f = &gTx[(gTxHead + gTxCount) % IR_QUEUE];
 	f->len = len;
 	MemMove(f->data, buf, len);
 	gTxCount++;
+#ifdef DEBUG
+	if (len > gMaxFrame)
+		gMaxFrame = len;
+#endif
 	return 0;
 }
 
