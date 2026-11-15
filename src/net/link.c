@@ -2,6 +2,9 @@
 // host, and on the Palm only for LOOPBACK_TEST.
 #include "link.h"
 #include "netutil.h"
+#if defined(__palmos__) && defined(DEBUG)
+#include "infrared.h"
+#endif
 
 #if !defined(__palmos__) || defined(LOOPBACK_TEST)
 #define HAVE_LOOP 1
@@ -9,7 +12,7 @@
 
 #ifdef HAVE_LOOP
 
-#ifdef __palmos__
+#if defined(__palmos__) && defined(DEBUG)
 #define LOOP_QUEUE  32
 #else
 #define LOOP_QUEUE  512
@@ -153,6 +156,10 @@ int link_open(Link *l, uint8_t kind, uint8_t role)
 {
 	net_zero(l, sizeof(*l));
 	l->kind = kind;
+#if defined(__palmos__) && defined(DEBUG)
+	if (kind == LINK_IR)
+		return ir_open(l, role);
+#endif
 #ifdef HAVE_LOOP
 	if (kind == LINK_LOOP) {
 		if (role == LINK_ROLE_HOST) {
@@ -178,6 +185,10 @@ int link_open(Link *l, uint8_t kind, uint8_t role)
 
 int link_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 {
+#if defined(__palmos__) && defined(DEBUG)
+	if (l->kind == LINK_IR && len && len <= LINK_FRAME_MAX)
+		return ir_send(l, to, buf, len);
+#endif
 	if (len == 0 || len > LINK_FRAME_MAX || to >= LINK_MAX_NODES)
 		return 1;
 #ifdef HAVE_LOOP
@@ -192,6 +203,10 @@ int link_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 
 uint8_t link_recv(Link *l, uint8_t *from, uint8_t *buf)
 {
+#if defined(__palmos__) && defined(DEBUG)
+	if (l->kind == LINK_IR)
+		return ir_recv(l, from, buf);
+#endif
 #ifdef HAVE_LOOP
 	if (l->kind == LINK_LOOP)
 		return loop_recv(l, from, buf);
@@ -205,6 +220,10 @@ uint8_t link_recv(Link *l, uint8_t *from, uint8_t *buf)
 
 void link_close(Link *l)
 {
+#if defined(__palmos__) && defined(DEBUG)
+	if (l->kind == LINK_IR)
+		ir_close();
+#endif
 #ifdef HAVE_LOOP
 	if (l->kind == LINK_LOOP)
 		gOpen = (uint8_t)(gOpen & ~(1 << l->node));

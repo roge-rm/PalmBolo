@@ -19,6 +19,7 @@
 #include "palmbolo.h"
 #include "game/game.h"
 #include "game/mapstore.h"
+#include "netgame.h"
 #include "art.h"
 
 #define kOv         128         // overview window size in pixels
@@ -332,6 +333,8 @@ static void SEC_UI OvRowDirect(Coord y, Coord x0, Coord x1)
 
 		*p = (UInt8)((*p & ~(ones << sh)) |
 			((PixelIndex(BlockClass(x, y), x, y) ? ones : 0) << sh));
+		if (!(x & 7))
+			NetService();
 	}
 }
 
@@ -357,8 +360,11 @@ static void SEC_UI OvBuild(void)
 	old = WinSetDrawWindow(gOv);
 	gFore = 0xFFFF;
 	for (y = 0; y < kOv; y++) {
-		for (x = 0; x < kOv; x++)
+		for (x = 0; x < kOv; x++) {
 			cls[x] = BlockClass(x, y);
+			if (!(x & 7))
+				NetService();
+		}
 		for (x = 0; x < kOv; x += run) {
 			IndexedColorType c = PixelIndex(cls[x], x, y);
 
@@ -377,6 +383,7 @@ static void SEC_UI OvBuild(void)
 			} else {
 				WinEraseLine(x, y, x + run - 1, y);
 			}
+			NetService();
 		}
 	}
 	OvItems();

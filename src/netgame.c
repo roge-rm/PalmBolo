@@ -4,6 +4,7 @@
 #include "palmbolo.h"
 #include "netgame.h"
 #include "net/lockstep.h"
+#include "net/infrared.h"
 #include "game/game.h"
 #include "game/util.h"
 #ifdef LOOPBACK_TEST
@@ -14,6 +15,7 @@ static Lockstep gLs;
 static Link gLink;
 static GameState *gG;
 static UInt8 gPhase, gKind;
+static Boolean gInPoll, gInTick;
 static UInt16 gIndex;               // host: the map's place in the list
 static Char gMap[kMapNameLen];      // the map's name, a joiner's once it has it
 static UInt32 gSum, gLen;           // host: the map's CRC and length
@@ -46,8 +48,12 @@ UInt8 NetLinks(UInt8 *kinds, const Char **names)
 	kinds[n] = LINK_LOOP;
 	names[n++] = "Loopback";
 #endif
-	// Infrared, Bluetooth and network links go here, each only when the
-	// Palm has it.
+#ifdef DEBUG
+	if (ir_available()) {
+		kinds[n] = LINK_IR;
+		names[n++] = "Infrared";
+	}
+#endif
 	(void)kinds;
 	(void)names;
 	return n;
@@ -330,6 +336,9 @@ UInt8 NetPoll(void)
 
 	if (gPhase == NET_OFF || gPhase == NET_STOPPED)
 		return gPhase;
+	if (gInPoll)
+		return gPhase;
+	gInPoll = true;
 	now = NetNowMs();
 #ifdef LOOPBACK_TEST
 	if (gKind == LINK_LOOP)
@@ -363,7 +372,30 @@ UInt8 NetPoll(void)
 		LOG(("net: waiting for %x", (UInt16)gWaitLogged));
 	}
 #endif
+	gInPoll = false;
 	return gPhase;
+}
+
+void NetService(void)
+{
+#ifdef DEBUG
+	if (!NetServiceActive())
+		return;
+	ir_service();
+	// Polling may initialise the joiner's game. Never recurse into it or
+	// inspect a game whose tick is still running.
+	if (gPhase == NET_PLAY && !gInPoll && !gInTick)
+		NetPoll();
+#endif
+}
+
+Boolean NetServiceActive(void)
+{
+#ifdef DEBUG
+	return gKind == LINK_IR && gPhase != NET_OFF && gPhase != NET_STOPPED;
+#else
+	return false;
+#endif
 }
 
 UInt8 NetPhase(void)
@@ -520,7 +552,10 @@ Boolean NetReady(void)
 
 void NetTick(GameState *g, const GameInput *in)
 {
+	gInTick = true;
 	ls_tick(&gLs, g, in);
+	gInTick = false;
+	NetService();
 }
 
 Boolean NetLine(const GameState *g, Char *line)

@@ -45,6 +45,9 @@ GAMESRCS += script
 endif
 # Network play, segment net.
 NETSRCS  = lockstep link
+ifdef DEBUG
+NETSRCS += infrared
+endif
 OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS) $(NETSRCS)))
 
 all: build/$(PRC)

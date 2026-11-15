@@ -1094,6 +1094,7 @@ static void EventLoop(void)
 			gFull = gDirty = false;
 			MARK(LP_OTHER);
 			ViewFrame(full, n != 0);
+			NetService();
 			MARK(LP_DEBUG);
 			// Full repaints are rare and slow, so they stay out of the pacing.
 			if (full) {

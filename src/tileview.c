@@ -23,6 +23,7 @@
 #include "resource.h"
 #include "game/game.h"
 #include "game/mapstore.h"
+#include "netgame.h"
 #include "game/util.h"
 #include "tilepick.h"
 #include "art.h"
@@ -286,7 +287,9 @@ static Boolean SEC_COLD LoadSheets(void)
 	FreeSheets();
 	LookupColours();
 	gSheet = LoadSheet(ArtTerrainBmp, ART_TERRAIN_CELLS, false, &gSheetB);
+	NetService();
 	gSprites = LoadSheet(ArtSpriteBmp, ART_SPRITE_CELLS, false, &gSprB);
+	NetService();
 	// The mask is 1-bit where the OS can blit that onto the screen's depth,
 	// else in the screen's format.
 	if (ScreenNewWin() && ScreenDepth() > 1) {
@@ -851,11 +854,15 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 	gFastClip = gClipB && gSheetB.bits && gSheetB.depth == 2 && gDstB->depth == 2 && gTs == 8 &&
 		!(r->topLeft.x & 3) && !(r->extent.x & 3);
 	for (ty = ty0; ty <= ty1; ty++) {
+		NetService();
 		up = mapstore_row((uint8_t)(ty - 1));
 		row = mapstore_row((uint8_t)ty);
 		down = mapstore_row((uint8_t)(ty + 1));
-		for (tx = tx0; tx <= tx1; tx++)
+		for (tx = tx0; tx <= tx1; tx++) {
 			DrawTerrain(up, row, down, tx, ty);
+			if (!(tx & 3))
+				NetService();
+		}
 	}
 	for (i = 0; i < m->numStarts; i++)
 		if ((UInt8)(m->starts[i].y - y0) <= h && (UInt8)(m->starts[i].x - x0) <= w)
@@ -1057,6 +1064,7 @@ static void SEC_UI DrawAt(UInt16 cell, uint16_t wx, uint16_t wy)
 {
 	Coord x = WorldX(wx) - gTs / 2, y = WorldY(wy) - gTs / 2;
 
+	NetService();
 	if (x <= -gTs || x >= gW || y <= -gTs || y >= gH)
 		return;
 	DrawSprite(cell, x, y);
@@ -1444,14 +1452,18 @@ static void SEC_UI DirtyFlush(void)
 		Int16 ty = gDy + (Int16)r;
 		const uint8_t *up, *row, *down;
 
+		NetService();
 		if (!bits)
 			continue;
 		up = mapstore_row((uint8_t)(ty - 1));
 		row = mapstore_row((uint8_t)ty);
 		down = mapstore_row((uint8_t)(ty + 1));
-		for (c = 0; bits; c++, bits >>= 1)
+		for (c = 0; bits; c++, bits >>= 1) {
 			if (bits & 1)
 				DrawTerrain(up, row, down, gDx + (Int16)c, ty);
+			if (!(c & 3))
+				NetService();
+		}
 	}
 	for (i = 0; i < m->numStarts; i++)
 		if (Marked(m->starts[i].x, m->starts[i].y))

@@ -5,6 +5,7 @@
 // terrain come the mine flag planes, 8 KB a record.
 #include "palmbolo.h"
 #include "game/mapstore.h"
+#include "netgame.h"
 
 #define kCacheName      "PalmBoloMapCache"
 #define kCacheType      'Cach'
@@ -83,6 +84,7 @@ static DmOpenRef OpenCacheAs(const Char *name, UInt32 type)
 			return NULL;
 		}
 		DmReleaseRecord(db, index, true);
+		NetService();
 	}
 	return db;
 }
@@ -141,10 +143,18 @@ int mapstore_open(uint8_t value)
 
 void mapstore_fill(uint8_t value)
 {
-	UInt16 i;
+	UInt16 i, off;
 
+	if (!NetServiceActive()) {
+		for (i = 0; i < kRecords; i++)
+			DmSet(gRec[i], 0, kRecordBytes, value);
+		return;
+	}
 	for (i = 0; i < kRecords; i++)
-		DmSet(gRec[i], 0, kRecordBytes, value);
+		for (off = 0; off < kRecordBytes; off += 256) {
+			DmSet(gRec[i], off, 256, value);
+			NetService();
+		}
 }
 
 void mapstore_set(uint8_t x, uint8_t y, uint8_t terrain)
@@ -158,6 +168,7 @@ void mapstore_set_bytes(uint8_t x, uint8_t y, uint16_t n, const uint8_t *src)
 	if (x + n > 256)
 		n = 256 - x;
 	DmWrite(gRec[y / kRowsPerRecord], (UInt32)(y % kRowsPerRecord) * 256 + x, src, n);
+	NetService();
 }
 
 uint8_t mapstore_flag(uint8_t plane, uint8_t x, uint8_t y)
@@ -186,10 +197,18 @@ const uint8_t *mapstore_flags(uint8_t plane)
 
 void mapstore_clear_flags(void)
 {
-	UInt16 i;
+	UInt16 i, off;
 
+	if (!NetServiceActive()) {
+		for (i = 0; i < MS_PLANES; i++)
+			DmSet(gRec[kRecords + i], 0, kFlagBytes, 0);
+		return;
+	}
 	for (i = 0; i < MS_PLANES; i++)
-		DmSet(gRec[kRecords + i], 0, kFlagBytes, 0);
+		for (off = 0; off < kFlagBytes; off += 256) {
+			DmSet(gRec[kRecords + i], off, 256, 0);
+			NetService();
+		}
 }
 
 // The saved game keeps the cache database itself: it is renamed and given

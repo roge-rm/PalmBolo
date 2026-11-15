@@ -20,8 +20,8 @@
 #define LINK_HOST       0       // the host's node
 #define LINK_MAX_NODES  8
 
-// Kinds of link. Only the loopback exists so far.
-enum { LINK_LOOP = 0 };
+// Kinds of link.
+enum { LINK_LOOP = 0, LINK_IR = 1 };
 enum { LINK_ROLE_HOST = 0, LINK_ROLE_JOIN = 1 };
 
 // An open link end. reliable is 1 when frames arrive in order and none are
