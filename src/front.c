@@ -2,12 +2,15 @@
 // the player's settings and the results, and the saved game. All in a code
 // segment of their own, and the title picture is loaded only while the
 // title is on screen.
+#define ALLOW_ACCESS_TO_INTERNALS_OF_CONTROLS
 #include "palmbolo.h"
 #include "resource.h"
+#include "frontlayout.h"
 #include "art.h"
 #include "game/game.h"
 #include "game/mapstore.h"
 #include "game/util.h"
+#include "game/mapthumb.h"
 #include "netgame.h"
 
 #define kSaveDbName     "PalmBoloSavedGame"
@@ -180,59 +183,223 @@ static void * SEC_FRONT Obj(FormType *frm, UInt16 id)
 	return FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, id));
 }
 
+enum { UI_INK, UI_PAPER, UI_DARK, UI_LIGHT, UI_GOLD, UI_OLIVE, UI_EDGE, UI_COUNT };
+static const UInt8 gUiRGB[UI_COUNT][3] = {
+	{37,52,38}, {229,227,201}, {51,75,54}, {246,242,217},
+	{237,200,94}, {96,114,73}, {139,150,112}
+};
+static const UInt8 gUiGrey[UI_COUNT] = {0,255,0,255,170,85,85};
+static IndexedColorType gUi[UI_COUNT];
+static Boolean gUiPushed;
+static Boolean gTitleHaveSave;
+
+static void SEC_FRONT UiColour(UIColorTableEntries entry, UInt16 colour)
+{
+	RGBColorType rgb;
+
+	if (!gUiPushed) return;
+	rgb.index = 0;
+	if (ScreenDepth() >= 8) {
+		rgb.r = gUiRGB[colour][0]; rgb.g = gUiRGB[colour][1]; rgb.b = gUiRGB[colour][2];
+	} else rgb.r = rgb.g = rgb.b = gUiGrey[colour];
+	UIColorSetTableEntry(entry, &rgb);
+}
+
+static void SEC_FRONT UiBegin(void)
+{
+	UInt16 i;
+	Boolean colour = ScreenDepth() >= 8;
+
+	for (i = 0; i < UI_COUNT; i++)
+		gUi[i] = colour ? ScreenIndex(gUiRGB[i][0], gUiRGB[i][1], gUiRGB[i][2]) :
+			ScreenIndex(gUiGrey[i], gUiGrey[i], gUiGrey[i]);
+	gUiPushed = false;
+	if (!ScreenNewWin()) return;
+	WinPushDrawState();
+	gUiPushed = UIColorPushTable() == errNone;
+	UiColour(UIFormFill, UI_PAPER);
+	UiColour(UIObjectFill, UI_PAPER);
+	UiColour(UIObjectFrame, UI_INK);
+	UiColour(UIObjectForeground, UI_INK);
+	UiColour(UIObjectSelectedFill, UI_DARK);
+	UiColour(UIObjectSelectedForeground, UI_LIGHT);
+	UiColour(UIFieldBackground, UI_PAPER);
+	UiColour(UIFieldText, UI_INK);
+	UiColour(UIFieldTextLines, UI_EDGE);
+	UiColour(UIFieldCaret, UI_INK);
+	WinSetForeColor(gUi[UI_INK]);
+	WinSetTextColor(gUi[UI_INK]);
+	WinSetBackColor(gUi[UI_PAPER]);
+}
+
+static void SEC_FRONT UiEnd(void)
+{
+	if (gUiPushed) UIColorPopTable();
+	gUiPushed = false;
+	if (ScreenNewWin()) WinPopDrawState();
+}
+
+static void SEC_FRONT Fill(Coord x, Coord y, Coord w, Coord h, UInt16 colour)
+{
+	RectangleType r;
+	if (w <= 0 || h <= 0) return;
+	RctSetRectangle(&r, x, y, w, h);
+	if (ScreenNewWin()) {
+		WinSetForeColor(gUi[colour]);
+		WinDrawRectangle(&r, 0);
+	} else if (gUi[colour]) WinDrawRectangle(&r, 0);
+	else WinEraseRectangle(&r, 0);
+}
+
+static void SEC_FRONT Text(const Char *s, Coord x, Coord y, Coord width,
+	UInt16 fg, UInt16 bg)
+{
+	UInt16 len = StrLen(s);
+	Int16 w = width;
+	Boolean fit;
+	FntCharsInWidth(s, &w, &len, &fit);
+	if (ScreenNewWin()) {
+		WinSetTextColor(gUi[fg]);
+		WinSetBackColor(gUi[bg]);
+		WinDrawChars(s, len, x, y);
+	} else if (!gUi[fg]) WinDrawInvertedChars(s, len, x, y);
+	else WinDrawChars(s, len, x, y);
+}
+
+static void SEC_FRONT Section(const Char *s, Coord y)
+{
+	Fill(6, y, 148, 12, UI_OLIVE);
+	Text(s, 10, y + 1, 140, UI_LIGHT, UI_OLIVE);
+}
+
+static void SEC_FRONT TankMark(Coord x, Coord y)
+{
+	Fill(x, y + 2, 2, 8, UI_INK);
+	Fill(x + 8, y + 2, 2, 8, UI_INK);
+	Fill(x + 2, y + 3, 6, 6, UI_OLIVE);
+	Fill(x + 4, y, 2, 6, UI_INK);
+}
+
+static UInt16 SEC_FRONT Primary(FormType *frm)
+{
+	switch (FrmGetFormId(frm)) {
+	case TitleForm: return gTitleHaveSave ? TitleResume : TitleNew;
+	case MapListForm: return MapNext;
+	case NewGameForm: return NgStart;
+	case LobbyForm: return LobStart;
+	case JoinForm: return JoinGo;
+	case SettingsForm: return SetOK;
+	case ResultsForm: return ResultsOK;
+	}
+	return 0;
+}
+
+// The OS still draws and tracks each button, including its focus ring.
+static void SEC_FRONT DrawButtons(FormType *frm)
+{
+	UInt16 i, n = FrmGetNumberOfObjects(frm), primary = Primary(frm);
+	for (i = 0; i < n; i++) if (FrmGetObjectType(frm, i) == frmControlObj) {
+		ControlType *ctl = FrmGetObjectPtr(frm, i);
+		if (ctl->style == buttonCtl && ctl->attr.usable) {
+			UiColour(UIObjectFill, ctl->id == primary ? UI_GOLD : UI_PAPER);
+			CtlDrawControl(ctl);
+		}
+	}
+	UiColour(UIObjectFill, UI_PAPER);
+}
+
+static void SEC_FRONT DrawFields(FormType *frm)
+{
+	UInt16 i, n = FrmGetNumberOfObjects(frm);
+	for (i = 0; i < n; i++) {
+		FormObjectKind kind = FrmGetObjectType(frm, i);
+		RectangleType r;
+		if (kind == frmControlObj) {
+			ControlType *ctl = FrmGetObjectPtr(frm, i);
+			if (!ctl->attr.usable || ctl->style != popupTriggerCtl) continue;
+		} else if (kind != frmFieldObj) continue;
+		FrmGetObjectBounds(frm, i, &r);
+		Fill(r.topLeft.x - 2, r.topLeft.y - 1, r.extent.x + 3, 1, UI_EDGE);
+		Fill(r.topLeft.x - 2, r.topLeft.y + r.extent.y, r.extent.x + 3, 1, UI_EDGE);
+		Fill(r.topLeft.x - 2, r.topLeft.y, 1, r.extent.y, UI_EDGE);
+		Fill(r.topLeft.x + r.extent.x, r.topLeft.y, 1, r.extent.y, UI_EDGE);
+	}
+}
+
 // ---- tall screens ----
 
-static Coord gMidShift;     // how far the form's contents have moved down
-static Coord gBotShift;     // and its bottom buttons
+static Coord gMidShift, gBotShift;
+static Coord gBaseY[64];
 
-// The form's 160 high layout on a taller screen. Everything but the title
-// bar and the bottom buttons (up to three) moves down half the extra
-// height, the buttons go to the bottom. With a list id given, the contents stay and that
-// list gets the extra rows instead. reset is true on a freshly loaded form.
+// Keep compact forms top-aligned; use extra height for groups and lists.
 static void SEC_FRONT TallLayout(FormType *frm, UInt16 bot1, UInt16 bot2, UInt16 bot3,
 	UInt16 list, Boolean reset)
 {
 	RectangleType r;
-	Coord extra, mid, bot, dm, db;
-	UInt16 i, n;
+	Coord extra, x, y, shift;
+	UInt16 i, n = FrmGetNumberOfObjects(frm), form = FrmGetFormId(frm);
 
-	if (reset)
-		gMidShift = gBotShift = 0;
 	ScreenDisplayRect(&r);
-	extra = (Coord)(r.extent.y - 160);
-	if (extra < 0)
-		extra = 0;
-	bot = extra;
-	mid = list != 0xFFFF ? 0 : (Coord)(extra / 2);
-	dm = (Coord)(mid - gMidShift);
-	db = (Coord)(bot - gBotShift);
-	n = FrmGetNumberOfObjects(frm);
-	for (i = 0; i < n; i++) {
+	extra = r.extent.y > 160 ? r.extent.y - 160 : 0;
+	gBotShift = extra;
+	gMidShift = extra / 4;
+	for (i = 0; i < n && i < 64; i++) {
 		UInt16 id = FrmGetObjectId(frm, i);
 		FormObjectKind kind = FrmGetObjectType(frm, i);
-		Coord x, y;
-
 		if (kind == frmTitleObj || kind == frmGraffitiStateObj || kind == frmPopupObj)
 			continue;
-		if (id == list) {
-			LstSetHeight((ListType *)FrmGetObjectPtr(frm, i), (Int16)(11 + extra / 11));
-			continue;
-		}
 		FrmGetObjectPosition(frm, i, &x, &y);
-		if (kind == frmListObj) {
-			LstSetPosition((ListType *)FrmGetObjectPtr(frm, i), x,
-				(Coord)(y + (id == bot1 || id == bot2 || id == bot3 ? db : dm)));
-			continue;
-		}
-		if (id == bot1 || id == bot2 || id == bot3) {
-			if (db)
-				FrmSetObjectPosition(frm, i, x, (Coord)(y + db));
-		} else if (dm) {
-			FrmSetObjectPosition(frm, i, x, (Coord)(y + dm));
+		if (reset) gBaseY[i] = y;
+		y = gBaseY[i];
+		shift = 0;
+		if (id == bot1 || id == bot2 || id == bot3) shift = extra;
+		else shift = front_shift(form, y, r.extent.y);
+		if (id == list) {
+			y = front_map_list_y(r.extent.y);
+			LstSetPosition(FrmGetObjectPtr(frm, i), x, y);
+			LstSetHeight(FrmGetObjectPtr(frm, i), (r.extent.y - 28 - y) / 11);
+		} else if (kind == frmListObj) {
+			LstSetPosition(FrmGetObjectPtr(frm, i), x, y + shift);
+		} else FrmSetObjectPosition(frm, i, x, y + shift);
+	}
+}
+
+static void SEC_FRONT FormDraw(FormType *frm)
+{
+	RectangleType r;
+	UInt16 form = FrmGetFormId(frm);
+	FontID old = FntSetFont(stdFont);
+	Coord extra;
+
+	FrmDrawForm(frm);
+	ScreenDisplayRect(&r);
+	extra = r.extent.y - 160;
+	if (form == TitleForm) {
+		Fill(0, 111, 160, r.extent.y - 111, UI_DARK);
+		Fill(0, 110, 160, 2, UI_GOLD);
+	} else {
+		Fill(0, 0, 160, 20, UI_DARK);
+		Fill(0, 20, 160, 2, UI_GOLD);
+		Text(FrmGetTitle(frm), 7, 5, 146, UI_LIGHT, UI_DARK);
+		Fill(0, r.extent.y - 22, 160, 22, UI_DARK);
+		Fill(0, r.extent.y - 23, 160, 1, UI_EDGE);
+		if (form == NewGameForm && extra >= 50) {
+			Text(AppPrefsGet()->map, 7, 27, 146, UI_INK, UI_PAPER);
+			Section("Game rules", 27 + extra / 2 - 15);
+			Section("Players", 78 + extra / 2 + 10 - 15);
+		} else if (form == SettingsForm) {
+			Section("Buttons", 86 + gMidShift);
+			Fill(72, r.extent.y - 16, 16, 13, UI_PAPER);
 		}
 	}
-	gMidShift = mid;
-	gBotShift = bot;
+	DrawFields(frm);
+	DrawButtons(frm);
+	if (ScreenNewWin()) {
+		WinSetTextColor(gUi[UI_INK]);
+		WinSetBackColor(gUi[UI_PAPER]);
+		WinSetForeColor(gUi[UI_INK]);
+	}
+	FntSetFont(old);
 }
 
 // ---- links ----
@@ -260,6 +427,7 @@ static void SEC_FRONT TitleLayout(FormType *frm, Boolean haveSave)
 	Coord h;
 	UInt16 i, n = 0;
 
+	gTitleHaveSave = haveSave;
 	ids[0] = TitleResume;
 	ids[1] = TitleNew;
 	ids[2] = TitleJoin;
@@ -274,14 +442,20 @@ static void SEC_FRONT TitleLayout(FormType *frm, Boolean haveSave)
 			FrmHideObject(frm, idx);
 			continue;
 		}
-		if (h <= 170) {
+		if (h < 210) {
 			x = (Coord)(n % 2 ? 82 : 4);
 			y = (Coord)(113 + (n / 2) * 17);
 		} else {
-			x = 43;
-			y = (Coord)(116 + n * 20);
+			x = 27;
+			y = (Coord)(116 + (h - 210) / 2 + n * 21);
 		}
-		FrmSetObjectPosition(frm, idx, x, y);
+		{
+			RectangleType bounds;
+			FrmGetObjectBounds(frm, idx, &bounds);
+			bounds.topLeft.x = x; bounds.topLeft.y = y;
+			bounds.extent.x = h < 210 ? 74 : 106;
+			FrmSetObjectBounds(frm, idx, &bounds);
+		}
 		n++;
 	}
 }
@@ -294,7 +468,7 @@ static void SEC_FRONT TitleDraw(FormType *frm)
 	Char ver[12];
 	FontID old;
 
-	FrmDrawForm(frm);
+	FormDraw(frm);
 	if (!gTitleRes)
 		gTitleRes = DmGetResource(bitmapRsc, ArtTitleBmp);
 	if (gTitleRes) {
@@ -311,8 +485,8 @@ static void SEC_FRONT TitleDraw(FormType *frm)
 	ScreenDisplayRect(&r);
 	StrCopy(ver, kAppVersion);
 	old = FntSetFont(stdFont);
-	WinDrawChars(ver, StrLen(ver), (Coord)(158 - FntCharsWidth(ver, StrLen(ver))),
-		(Coord)(r.extent.y - FntLineHeight() - 1));
+	Text(ver, (Coord)(158 - FntCharsWidth(ver, StrLen(ver))),
+		(Coord)(r.extent.y - FntLineHeight() - 1), 158, UI_LIGHT, UI_DARK);
 	FntSetFont(old);
 }
 
@@ -378,6 +552,68 @@ static Char gNames[kMaxMaps][kMapNameLen];
 static Char *gNamePtrs[kMaxMaps];
 static UInt16 gNumMaps;
 static UInt16 gMapIndex;        // chosen in the list
+static UInt8 *gThumb;
+static Boolean gThumbValid;
+static const UInt8 gThumbRGB[THUMB_COLOURS][3] = {
+	{80,112,120}, {117,149,149}, {166,177,110}, {68,104,61},
+	{239,232,187}, {91,84,71}, {237,200,94}, {30,35,26}
+};
+static const UInt8 gThumbGrey[THUMB_COLOURS] = {170,170,255,85,255,0,0,0};
+static const CustomPatternType gSeaPattern = {0x11,0,0,0,0x11,0,0,0};
+
+static void SEC_FRONT MapThumbDraw(void)
+{
+	RectangleType r;
+	Coord size, left, x, y, end, sx, sy, ex, ey;
+	IndexedColorType colours[THUMB_COLOURS];
+	UInt16 i, value;
+	CustomPatternType oldPattern;
+	Boolean stipple = !ScreenNewWin() || ScreenDepth() == 1;
+	ScreenDisplayRect(&r);
+	size = front_map_size(r.extent.y);
+	left = (160 - size) / 2;
+	Fill(left - 1, 25, size + 2, size + 2, UI_INK);
+	if (!gThumbValid) {
+		Fill(left, 26, size, size, UI_PAPER);
+		Text("No preview", left + 3, 26 + size / 2 - 5, size - 6, UI_INK, UI_PAPER);
+		return;
+	}
+	for (i = 0; i < THUMB_COLOURS; i++)
+		colours[i] = ScreenDepth() >= 8 ? ScreenIndex(gThumbRGB[i][0], gThumbRGB[i][1], gThumbRGB[i][2]) :
+			ScreenIndex(gThumbGrey[i], gThumbGrey[i], gThumbGrey[i]);
+	if (stipple) {
+		WinGetPattern(&oldPattern);
+		WinSetPattern(&gSeaPattern);
+	}
+	for (y = 0; y < MAP_THUMB_SIZE; y++) {
+		sy = 26 + y * size / MAP_THUMB_SIZE;
+		ey = 26 + (y + 1) * size / MAP_THUMB_SIZE;
+		for (x = 0; x < MAP_THUMB_SIZE; x = end) {
+			value = gThumb[y * MAP_THUMB_SIZE + x];
+			for (end = x + 1; end < MAP_THUMB_SIZE && gThumb[y * MAP_THUMB_SIZE + end] == value; end++);
+			sx = left + x * size / MAP_THUMB_SIZE;
+			ex = left + end * size / MAP_THUMB_SIZE;
+			RctSetRectangle(&r, sx, sy, ex - sx, ey - sy);
+			if (stipple && value == THUMB_SEA) {
+				if (ScreenNewWin()) {
+					WinSetForeColor(gUi[UI_INK]);
+					WinSetBackColor(gUi[UI_PAPER]);
+				}
+				WinFillRectangle(&r, 0);
+			} else if (ScreenNewWin()) {
+				WinSetForeColor(colours[value]);
+				WinDrawRectangle(&r, 0);
+			} else if (colours[value]) WinDrawRectangle(&r, 0);
+			else WinEraseRectangle(&r, 0);
+		}
+	}
+	if (stipple) WinSetPattern((const CustomPatternType *)&oldPattern);
+}
+
+static void SEC_FRONT MapThumbLoad(Int16 sel)
+{
+	gThumbValid = gThumb && sel >= 0 && sel < gNumMaps && MapPreview(sel, gNames[sel], gThumb);
+}
 
 static Boolean SEC_FRONT MapListHandler(EventType *e)
 {
@@ -400,9 +636,23 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 		LstSetListChoices(lst, gNamePtrs, gNumMaps);
 		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, true);
 		LstSetSelection(lst, sel);
-		FrmDrawForm(frm);
+		gThumb = MemPtrNew(MAP_THUMB_SIZE * MAP_THUMB_SIZE);
+		MapThumbLoad(sel);
+		FormDraw(frm);
+		MapThumbDraw();
 		return true;
 	}
+	case lstSelectEvent:
+		if (e->data.lstSelect.listID == MapList) {
+			MapThumbLoad(e->data.lstSelect.selection);
+			MapThumbDraw();
+		}
+		return false;
+	case frmCloseEvent:
+		if (gThumb) MemPtrFree(gThumb);
+		gThumb = NULL;
+		gThumbValid = false;
+		return false;
 	case ctlSelectEvent:
 		if (e->data.ctlSelect.controlID == MapNext) {
 			Int16 sel;
@@ -424,7 +674,8 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 	case winDisplayChangedEvent:
 		FitWindow(frm);
 		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, false);
-		FrmDrawForm(frm);
+		FormDraw(frm);
+		MapThumbDraw();
 		return true;
 	default:
 		break;
@@ -458,7 +709,7 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 		SetPopup(frm, NgBotsTrig, NgBotsList, p->numBots);
 		SetPopup(frm, NgLevelTrig, NgLevelList, p->botLevel);
 		SetPopup(frm, NgTeamsTrig, NgTeamsList, p->teams);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		return true;
 	case popSelectEvent: {
 		UInt8 v = (UInt8)e->data.popSelect.selection;
@@ -504,7 +755,7 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 	case winDisplayChangedEvent:
 		FitWindow(frm);
 		TallLayout(frm, NgStart, NgBack, NgHost, 0xFFFF, false);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		return true;
 	default:
 		break;
@@ -513,8 +764,6 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 }
 
 // ---- lobby: hosting and joining ----
-
-static void SEC_FRONT Cell(const Char *s, Coord right, Coord y);
 
 static UInt16 gLobbySeq;
 
@@ -525,47 +774,35 @@ static void SEC_FRONT LobbyDraw(void)
 	RectangleType r;
 	Char name[kNameLen], note[20], line[48];
 	UInt8 i, n;
-	Coord y = (Coord)(30 + gMidShift);
+	Coord y, rowHeight, status;
 	FontID old = FntSetFont(stdFont);
 
+	ScreenDisplayRect(&r);
 	gLobbySeq = NetLobbySeq();
-	r.topLeft.x = 0;
-	r.topLeft.y = y;
-	r.extent.x = 160;
-	r.extent.y = 113;
-	WinEraseRectangle(&r, 0);
-	if (NetMapName()[0]) {
-		Int16 w = 132;
-		UInt16 len = (UInt16)StrLen(NetMapName());
-		Boolean cut = false;
-
-		WinDrawChars("Map", 3, 4, y);
-		FntCharsInWidth(NetMapName(), &w, &len, &cut);
-		WinDrawChars(NetMapName(), len, 28, y);
+	status = r.extent.y - 34;
+	Fill(0, 38, 160, r.extent.y - 61, UI_PAPER);
+	if (r.extent.y >= 198) {
+		Text(NetMapName(), 7, 42, 146, UI_INK, UI_PAPER);
+		Section("Players", 57);
+		y = front_lobby_y(r.extent.y);
+		rowHeight = front_lobby_row(r.extent.y);
+	} else {
+		y = front_lobby_y(r.extent.y);
+		rowHeight = front_lobby_row(r.extent.y);
 	}
-	y = (Coord)(y + 14);
 	n = NetRows();
 	for (i = 0; i < n && i < GAME_MAX_TANKS; i++) {
-		Int16 w = 96;
-		UInt16 len;
-		Boolean cut = false;
-
+		UInt16 bg = i % 2 ? UI_PAPER : UI_LIGHT;
 		NetRow(i, name, note);
-		len = (UInt16)StrLen(name);
-		FntCharsInWidth(name, &w, &len, &cut);
-		WinDrawChars(name, len, 4, y);
-		Cell(note, 156, y);
-		y = (Coord)(y + 11);
+		Fill(6, y, 148, rowHeight, bg);
+		TankMark(9, y);
+		Text(name, 24, y, 80, UI_INK, bg);
+		Text(note, 106, y, 47, UI_INK, bg);
+		y += rowHeight;
 	}
 	NetStatus(line);
-	{
-		Int16 w = 152;
-		UInt16 len = (UInt16)StrLen(line);
-		Boolean cut = false;
-
-		FntCharsInWidth(line, &w, &len, &cut);
-		WinDrawChars(line, len, 4, (Coord)(133 + gMidShift - 1));
-	}
+	Fill(6, status, 148, 12, UI_LIGHT);
+	Text(line, 9, status, 142, UI_INK, UI_LIGHT);
 	FntSetFont(old);
 }
 
@@ -608,10 +845,16 @@ static void SEC_FRONT ShowObj(FormType *frm, UInt16 id, Boolean show)
 {
 	UInt16 i = FrmGetObjectIndex(frm, id);
 
-	if (show)
+	if (show) {
+		UiColour(UIObjectFill, id == Primary(frm) ? UI_GOLD : UI_PAPER);
 		FrmShowObject(frm, i);
-	else
+		UiColour(UIObjectFill, UI_PAPER);
+	} else {
+		RectangleType r;
+		FrmGetObjectBounds(frm, i, &r);
 		FrmHideObject(frm, i);
+		Fill(r.topLeft.x - 2, r.topLeft.y - 2, r.extent.x + 4, r.extent.y + 4, UI_DARK);
+	}
 }
 
 static Boolean SEC_FRONT LobbyHandler(EventType *e)
@@ -623,7 +866,7 @@ static Boolean SEC_FRONT LobbyHandler(EventType *e)
 		FitForm(frm, false);
 		TallLayout(frm, LobStart, LobCancel, 0xFFFF, 0xFFFF, true);
 		LinkPopup(frm, LobLinkTrig, LobLinkList);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		LobbyDraw();
 		return true;
 	case nilEvent:
@@ -662,7 +905,7 @@ static Boolean SEC_FRONT LobbyHandler(EventType *e)
 	case winDisplayChangedEvent:
 		FitWindow(frm);
 		TallLayout(frm, LobStart, LobCancel, 0xFFFF, 0xFFFF, false);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		LobbyDraw();
 		return true;
 	default:
@@ -680,7 +923,7 @@ static Boolean SEC_FRONT JoinHandler(EventType *e)
 		FitForm(frm, false);
 		TallLayout(frm, JoinGo, JoinBack, 0xFFFF, 0xFFFF, true);
 		LinkPopup(frm, JoinLinkTrig, JoinLinkList);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		LobbyDraw();
 		return true;
 	case nilEvent:
@@ -718,7 +961,7 @@ static Boolean SEC_FRONT JoinHandler(EventType *e)
 	case winDisplayChangedEvent:
 		FitWindow(frm);
 		TallLayout(frm, JoinGo, JoinBack, 0xFFFF, 0xFFFF, false);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		LobbyDraw();
 		return true;
 	default:
@@ -778,7 +1021,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 			gKeys[i] = p->keys[i];
 			KeyLabel(frm, i);
 		}
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		GsiSetLocation(75, (Coord)(146 + gBotShift));
 		FrmSetFocus(frm, noFocus);
 		return true;
@@ -830,7 +1073,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 	case winDisplayChangedEvent:
 		FitWindow(frm);
 		TallLayout(frm, SetOK, SetCancel, 0xFFFF, 0xFFFF, false);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		GsiSetLocation(75, (Coord)(146 + gBotShift));
 		return true;
 	default:
@@ -844,59 +1087,51 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 static const GameState *gResults;
 static Boolean gResultsNet;
 
-static void SEC_FRONT Cell(const Char *s, Coord right, Coord y)
-{
-	WinDrawChars(s, StrLen(s), (Coord)(right - FntCharsWidth(s, StrLen(s))), y);
-}
-
 static void SEC_FRONT ResultsDraw(void)
 {
 	const GameState *g = gResults;
 	const AppPrefs *p = AppPrefsGet();
+	RectangleType r;
 	Char buf[20];
-	UInt16 i, j;
-	Coord y = (Coord)(20 + gMidShift);
+	UInt16 i, j, bg;
+	Coord y, rowHeight;
+	FontID old = FntSetFont(stdFont);
 
-	if (!g)
-		return;
-	WinDrawChars("Player", 6, 4, y);
-	Cell("Kills", 78, y);
-	Cell("Died", 104, y);
-	Cell("Base", 130, y);
-	Cell("Pill", 156, y);
-	y = (Coord)(y + 14);
+	if (!g) { FntSetFont(old); return; }
+	ScreenDisplayRect(&r);
+	y = 28;
+	if (r.extent.y >= 210) {
+		TankMark(9, 30);
+		Text("Match results", 26, 30, 126, UI_INK, UI_PAPER);
+		y = 50;
+	}
+	Fill(6, y, 148, 12, UI_OLIVE);
+	Text("Player", 9, y, 52, UI_LIGHT, UI_OLIVE);
+	Text("Kills", 64, y, 24, UI_LIGHT, UI_OLIVE);
+	Text("Died", 88, y, 24, UI_LIGHT, UI_OLIVE);
+	Text("Base", 112, y, 24, UI_LIGHT, UI_OLIVE);
+	Text("Pill", 136, y, 18, UI_LIGHT, UI_OLIVE);
+	y = front_results_y(r.extent.y);
+	rowHeight = front_results_row(r.extent.y);
 	for (i = 0; i < g->numTanks; i++) {
 		const Tank *k = &g->tanks[i];
 		UInt16 bases = 0, pills = 0;
 
-		if (gResultsNet && NetName((UInt8)i)[0])
-			StrCopy(buf, NetName((UInt8)i));
-		else if (i == 0 && !gResultsNet)
-			StrCopy(buf, p->name);
-		else
-			StrPrintF(buf, "Bot %d", i);
-		{
-			UInt16 n = StrLen(buf);
-			Int16 wid = 46;
-			Boolean cut = false;
-
-			FntCharsInWidth(buf, &wid, &n, &cut);
-			WinDrawChars(buf, n, 4, y);
-		}
-		for (j = 0; j < g->map.numBases; j++)
-			bases += g->map.bases[j].active && g->map.bases[j].owner == k->player;
-		for (j = 0; j < g->map.numPills; j++)
-			pills += g->map.pills[j].active && g->map.pills[j].owner == k->player;
-		StrPrintF(buf, "%d", k->kills);
-		Cell(buf, 78, y);
-		StrPrintF(buf, "%d", k->deaths);
-		Cell(buf, 104, y);
-		StrPrintF(buf, "%d", bases);
-		Cell(buf, 130, y);
-		StrPrintF(buf, "%d", pills);
-		Cell(buf, 156, y);
-		y = (Coord)(y + 12);
+		bg = i == (gResultsNet ? NetSlot() : 0) ? UI_GOLD : i % 2 ? UI_PAPER : UI_LIGHT;
+		Fill(6, y, 148, rowHeight, bg);
+		if (gResultsNet && NetName((UInt8)i)[0]) StrCopy(buf, NetName((UInt8)i));
+		else if (i == 0 && !gResultsNet) StrCopy(buf, p->name);
+		else StrPrintF(buf, "Bot %d", i);
+		Text(buf, 9, y, 52, UI_INK, bg);
+		for (j = 0; j < g->map.numBases; j++) bases += g->map.bases[j].active && g->map.bases[j].owner == k->player;
+		for (j = 0; j < g->map.numPills; j++) pills += g->map.pills[j].active && g->map.pills[j].owner == k->player;
+		StrPrintF(buf, "%d", k->kills); Text(buf, 64, y, 24, UI_INK, bg);
+		StrPrintF(buf, "%d", k->deaths); Text(buf, 88, y, 24, UI_INK, bg);
+		StrPrintF(buf, "%d", bases); Text(buf, 112, y, 24, UI_INK, bg);
+		StrPrintF(buf, "%d", pills); Text(buf, 136, y, 18, UI_INK, bg);
+		y += rowHeight;
 	}
+	FntSetFont(old);
 }
 
 static Boolean SEC_FRONT ResultsHandler(EventType *e)
@@ -907,7 +1142,7 @@ static Boolean SEC_FRONT ResultsHandler(EventType *e)
 	case frmOpenEvent:
 		FitForm(frm, false);
 		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, 0xFFFF, true);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		ResultsDraw();
 		return true;
 	case ctlSelectEvent:
@@ -920,7 +1155,7 @@ static Boolean SEC_FRONT ResultsHandler(EventType *e)
 	case winDisplayChangedEvent:
 		FitWindow(frm);
 		TallLayout(frm, ResultsOK, 0xFFFF, 0xFFFF, 0xFFFF, false);
-		FrmDrawForm(frm);
+		FormDraw(frm);
 		ResultsDraw();
 		return true;
 	default:
@@ -936,7 +1171,7 @@ void SEC_FRONT FrontResults(const GameState *g, Boolean net)
 	FrmGotoForm(ResultsForm);
 }
 
-FormEventHandlerType *SEC_FRONT FrontHandler(UInt16 formId)
+static FormEventHandlerType *SEC_FRONT Handler(UInt16 formId)
 {
 	switch (formId) {
 	case TitleForm: return TitleHandler;
@@ -946,6 +1181,47 @@ FormEventHandlerType *SEC_FRONT FrontHandler(UInt16 formId)
 	case ResultsForm: return ResultsHandler;
 	case LobbyForm: return LobbyHandler;
 	case JoinForm: return JoinHandler;
+	}
+	return NULL;
+}
+
+// Scope the theme around both our handler and the OS's native controls.
+static Boolean SEC_FRONT FrontEvent(EventType *e)
+{
+	FormType *frm = FrmGetActiveForm();
+	FormEventHandlerType *handler = Handler(FrmGetFormId(frm));
+	Boolean handled = false;
+	FontID old = FntSetFont(stdFont);
+	UInt16 id = 0;
+
+	UiBegin();
+	if (e->eType == frmUpdateEvent) {
+		switch (FrmGetFormId(frm)) {
+		case TitleForm: TitleDraw(frm); break;
+		case MapListForm: FormDraw(frm); MapThumbDraw(); break;
+		case LobbyForm: case JoinForm: FormDraw(frm); LobbyDraw(); break;
+		case ResultsForm: FormDraw(frm); ResultsDraw(); break;
+		default: FormDraw(frm); break;
+		}
+		handled = true;
+	} else if (handler) handled = handler(e);
+	if (!handled) {
+		if (e->eType == ctlEnterEvent) id = e->data.ctlEnter.controlID;
+		else if (e->eType == ctlSelectEvent) id = e->data.ctlSelect.controlID;
+		else if (e->eType == ctlRepeatEvent) id = e->data.ctlRepeat.controlID;
+		if (id && id == Primary(frm)) UiColour(UIObjectFill, UI_GOLD);
+		FrmHandleEvent(frm, e);
+	}
+	UiEnd();
+	FntSetFont(old);
+	return true;
+}
+
+FormEventHandlerType *SEC_FRONT FrontHandler(UInt16 formId)
+{
+	switch (formId) {
+	case TitleForm: case MapListForm: case NewGameForm: case SettingsForm:
+	case ResultsForm: case LobbyForm: case JoinForm: return FrontEvent;
 	}
 	return NULL;
 }

@@ -38,7 +38,7 @@ CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES) -I$(ART) -Isrc
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
 SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound front blit keys compose netgame looptest
-GAMESRCS = game tank shells pills lgm treegrow util map bot
+GAMESRCS = game tank shells pills lgm treegrow util map mapthumb bot
 # The scripted games are for the debug self-test only.
 ifdef DEBUG
 GAMESRCS += script
@@ -96,6 +96,12 @@ build/$(PRC): src/palmbolo.def $(BUILD)/palmbolo $(BUILD)/palmbolo.ro
 host-test: build/hosttest
 	build/hosttest
 
+menu-test: build/menutest
+	build/menutest
+
+build/menutest: host/menutest.c src/game/mapthumb.c src/game/mapthumb.h src/game/map.h src/frontlayout.h src/resource.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/menutest.c src/game/mapthumb.c -o $@
+
 HOSTSRC  = src/game/game.c src/game/bot.c src/game/tank.c src/game/shells.c src/game/pills.c src/game/lgm.c src/game/treegrow.c src/game/script.c src/game/util.c src/game/map.c host/mapstore_host.c
 HOSTNET  = src/net/lockstep.c src/net/link.c host/locktest.c
 
@@ -109,4 +115,4 @@ build/maprender: host/maprender.c src/tilepick.c src/tilepick.h $(HOSTSRC) src/g
 clean:
 	rm -rf build
 
-.PHONY: all clean host-test art-preview
+.PHONY: all clean host-test menu-test art-preview

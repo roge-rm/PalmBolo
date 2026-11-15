@@ -485,8 +485,9 @@ static Boolean HandleEvent(EventType *e)
 		if (gForm == GameForm) {
 			ViewResized();
 			gDirty = gFull = true;
+			return false;
 		}
-		return false;
+		return FrmDispatchEvent(e);
 	case menuEvent:
 		return HandleMenu(e->data.menu.itemID);
 	case winEnterEvent:

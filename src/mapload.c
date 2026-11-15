@@ -5,6 +5,7 @@
 #include "game/game.h"
 #include "game/mapstore.h"
 #include "game/util.h"
+#include "game/mapthumb.h"
 
 #define kEverardName "Everard Island"
 
@@ -71,6 +72,37 @@ static uint32_t SEC_COLD DbFill(void *ctx, uint8_t *dst, uint32_t max)
 		n += k;
 	}
 	return n;
+}
+
+Boolean SEC_COLD MapPreview(UInt16 index, const Char *name, UInt8 *pixels)
+{
+	static MapSource ms;
+	int err;
+
+	if (index == 0) {
+		MemHandle h = DmGetResource(kMapResType, EverardMapRes);
+		MapMemory mm;
+
+		if (!h) return false;
+		map_source_memory(&ms, &mm, MemHandleLock(h), MemHandleSize(h));
+		err = map_thumb(&ms, pixels);
+		MemHandleUnlock(h);
+		DmReleaseResource(h);
+	} else {
+		DbReader r;
+		LocalID id = DmFindDatabase(0, (Char *)name);
+
+		if (!id) return false;
+		MemSet(&r, sizeof(r), 0);
+		r.db = DmOpenDatabase(0, id, dmModeReadOnly);
+		if (!r.db) return false;
+		r.numRecs = DmNumRecords(r.db);
+		ms.fill = DbFill; ms.ctx = &r; ms.pos = ms.n = ms.eof = 0;
+		err = map_thumb(&ms, pixels);
+		DbRelease(&r);
+		DmCloseDatabase(r.db);
+	}
+	return err == MAP_OK;
 }
 
 Int16 SEC_COLD MapLoad(UInt16 index, const Char *name, GameState *game)

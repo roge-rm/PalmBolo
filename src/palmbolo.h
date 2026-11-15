@@ -149,6 +149,8 @@ UInt16 SEC_COLD MapListBuild(Char names[][kMapNameLen]);
 // Loads map number index of the list (name is its name) into the game.
 // Returns a map error code (MAP_OK is 0), or -1 when it can't be opened.
 Int16 SEC_COLD MapLoad(UInt16 index, const Char *name, struct GameState *game);
+// Fills a 64 by 64 overview without opening or changing game storage.
+Boolean SEC_COLD MapPreview(UInt16 index, const Char *name, UInt8 *pixels);
 
 // Maps in network play are known by the CRC-32 of the file's bytes and
 // their length. MapFileSum gives those of map index (named name).
