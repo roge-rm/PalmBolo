@@ -2,7 +2,7 @@
 
 PalmBolo is Bolo for Palm OS. Drive a tank around an island, capture bases and pillboxes, and send your builder out to build roads, walls, boats and pillboxes of your own.
 
-The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. The current source is 0.10.0, with two-player infrared games and up to 7 bots in single-player. It is unreleased. The latest published version is 0.9.0, with single-player games. Bluetooth and Wi-Fi play come later.
+The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.10.0 has two-player infrared games and up to 7 bots in single-player. Bluetooth and Wi-Fi play come later.
 
 Let me know what works and what doesn't, or open an issue here.
 
@@ -36,7 +36,7 @@ Palm OS 3.0 and up, from 160×160 mono to 320×480 colour. So far it's been test
 
 ## Install
 
-Download `PalmBolo-0.9.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
+Download `PalmBolo-0.10.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
 
 Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
@@ -45,6 +45,8 @@ Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 New game picks a map, game type, hidden mines, time limit, bots, bot level and teams. Leaving a single-player game saves it and Resume carries on.
 
 For two-player infrared, point the Palms at each other. On one Palm choose New game, pick the map and settings, then Host. On the other choose Join game, select Infrared and tap Join. Tap Start on the host once both players are in the lobby. The joiner receives the map if needed and keeps it for later. If the joiner leaves, a bot takes over. If the host leaves, the game ends. Multiplayer games cannot be resumed.
+
+Infrared has been tested between Frond emulators, including a Palm IIIx and a Tungsten TX. It has not yet been tested between real Palms.
 
 Controls:
 - Up and down: faster and slower

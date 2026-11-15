@@ -1,7 +1,6 @@
 # Infrared work
 
-The unreleased 0.10.0 source includes two-player infrared in normal builds.
-The latest published version is 0.9.0.
+Version 0.10.0 includes two-player infrared in normal builds.
 
 ## Transport
 
@@ -114,5 +113,7 @@ pending leave controls are retried after an initial enqueue rejection.
 
 ## Before release
 
-Run the wider checks listed in HANDOFF.md once before publishing.
-No 0.10.0 release has been published.
+The 0.10.0 host and emulator release checks passed. Results are in
+`/srv/downloads/temp/debug/PalmBolo/release-0.10.0-20261115/RELEASE-CHECKS.txt`.
+No real Palm pair was available. Dan approved releasing 0.10.0 with physical
+infrared untested.
