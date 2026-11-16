@@ -200,3 +200,27 @@ open/registration/SDP/socket failures, cancelled discovery, borrowed ACL cleanup
 pending/synchronous sends, receive overflow, old callback epochs and timeouts.
 This is not a radio interoperability test. Multi-Palm Frond checks where supported
 and physical-device checks are recorded separately in the release checklist.
+
+## Offline continuation (M14)
+
+`ls_offline` finishes only an already-started buffered turn, at most three
+simulation ticks, with that turn's received inputs. It never starts a future
+turn. There is no rollback snapshot or guarantee that every peer acknowledged
+this boundary. A known desync, setup failure or announced game end cannot
+become offline play. A time limit reached while finishing the partial turn
+uses normal game completion.
+
+After the boundary, other human tanks become bots at the match's bot level.
+Existing bots keep their state. The local tank stays in its original slot,
+including a dropped player's tank reclaimed from its bot. Teams, ownership,
+map, entities, stocks, RNG and rule settings are retained. No wire or checksum
+layout changes; the other Palms still use the existing disconnect rules.
+`NetOffline` closes the transport before any continuation or replacement alert.
+
+The saved-game state code is in `src/savegame.c`. Version 2 retains the old
+8-byte header and unchanged GameState bytes, with one viewer-player byte after
+the state. Version 1 saves of the current GameState size still load as player
+zero. Saving writes version 2. `SaveAllow(false)` protects both state and map
+from writes and deletion after the user keeps an existing save. New game and
+Resume reset that guard. App stop never asks to replace a network game's old
+single-player save; it saves an offline copy only if no save exists.

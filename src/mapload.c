@@ -9,7 +9,7 @@
 
 #define kEverardName "Everard Island"
 
-UInt16 SEC_COLD MapListBuild(Char names[][kMapNameLen])
+UInt16 SEC_COLD MapListBuild(Char names[][kMapNameLen], UInt16 skip)
 {
 	UInt16 n = 0, card;
 	LocalID id;
@@ -21,6 +21,8 @@ UInt16 SEC_COLD MapListBuild(Char names[][kMapNameLen])
 	    DmGetNextDatabaseByTypeCreator(first, &state, kMapType, kMapCreator,
 	        false, &card, &id) == errNone) {
 		first = false;
+		if (card != 0) continue;
+		if (skip) { skip--; continue; }
 		if (DmDatabaseInfo(card, id, names[n], NULL, NULL, NULL, NULL, NULL,
 		        NULL, NULL, NULL, NULL, NULL) == errNone)
 			n++;

@@ -571,6 +571,19 @@ void NetEnd(void)
 	gLs.state = LS_IDLE;
 }
 
+UInt8 NetOffline(GameState *g)
+{
+	UInt8 result;
+
+	gInTick = true;
+	result = ls_offline(&gLs, g);
+	gInTick = false;
+
+	if (result == 2) NetFinish(g);
+	else NetEnd();
+	return gLs.stop == LS_STOP_DESYNC ? 0 : result;
+}
+
 // The game is over here. Polls until the others have what they need to
 // reach the end too, LS_END_MS at most, then leaves.
 void NetFinish(const GameState *g)

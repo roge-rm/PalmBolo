@@ -2,7 +2,7 @@
 
 static const char magic[] = "BMAPBOLO";
 
-static int SEC_COLD next(MapSource *s)
+static int next(MapSource *s)
 {
 	if (s->pos == s->n) {
 		if (s->eof) return -1;
@@ -13,7 +13,7 @@ static int SEC_COLD next(MapSource *s)
 	return s->buf[s->pos++];
 }
 
-static int SEC_COLD bytes(MapSource *s, uint8_t *p, int n)
+static int bytes(MapSource *s, uint8_t *p, int n)
 {
 	int v;
 	while (n--) {
@@ -24,7 +24,7 @@ static int SEC_COLD bytes(MapSource *s, uint8_t *p, int n)
 	return 1;
 }
 
-static uint8_t SEC_COLD colour(uint8_t terrain)
+static uint8_t colour(uint8_t terrain)
 {
 	if (terrain >= TERRAIN_MINE_FIRST) terrain -= TERRAIN_MINE_ADD;
 	switch (terrain) {
@@ -37,17 +37,18 @@ static uint8_t SEC_COLD colour(uint8_t terrain)
 }
 
 // Higher-valued features survive reduction of each four-square block.
-static void SEC_COLD put(uint8_t *p, uint8_t x, uint8_t y, uint8_t v)
+static void put(uint8_t *p, uint8_t x, uint8_t y, uint8_t v)
 {
+	if (!p) return;
 	p += (y >> 2) * MAP_THUMB_SIZE + (x >> 2);
 	if (*p < v) *p = v;
 }
 
-int SEC_COLD map_thumb(MapSource *s, uint8_t *p)
+int map_thumb(MapSource *s, uint8_t *p)
 {
 	uint8_t h[12], item[6];
 	int i, j, v, x, end, state, remain, half, nib, last;
-	for (i = 0; i < MAP_THUMB_SIZE * MAP_THUMB_SIZE; i++) p[i] = THUMB_SEA;
+	if (p) for (i = 0; i < MAP_THUMB_SIZE * MAP_THUMB_SIZE; i++) p[i] = THUMB_SEA;
 	if (!bytes(s, h, 12)) return MAP_ERR_SHORT;
 	for (i = 0; i < 8; i++) if (h[i] != magic[i]) return MAP_ERR_HEADER;
 	if (h[8] != 1) return MAP_ERR_VERSION;

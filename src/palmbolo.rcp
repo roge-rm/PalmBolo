@@ -15,7 +15,7 @@ END
 
 FORM ID MapListForm AT (0 0 160 160)
 USABLE
-MENUID MainMenu
+MENUID MapMenu
 BEGIN
   TITLE "Choose a map"
   LIST "" ID MapList AT (7 96 146 33) VISIBLEITEMS 3
@@ -217,4 +217,64 @@ BEGIN
   TITLE "Save"
   MESSAGE "Not enough memory to save the game."
   BUTTONS "OK"
+END
+
+MENU ID MapMenu
+BEGIN
+ PULLDOWN "Map"
+ BEGIN
+  MENUITEM "Import from card" ID MapImportItem
+  MENUITEM "Beam map" ID MapBeamItem
+  MENUITEM "Next maps" ID MapPageItem
+ END
+END
+FORM ID MapCardForm AT (2 2 156 156)
+MODAL USABLE
+BEGIN
+ TITLE "Card maps"
+ LABEL "                        " ID MapCardPath AT (5 17)
+ LIST "" ID MapCardList AT (5 31 144 77) VISIBLEITEMS 7
+ BUTTON "Up" ID MapCardUp AT (5 112 35 13) RECTFRAME USABLE
+ BUTTON "More" ID MapCardMore AT (44 112 45 13) RECTFRAME USABLE
+ BUTTON "Card" ID MapCardVolume AT (94 112 50 13) RECTFRAME USABLE
+ BUTTON "Open" ID MapCardOpen AT (5 135 55 13) RECTFRAME USABLE
+ BUTTON "Cancel" ID MapCardCancel AT (94 135 55 13) RECTFRAME USABLE
+END
+ALERT ID MapIoAlert
+INFORMATION
+BEGIN
+ TITLE "Maps"
+ MESSAGE "^1"
+ BUTTONS "OK"
+END
+
+FORM ID MapCopyForm AT (10 45 140 65)
+MODAL USABLE
+BEGIN
+ TITLE "Importing map"
+ BUTTON "Cancel" ID MapCopyCancel AT (40 38 60 13) RECTFRAME USABLE
+END
+
+ALERT ID LeaveNetAlert
+CONFIRMATION
+BEGIN
+  TITLE "Leave network game"
+  MESSAGE "Disconnect from the other players?"
+  BUTTONS "Leave" "Cancel"
+END
+
+ALERT ID OfflineAlert
+CONFIRMATION
+BEGIN
+  TITLE "Continue offline"
+  MESSAGE "Continue this game against bots? You cannot rejoin the network game."
+  BUTTONS "Continue" "Discard"
+END
+
+ALERT ID OfflineSaveAlert
+CONFIRMATION
+BEGIN
+  TITLE "Offline save"
+  MESSAGE "Replace the saved game when you leave? Keeping it means this game will not be saved."
+  BUTTONS "Replace" "Keep old save"
 END

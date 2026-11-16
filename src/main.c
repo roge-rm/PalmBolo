@@ -1,4 +1,5 @@
 #include "palmbolo.h"
+#include "mapio.h"
 #include "resource.h"
 #include "game/game.h"
 #include "game/script.h"
@@ -7,6 +8,8 @@
 
 static DeviceInfo gDev;
 static GameState gGame;
+static Boolean gClockReset;
+static Boolean gKeepSave; // old save stays until an offline game is written
 static Boolean gNet;        // the game is a network game (netgame.h)
 static Boolean gQuit;
 static Boolean gFormOpen;
@@ -144,17 +147,42 @@ GameState *AppGame(void)
 	return &gGame;
 }
 
-// Leaves a game in progress for the title, saving it unless it is over.
-// A network game isn't saved.
+// Close the link before alerts. A declined replacement protects the old save
+// for the rest of this game, including app stop and the results screen.
+static Boolean SEC_COLD OfflineGame(Boolean ask)
+{
+	UInt8 result = NetOffline(&gGame);
+
+	gNet = result == 2; // keep the network names for natural-end results
+	gKeepSave = SaveExists();
+	SaveAllow(!gKeepSave);
+	ViewMessage(NULL);
+	gBuild = BUILD_NONE;
+	gFire = 0;
+	gSight = 0;
+	KeysStop();
+	KeysStart(gDev.ticksPerSecond);
+	SoundStop();
+	gClockReset = true;
+	gDirty = gFull = true;
+	if (!result) return false;
+	if (result == 2) return true;
+	if (ask) {
+		if (FrmAlert(OfflineAlert) != 0) return false;
+		if (!SaveAllowed())
+			SaveAllow(FrmAlert(OfflineSaveAlert) == 0);
+	}
+	return true;
+}
+
+// Leaves for the title. Network players may carry on locally first.
 static void SEC_COLD LeaveGame(void)
 {
 	if (gInGame && gForm == GameForm) {
 		if (gNet) {
-			NetEnd();
-			gNet = false;
-			ViewMessage(NULL);
-		} else if (!gGame.over && !SaveWrite(&gGame)) {
-			// Stay in the game, it is untouched.
+			if (FrmAlert(LeaveNetAlert) != 0) return;
+			if (OfflineGame(true)) return;
+		} else if (!gGame.over && SaveAllowed() && !SaveWrite(&gGame)) {
 			FrmAlert(SaveFailAlert);
 			return;
 		}
@@ -242,6 +270,8 @@ void SEC_COLD AppOpenMap(UInt16 index, const Char *name)
 #if defined(DEBUG) && defined(TEST_TIME_LIMIT)
 	gGame.timeLimit = TEST_TIME_LIMIT;
 #endif
+	gKeepSave = false;
+	SaveAllow(true);
 	SaveDrop();
 	gInGame = true;
 	// The player on this Palm drives tank 0, the bots the tanks after it.
@@ -299,6 +329,8 @@ void SEC_COLD AppResume(void)
 	gStartTicks = TimGetTicks();
 	gTimedFull = false;
 #endif
+	gKeepSave = false;
+	SaveAllow(true);
 	if (!SaveRead(&gGame)) {
 		SaveDrop();
 		FrmAlert(ResumeAlert);
@@ -306,7 +338,6 @@ void SEC_COLD AppResume(void)
 		return;
 	}
 	LOG(("resumed at tick %lu", gGame.tick));
-	game_set_viewer(0);
 	gBuild = BUILD_NONE;
 	gInGame = true;
 	FrmGotoForm(GameForm);
@@ -489,6 +520,8 @@ static Boolean HandleEvent(EventType *e)
 		}
 		return FrmDispatchEvent(e);
 	case menuEvent:
+		if (gForm == MapListForm && (e->data.menu.itemID == MapImportItem || e->data.menu.itemID == MapBeamItem || e->data.menu.itemID == MapPageItem))
+			return FrmDispatchEvent(e);
 		return HandleMenu(e->data.menu.itemID);
 	case winEnterEvent:
 	case winExitEvent:
@@ -917,8 +950,7 @@ static Boolean SEC_COLD NetTurns(void)
 		return true;
 	}
 	StrCopy(line, NetWhy());
-	NetEnd();
-	gNet = false;
+	if (OfflineGame(true)) return false;
 	gFormOpen = false;
 	gInGame = false;
 	ViewMessage(NULL);
@@ -990,6 +1022,12 @@ static void EventLoop(void)
 		MARK(LP_DEBUG);
 #endif
 		HandleEvent(&e);
+		if (gClockReset) {
+			gClockReset = false;
+			gPaceNew = true;
+			acc = 0;
+			last = TimGetTicks();
+		}
 		MARK(LP_HANDLE);
 		// A form or alert came or went: its time isn't owed and a new
 		// period starts, so it doesn't count as busy.
@@ -1005,7 +1043,7 @@ static void EventLoop(void)
 		acc += (now - last) * GAME_TICKS_PER_SECOND;
 		last = now;
 		// A frame's ticks run together once they are all due.
-		live = gForm == GameForm && gFormOpen && !gGame.over;
+		live = !gQuit && gForm == GameForm && gFormOpen && !gGame.over;
 		if (!live)
 			acc = 0;
 		run = live && acc >= due;
@@ -1016,7 +1054,7 @@ static void EventLoop(void)
 			gPaceTicks = gPaceFrames = 0;
 			gPaceBehind = false;
 		}
-		if (gNet && gInGame && gForm == GameForm && gFormOpen && !NetTurns())
+		if (!gQuit && gNet && gInGame && !gGame.over && gForm == GameForm && gFormOpen && !NetTurns())
 			run = false;
 		for (n = 0; run && n < (gStride + gStrideOdd) >> 1; n++) {
 			GameInput all[GAME_MAX_TANKS];
@@ -1070,8 +1108,14 @@ static void EventLoop(void)
 #endif
 			acc -= tps;
 		}
-		if (gNet && gInGame && gForm == GameForm && gFormOpen)
+		if (!gQuit && gNet && gInGame && !gGame.over && gForm == GameForm && gFormOpen)
 			NetTurns();
+		if (gClockReset) {
+			gClockReset = false;
+			gPaceNew = true;
+			acc = 0;
+			last = TimGetTicks();
+		}
 		t1 = TimGetTicks();
 		gPaceTicks += n;
 		if (n)
@@ -1104,7 +1148,7 @@ static void EventLoop(void)
 			if (gNet) {
 				NetFinish(&gGame);
 				ViewMessage(NULL);
-			} else {
+			} else if (SaveAllowed() && !gKeepSave) {
 				SaveDrop();
 			}
 			FrontResults(&gGame, gNet);
@@ -1234,16 +1278,14 @@ static void SEC_COLD AppStart(void)
 
 static void SEC_COLD AppStop(void)
 {
-	// Leaving the app in the middle of a game saves it, unless it's a
-	// network game.
-	if (gNet) {
-		gInGame = false;
-		gNet = false;
-	}
+	Boolean wasNet = gNet;
+
+	// App switching must not open continuation or replacement alerts.
+	if (gNet && !OfflineGame(false)) gInGame = false;
 	NetEnd();
-	if (gInGame && !gGame.over) {
+	if (gInGame && !gGame.over && SaveAllowed()) {
 		gInGame = false;
-		if (!SaveWrite(&gGame))
+		if (!SaveWrite(&gGame) && !wasNet)
 			FrmAlert(SaveFailAlert);
 	}
 	SoundStop();
@@ -1258,13 +1300,29 @@ UInt32 PilotMain(UInt16 cmd, void *cmdPBP, UInt16 launchFlags)
 {
 	UInt32 rom = 0;
 
-	if (cmd != sysAppLaunchCmdNormalLaunch)
+	if (cmd == sysAppLaunchCmdExgAskUser) {
+		if ((launchFlags & sysAppLaunchFlagSubCall) && NetPhase() != NET_OFF && NetPhase() != NET_STOPPED)
+			((ExgAskParamType *)cmdPBP)->result = exgAskCancel;
 		return 0;
+	}
+	if (cmd == sysAppLaunchCmdExgReceiveData) {
+		Err err;
+		if ((launchFlags & sysAppLaunchFlagSubCall) && NetPhase() != NET_OFF && NetPhase() != NET_STOPPED) return exgErrNotAllowed;
+		err = MapReceive((ExgSocketType *)cmdPBP);
+		if (launchFlags & sysAppLaunchFlagSubCall) {
+			gPaceNew = gDirty = gFull = true;
+			if (!err && FrmGetActiveFormID() == MapListForm)
+				FrmUpdateForm(MapListForm, frmRedrawUpdateCode);
+		}
+		return err;
+	}
+	if (cmd != sysAppLaunchCmdNormalLaunch) return 0;
 	FtrGet(sysFtrCreator, sysFtrNumROMVersion, &rom);
 	if (rom < kMinRomVersion) {
 		FrmAlert(RomIncompatibleAlert);
 		return sysErrRomIncompatible;
 	}
+	MapRegister();
 	AppStart();
 	EventLoop();
 	AppStop();

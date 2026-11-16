@@ -33,6 +33,8 @@ Boolean SEC_NET NetJoin(UInt8 kind, struct GameState *g);
 Boolean SEC_NET NetStart(void);
 // Leaves the lobby or the game and closes the link.
 void SEC_NET NetEnd(void);
+// Detaches a live game for offline play, with ls_offline return values.
+UInt8 SEC_NET NetOffline(struct GameState *g);
 // The game is over on this Palm: waits a moment for the others to reach
 // the end too, then NetEnd.
 void SEC_NET NetFinish(const struct GameState *g);

@@ -145,7 +145,7 @@ IndexedColorType SEC_UI ScreenIndex(UInt8 r, UInt8 g, UInt8 b);
 #define kMapNameLen     32
 #define kMaxMaps        24
 // Fills names with the map names and returns how many (at most kMaxMaps).
-UInt16 SEC_COLD MapListBuild(Char names[][kMapNameLen]);
+UInt16 SEC_COLD MapListBuild(Char names[][kMapNameLen], UInt16 skip);
 // Loads map number index of the list (name is its name) into the game.
 // Returns a map error code (MAP_OK is 0), or -1 when it can't be opened.
 Int16 SEC_COLD MapLoad(UInt16 index, const Char *name, struct GameState *game);
@@ -310,6 +310,9 @@ void SEC_FRONT FrontResults(const struct GameState *g, Boolean net);
 // The saved game: the game state in a database of its own and the map
 // store kept beside it.
 Boolean SEC_FRONT SaveExists(void);
+// Protect an existing save when offline replacement was declined.
+void SEC_FRONT SaveAllow(Boolean allow);
+Boolean SEC_FRONT SaveAllowed(void);
 Boolean SEC_FRONT SaveWrite(const struct GameState *g);
 // Reads the save into g and opens its map as the store; the save is then
 // the game in progress until written again.

@@ -201,6 +201,11 @@ uint8_t SEC_NET ls_ready(Lockstep *ls);
 // go out with the turn delay later. Only when ls_ready.
 void SEC_NET ls_tick(Lockstep *ls, GameState *g, const GameInput *local);
 
+// Finishes only a partially run buffered turn, then hands the other humans
+// to bots. Returns 0 for an unsafe state, 1 for offline play, 2 at game end.
+// No peer acknowledgement or rollback is implied. Call before closing the link.
+uint8_t SEC_NET ls_offline(Lockstep *ls, GameState *g);
+
 // The slots the game is waiting for when stalled for LS_WAIT_MS or more,
 // 0 when not waiting.
 uint8_t SEC_NET ls_waiting(const Lockstep *ls);

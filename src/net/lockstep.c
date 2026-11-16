@@ -445,6 +445,49 @@ void ls_tick(Lockstep *ls, GameState *g, const GameInput *local)
 		local_sum(ls, g->tick, ls_checksum(g));
 }
 
+uint8_t ls_offline(Lockstep *ls, GameState *g)
+{
+	GameInput none;
+	uint8_t i, e, pending;
+
+	if (ls->slot >= g->numTanks || g->tanks[ls->slot].player != ls->slot ||
+	    (ls->state != LS_PLAYING && ls->state != LS_STOPPED) ||
+	    (ls->stop != LS_STOP_NONE && ls->stop != LS_STOP_HOST_LEFT &&
+	     ls->stop != LS_STOP_HOST_LOST && ls->stop != LS_STOP_DROPPED))
+		return 0;
+	if (g->over) return 2;
+	if (ls->ended || ls->finishing) return 0;
+	if (g->tick != ls->turn * LS_TICKS + ls->sub || ls->sub >= LS_TICKS)
+		return 0;
+	if (ls->sub) {
+		e = entry(ls, ls->turn);
+		if (e == 255 || !ls->done[e]) return 0;
+		pending = ls->remWait;
+		net_zero(&none, sizeof(none));
+		while (ls->sub && !g->over)
+			ls_tick(ls, g, &none);
+		if (ls->stop == LS_STOP_DESYNC) return 0;
+		// A stopped link retains its stop reason. Check any checksum consumed
+		// by the final buffered ticks before allowing offline play.
+		e = (uint8_t)((ls->sumPos + 3) & 3);
+		if (ls->sumTick[e] == g->tick)
+			for (i = 0; i < LS_SLOTS; i++)
+				if ((pending & (1 << i)) && ls->remTick[i] == g->tick &&
+				    ls->remVal[i] != ls->sumVal[e]) return 0;
+	}
+	if (g->over) return 2;
+	for (i = 0; i < g->numTanks; i++) {
+		if (i == ls->slot) {
+			if ((g->botMask >> i) & 1) game_set_bot(g, i, BOT_OFF);
+		} else if (!((g->botMask >> i) & 1)) {
+			game_set_bot(g, i, ls->start.botLevel ? ls->start.botLevel : BOT_NORMAL);
+		}
+	}
+	game_set_viewer(ls->slot);
+	net_zero(&ls->mine, sizeof(ls->mine));
+	return 1;
+}
+
 // Host: puts together every turn whose inputs are all in. A player who
 // left, or who has been silent past the drop time while their input is
 // missing, goes to a bot at the turn being put together.

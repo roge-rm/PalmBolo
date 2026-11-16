@@ -77,3 +77,25 @@
 #define SaveFailAlert       1107
 
 #endif
+
+#define MapMenu 1010
+#define MapImportItem 1011
+#define MapBeamItem 1012
+#define MapCardForm 1800
+#define MapCardList 1801
+#define MapCardPath 1802
+#define MapCardOpen 1803
+#define MapCardCancel 1804
+#define MapCardMore 1805
+#define MapCardUp 1806
+#define MapCardVolume 1807
+#define MapIoAlert 1808
+
+#define MapPageItem 1013
+
+#define MapCopyForm 1810
+#define MapCopyCancel 1811
+
+#define LeaveNetAlert 1120
+#define OfflineAlert 1121
+#define OfflineSaveAlert 1122

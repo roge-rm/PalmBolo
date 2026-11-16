@@ -44,7 +44,17 @@ Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
 New game picks a map, game type, hidden mines, time limit, bots, bot level and teams. Leaving a single-player game saves it and Resume carries on.
 
-For two-player infrared, point the Palms at each other. On one Palm choose New game, pick the map and settings, then Host. On the other choose Join game, select Infrared and tap Join. Tap Start on the host once both players are in the lobby. The joiner receives the map if needed and keeps it for later. If the joiner leaves, a bot takes over. If the host leaves, the game ends. Multiplayer games cannot be resumed.
+For two-player infrared, point the Palms at each other. On one Palm choose New game, pick the map and settings, then Host. On the other choose Join game, select Infrared and tap Join. Tap Start on the host once both players are in the lobby. The joiner receives the map if needed and keeps it for later. If the joiner leaves, a bot takes over. In the published 0.10.0 build, host departure ends the game and multiplayer games cannot be resumed.
+
+The current source offers offline play after leaving a network game or losing
+the connection. Choose Continue to keep your tank, map, teams and stocks, with
+the other players controlled by bots. It finishes an already-started buffered
+turn first, using the inputs it has; this is a local turn boundary, not a
+rollback to a turn acknowledged by every Palm. The offline game cannot rejoin.
+Leaving it saves it for Resume. If a save already exists, choose Replace or
+Keep old save; keeping it means the offline game will not be saved. Switching
+apps during network play saves an offline copy only when there is no existing
+save, without opening a prompt. An out-of-step game cannot continue offline.
 
 Infrared has been tested between Frond emulators, including a Palm IIIx and a Tungsten TX. It has not yet been tested between real Palms.
 
@@ -70,6 +80,20 @@ Cancel or Back closes the connection. Hosting needs Bluetooth free of another
 open app connection. Devices without Bluetooth keep their other links.
 Bluetooth passes focused callback and four-peer lockstep tests on the host;
 Palm-to-Palm radio checks remain before-release work, with physical testing later.
+
+In the current source, open New game, then the Map menu on the map list.
+Import from card browses folders on a memory card. Folder names start with `/`;
+Open enters a folder or imports a `.map` file. Up goes to the parent, More shows
+the next seven entries (then returns to the first page), Card cycles mounted
+cards and Cancel stops browsing or copying. Imports are limited to 1 MB.
+Beam map sends the selected map, including Everard Island, through Palm's
+Exchange Manager. Launch PalmBolo once to register it for incoming `.map` files.
+Received maps are kept automatically after Palm's receive confirmation.
+Duplicate names get a number. Importing and receiving leave the saved game
+alone; incoming transfers are refused while a network lobby or game is open.
+Next maps pages through catalogues with more than 23 imported maps.
+Palms without VFS still support database maps and beaming. Card and paired
+beaming checks in Frond remain before-release work, with physical tests later.
 
 Controls:
 - Up and down: faster and slower

@@ -37,7 +37,7 @@ ART      = build/art
 CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES) -I$(ART) -Isrc
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
-SRCS     = main screen detect dlog timing mapload mapstore_palm tileview tilepick panel sound front blit keys compose netgame looptest
+SRCS     = main screen detect dlog timing mapload mapimport mapio mapstore_palm tileview tilepick panel sound front savegame blit keys compose netgame looptest
 GAMESRCS = game tank shells pills lgm treegrow util map mapthumb bot
 # The scripted games are for the debug self-test only.
 ifdef DEBUG
@@ -74,7 +74,7 @@ $(addprefix $(BUILD)/,$(addsuffix .o,$(GAMESRCS))): $(BUILD)/%.o: src/game/%.c s
 $(addprefix $(BUILD)/,$(addsuffix .o,$(NETSRCS))): $(BUILD)/%.o: src/net/%.c src/net/*.h src/game/*.h | $(BUILD)
 	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/palmbolo-sections.s $(BUILD)/palmbolo-sections.ld: src/palmbolo.def | $(BUILD)
+$(BUILD)/palmbolo-sections.s $(BUILD)/palmbolo-sections.ld &: src/palmbolo.def | $(BUILD)
 	m68k-palmos-multigen -b $(BUILD)/palmbolo-sections src/palmbolo.def
 
 $(BUILD)/palmbolo-sections.o: $(BUILD)/palmbolo-sections.s
@@ -140,3 +140,24 @@ build/bttest: host/bttest.c $(BTTESTOBJS) src/net/lockstep.c $(HOSTSRC) src/net/
 bt-test: build/bttest
 	build/bttest
 .PHONY: bt-test
+
+map-test: build/maptest
+	build/maptest
+
+build/maptest: host/maptest.c host/mapstub/PalmOS.h host/mapstub/VFSMgr.h src/mapimport.c src/mapio.c src/mapio.h src/game/mapthumb.c | $(BUILD)
+	gcc -Wall -Wextra -Wno-multichar -O2 -fsanitize=address,undefined -DPALMBOLO_H -Ihost/mapstub -Isrc host/maptest.c src/mapimport.c src/mapio.c src/game/mapthumb.c -o $@
+
+# Offline conversion and the production saved-game adapter.
+offline-test: build/offlinetest build/offlineuitest
+	build/offlinetest
+	build/offlineuitest
+
+build/offlinetest: host/offlinetest.c host/savestub.h src/savegame.c src/net/lockstep.c $(HOSTSRC) src/game/*.h src/net/*.h | $(BUILD)
+	gcc -Wall -Wextra -Wno-multichar -O2 -fsanitize=address,undefined -DPALMBOLO_H -include host/savestub.h host/offlinetest.c src/savegame.c src/net/lockstep.c $(HOSTSRC) -lm -o $@
+.PHONY: offline-test
+
+build/offline-ui.inc: src/main.c tools/offline-ui-source.py
+	python3 tools/offline-ui-source.py
+
+build/offlineuitest: host/offlineuitest.c host/savestub.h build/offline-ui.inc src/resource.h
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/offlineuitest.c -o $@

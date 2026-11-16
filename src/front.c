@@ -4,6 +4,7 @@
 // title is on screen.
 #define ALLOW_ACCESS_TO_INTERNALS_OF_CONTROLS
 #include "palmbolo.h"
+#include "mapio.h"
 #include "resource.h"
 #include "frontlayout.h"
 #include "art.h"
@@ -13,145 +14,6 @@
 #include "game/mapthumb.h"
 #include "netgame.h"
 #include "net/udp.h"
-
-#define kSaveDbName     "PalmBoloSavedGame"
-#define kSaveDbType     'Sgam'
-#define kSaveCreator    'Rmrf'
-#define kSaveMagic      0x50426F53UL    // "PBoS"
-#define kSaveVersion    1
-
-typedef struct SaveHead {
-	UInt32 magic;
-	UInt16 version;
-	UInt16 size;        // sizeof(GameState)
-} SaveHead;
-
-#define kTmpDbName      "PalmBoloSavingGame"
-#define kTmpDbType      'Stmp'
-
-static void SEC_FRONT DeleteTmpDb(void)
-{
-	LocalID id = DmFindDatabase(0, kTmpDbName);
-
-	if (id)
-		DmDeleteDatabase(0, id);
-}
-
-static void SEC_FRONT DeleteStateDb(void)
-{
-	LocalID id = DmFindDatabase(0, kSaveDbName);
-
-	if (id)
-		DmDeleteDatabase(0, id);
-}
-
-// Opens the state database, or NULL when it is missing or from another build.
-static DmOpenRef SEC_FRONT OpenState(void)
-{
-	DmOpenRef db = DmOpenDatabaseByTypeCreator(kSaveDbType, kSaveCreator, dmModeReadOnly);
-	MemHandle h;
-
-	if (!db)
-		return NULL;
-	h = DmQueryRecord(db, 0);
-	if (DmNumRecords(db) == 1 && h && MemHandleSize(h) == sizeof(SaveHead) + sizeof(GameState)) {
-		const SaveHead *sh = (const SaveHead *)MemHandleLock(h);
-		Boolean ok = sh->magic == kSaveMagic && sh->version == kSaveVersion &&
-			sh->size == sizeof(GameState);
-
-		MemHandleUnlock(h);
-		if (ok)
-			return db;
-	}
-	DmCloseDatabase(db);
-	return NULL;
-}
-
-Boolean SEC_FRONT SaveExists(void)
-{
-	DmOpenRef db;
-
-	if (!mapstore_have_save())
-		return false;
-	db = OpenState();
-	if (!db)
-		return false;
-	DmCloseDatabase(db);
-	return true;
-}
-
-// The state is written to a database of another type first, then the map is
-// saved, then the state replaces the old one. A failure before the map is
-// saved leaves the live game and the old save as they were.
-Boolean SEC_FRONT SaveWrite(const GameState *g)
-{
-	DmOpenRef db;
-	MemHandle h;
-	LocalID id;
-	UInt16 index = dmMaxRecordIndex;
-	UInt32 type = kSaveDbType;
-	SaveHead sh;
-	UInt8 *rec;
-
-	DeleteTmpDb();
-	if (DmCreateDatabase(0, kTmpDbName, kSaveCreator, kTmpDbType, false) != errNone)
-		return false;
-	db = DmOpenDatabaseByTypeCreator(kTmpDbType, kSaveCreator, dmModeReadWrite);
-	if (!db) {
-		DeleteTmpDb();
-		return false;
-	}
-	h = DmNewRecord(db, &index, sizeof(sh) + sizeof(GameState));
-	if (!h) {
-		DmCloseDatabase(db);
-		DeleteTmpDb();
-		return false;
-	}
-	sh.magic = kSaveMagic;
-	sh.version = kSaveVersion;
-	sh.size = sizeof(GameState);
-	rec = (UInt8 *)MemHandleLock(h);
-	DmWrite(rec, 0, &sh, sizeof(sh));
-	DmWrite(rec, sizeof(sh), g, sizeof(GameState));
-	MemHandleUnlock(h);
-	DmReleaseRecord(db, index, true);
-	DmCloseDatabase(db);
-	if (mapstore_save() != 0) {
-		DeleteTmpDb();
-		return false;
-	}
-	DeleteStateDb();
-	id = DmFindDatabase(0, kTmpDbName);
-	if (!id || DmSetDatabaseInfo(0, id, kSaveDbName, NULL, NULL, NULL, NULL, NULL, NULL,
-	        NULL, NULL, &type, NULL) != errNone) {
-		// Without its state the saved map is of no use.
-		DeleteTmpDb();
-		mapstore_drop_save();
-		return false;
-	}
-	return true;
-}
-
-Boolean SEC_FRONT SaveRead(GameState *g)
-{
-	DmOpenRef db = OpenState();
-	MemHandle h;
-
-	if (!db)
-		return false;
-	h = DmQueryRecord(db, 0);
-	MemMove(g, (const UInt8 *)MemHandleLock(h) + sizeof(SaveHead), sizeof(GameState));
-	MemHandleUnlock(h);
-	DmCloseDatabase(db);
-	return mapstore_resume() == 0;
-}
-
-void SEC_FRONT SaveDrop(void)
-{
-	DeleteTmpDb();
-	DeleteStateDb();
-	mapstore_drop_save();
-}
 
 // ---- helpers ----
 
@@ -445,7 +307,7 @@ static Boolean SEC_FRONT NetworkDialog(Boolean host)
 		StrCopy(gUdpPort, p);
 		udp_config(ip, number); ok = true; break;
 	}
- done:
+	done:
 	// Fields can resize their handles while editing.
 	if (addr) { addr = FldGetTextHandle(Obj(frm, NetSetupAddress)); FldSetTextHandle(Obj(frm, NetSetupAddress), NULL); if (addr) MemHandleFree(addr); }
 	if (port) { port = FldGetTextHandle(Obj(frm, NetSetupPort)); FldSetTextHandle(Obj(frm, NetSetupPort), NULL); if (port) MemHandleFree(port); }
@@ -603,6 +465,7 @@ static Boolean SEC_FRONT TitleHandler(EventType *e)
 static Char gNames[kMaxMaps][kMapNameLen];
 static Char *gNamePtrs[kMaxMaps];
 static UInt16 gNumMaps;
+static UInt16 gMapPage;
 static UInt16 gMapIndex;        // chosen in the list
 static UInt8 *gThumb;
 static Boolean gThumbValid;
@@ -671,22 +534,45 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 {
 	FormType *frm = FrmGetActiveForm();
 	ListType *lst;
+	Char selected[kMapNameLen];
+	StrCopy(selected, AppPrefsGet()->map);
+	if (e->eType == frmUpdateEvent) {
+		Int16 sel = LstGetSelection((ListType *)Obj(frm, MapList));
+		if (sel >= 0 && sel < gNumMaps) StrCopy(selected, gNames[sel]);
+	}
 
 	switch (e->eType) {
+	case menuEvent:
+		if (e->data.menu.itemID == MapPageItem) {
+			gMapPage = gNumMaps == kMaxMaps ? gMapPage + kMaxMaps - 1 : 0;
+			FrmUpdateForm(MapListForm, frmRedrawUpdateCode);
+			return true;
+		}
+		if (e->data.menu.itemID == MapImportItem || e->data.menu.itemID == MapBeamItem) {
+			Int16 sel = LstGetSelection((ListType *)Obj(frm, MapList));
+			if (e->data.menu.itemID == MapImportItem) MapBrowse();
+			else if (sel >= 0 && sel < gNumMaps) MapBeam(sel, gNames[sel]);
+			FrmUpdateForm(MapListForm, frmRedrawUpdateCode);
+			return true;
+		}
+		return false;
+	case frmUpdateEvent:
+		if (gThumb) MemPtrFree(gThumb);
+		gThumb = NULL;
+		// Rebuild after an import or a receive while the list was open.
 	case frmOpenEvent: {
 		UInt16 i, sel = 0;
-		const AppPrefs *p = AppPrefsGet();
 
 		FitForm(frm, false);
 		lst = (ListType *)Obj(frm, MapList);
-		gNumMaps = MapListBuild(gNames);
+		gNumMaps = MapListBuild(gNames, gMapPage);
 		for (i = 0; i < gNumMaps; i++) {
 			gNamePtrs[i] = gNames[i];
-			if (StrCompare(gNames[i], p->map) == 0)
+			if (StrCompare(gNames[i], selected) == 0)
 				sel = i;
 		}
 		LstSetListChoices(lst, gNamePtrs, gNumMaps);
-		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, true);
+		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, e->eType == frmOpenEvent);
 		LstSetSelection(lst, sel);
 		gThumb = MemPtrNew(MAP_THUMB_SIZE * MAP_THUMB_SIZE);
 		MapThumbLoad(sel);
@@ -1193,10 +1079,10 @@ static void SEC_FRONT ResultsDraw(void)
 		const Tank *k = &g->tanks[i];
 		UInt16 bases = 0, pills = 0;
 
-		bg = i == (gResultsNet ? NetSlot() : 0) ? UI_GOLD : i % 2 ? UI_PAPER : UI_LIGHT;
+		bg = i == (gResultsNet ? NetSlot() : game_viewer_tank(g)) ? UI_GOLD : i % 2 ? UI_PAPER : UI_LIGHT;
 		Fill(6, y, 148, rowHeight, bg);
 		if (gResultsNet && NetName((UInt8)i)[0]) StrCopy(buf, NetName((UInt8)i));
-		else if (i == 0 && !gResultsNet) StrCopy(buf, p->name);
+		else if (i == game_viewer_tank(g) && !gResultsNet) StrCopy(buf, p->name);
 		else StrPrintF(buf, "Bot %d", i);
 		Text(buf, 9, y, 52, UI_INK, bg);
 		for (j = 0; j < g->map.numBases; j++) bases += g->map.bases[j].active && g->map.bases[j].owner == k->player;
@@ -1274,7 +1160,7 @@ static Boolean SEC_FRONT FrontEvent(EventType *e)
 	if (e->eType == frmUpdateEvent) {
 		switch (FrmGetFormId(frm)) {
 		case TitleForm: TitleDraw(frm); break;
-		case MapListForm: FormDraw(frm); MapThumbDraw(); break;
+		case MapListForm: MapListHandler(e); break;
 		case LobbyForm: case JoinForm: FormDraw(frm); LobbyDraw(); break;
 		case ResultsForm: FormDraw(frm); ResultsDraw(); break;
 		default: FormDraw(frm); break;
