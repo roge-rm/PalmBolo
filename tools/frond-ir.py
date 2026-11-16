@@ -302,7 +302,7 @@ def main():
         tap(0, (40, 119), (160, 246))
         cores[0].frame(out / '0' / 'map-list.png')
         if args.map_pdb:
-            tap(0, (50, 33), (100, 66))
+            tap(0, (50, 112), (100, 292))
             cores[0].frame(out / '0' / 'map-selected.png')
         tap(0, (30, 150), (68, 428))
         cores[0].frame(out / '0' / 'new-game.png')
@@ -333,10 +333,17 @@ def main():
             print(f'Play observation: {args.seconds - remaining:.0f}/{args.seconds:.0f} seconds', flush=True)
         if args.leave_ui:
             side = 1 if args.expect == 'join-leave' else 0
-            tap(side, (15, 202), (54, 464), hold_ms=800)
-            time.sleep(3)
-            cores[side].frame(out / str(side) / 'menu.png')
-            tap(side, (20, 18), (40, 36), hold_ms=800)
+            folder = out / str(side)
+            core = cores[side]
+            low = kinds[side] == 'iiix'
+            # Answer the menu and confirmation before the peer's eight-second timeout.
+            core.tap(folder, *((15, 202) if low else (54, 464)), hold_ms=150)
+            time.sleep(0.2)
+            core.frame(folder / 'menu.png')
+            core.tap(folder, *((20, 18) if low else (40, 36)), hold_ms=150)
+            time.sleep(0.2)
+            core.frame(folder / 'leave-confirm.png')
+            core.tap(folder, *((30, 147) if low else (60, 294)), hold_ms=150)
             time.sleep(10)
         tx_finished = False
         if 'tx' in kinds:

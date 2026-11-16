@@ -360,11 +360,36 @@ static inline uint8_t SEC_BOTS cell_h(const BotSearch *q, uint16_t i)
 	return h;
 }
 
+// Distance along both axes breaks ties towards the goal.
+static inline uint16_t SEC_BOTS cell_tie(const BotSearch *q, uint16_t i)
+{
+	return (uint16_t)udiff8((uint8_t)(q->ox + (i & (BOT_WIN - 1))), q->goalX) +
+		udiff8((uint8_t)(q->oy + (i >> 5)), q->goalY);
+}
+
 // The heap has one entry per unsettled cell. A cheaper arrival moves it up.
+// Chebyshev distance is a consistent lower bound for eight-way steps costing at least one.
+static inline uint8_t SEC_BOTS heap_h(const BotSearch *q, uint16_t i)
+{
+	uint8_t h = cheb((uint8_t)(q->ox + (i & (BOT_WIN - 1))),
+		(uint8_t)(q->oy + (i >> 5)), q->goalX, q->goalY);
+
+	return h > q->near ? (uint8_t)(h - q->near) : 0;
+}
+
 static uint8_t SEC_BOTS heap_less(const BotSearch *q, uint16_t a, uint16_t b)
 {
-	return q->distance[a] < q->distance[b] ||
-		(q->distance[a] == q->distance[b] && a < b);
+	uint8_t ha = heap_h(q, a), hb = heap_h(q, b);
+	uint16_t fa = (uint16_t)(q->distance[a] + ha), fb = (uint16_t)(q->distance[b] + hb);
+	uint16_t ta, tb;
+
+	if (fa != fb)
+		return fa < fb;
+	if (ha != hb)
+		return ha < hb;
+	ta = cell_tie(q, a);
+	tb = cell_tie(q, b);
+	return ta < tb || (ta == tb && a < b);
 }
 
 static void SEC_BOTS heap_up(BotSearch *q, uint16_t n)
@@ -482,13 +507,17 @@ static uint8_t SEC_BOTS water(uint8_t t)
 }
 
 // Land after a boat is crossed on foot. A landing needs somewhere safe to go.
-static uint8_t SEC_BOTS step_cost(GameState *s, uint8_t x, uint8_t y, uint8_t afloat)
+static uint8_t SEC_BOTS step_cost(const GameState *s, uint8_t x, uint8_t y, uint8_t afloat, uint8_t escape)
 {
 	uint8_t c, d, t = terrain(x, y);
 
 	if (t == TERRAIN_BOAT)
 		return 1;
 	c = cost(s, x, y, afloat);
+	// A tank already beside deep water may follow shallow water back to land.
+	if (!c && escape && t == TERRAIN_RIVER && x > MAP_EDGE_LOW + 1 && x < MAP_EDGE_HIGH - 1 &&
+	    y > MAP_EDGE_LOW + 1 && y < MAP_EDGE_HIGH - 1)
+		c = 6;
 	if (!afloat || !c || water(t))
 		return c;
 	for (d = 0; d < 8; d += 2)
@@ -520,7 +549,9 @@ static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 	uint8_t x = (uint8_t)(q->ox + lx), y = (uint8_t)(q->oy + ly);
 	uint8_t h = cell_h(q, idx), d, open[4], afloat = q->boat && water(terrain(x, y));
 
-	if (h < q->bestH) {
+	uint8_t escape = !q->boat && !cost(s, x, y, 0);
+
+	if (h < q->bestH || (h == q->bestH && cell_tie(q, idx) < cell_tie(q, q->best))) {
 		q->bestH = h;
 		q->best = idx;
 	}
@@ -538,7 +569,7 @@ static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 		uint8_t nx = (uint8_t)(x + kDX[d * 2]), ny = (uint8_t)(y + kDY[d * 2]);
 		uint16_t ni = (uint16_t)((uint8_t)(nx - q->ox) + (uint8_t)(ny - q->oy) * BOT_WIN);
 		open[d] = (uint8_t)(nx - q->ox) < BOT_WIN && (uint8_t)(ny - q->oy) < BOT_WIN &&
-			nib(q, ni) != 15 && step_cost(s, nx, ny, afloat) &&
+			nib(q, ni) != 15 && step_cost(s, nx, ny, afloat, escape) &&
 			!(q->boat && !afloat && water(terrain(nx, ny)));
 		if (!q->boat && !water(terrain(x, y)) && terrain(nx, ny) == TERRAIN_RIVER &&
 		    g_base_at(s, nx, ny) < 0 && g_pill_at(s, nx, ny) < 0)
@@ -555,7 +586,7 @@ static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 			continue;
 		if ((d & 1) && (!open[d >> 1] || !open[((d >> 1) + 1) & 3]))
 			continue;
-		c = step_cost(s, nx, ny, afloat);
+		c = step_cost(s, nx, ny, afloat, escape);
 		if (!c || (q->boat && !afloat && water(terrain(nx, ny))))
 			continue;
 		if (q->danger[n >> 3] & (1 << (n & 7)))
@@ -1596,26 +1627,26 @@ static void SEC_BOTS bridge(GameState *s, uint8_t t, GameInput *in)
 
 // Steers along the grid: from the tank's square to the middle of the next
 // one towards x, y, going straight where a diagonal would clip a corner.
-static void SEC_BOTS next_square(const GameState *s, const Tank *k, uint8_t *x, uint8_t *y)
+static uint8_t SEC_BOTS next_square(const GameState *s, const Tank *k, uint8_t *x, uint8_t *y)
 {
 	uint8_t tx = (uint8_t)(k->x >> 8), ty = (uint8_t)(k->y >> 8);
 	int8_t sx = *x > tx ? 1 : *x < tx ? -1 : 0, sy = *y > ty ? 1 : *y < ty ? -1 : 0;
 
 	if (sx && sy) {
-		Rows rc;
-		uint8_t a, c;
+		uint8_t escape = !k->boat && !cost(s, tx, ty, 0);
+		uint8_t a = step_cost(s, (uint8_t)(tx + sx), ty, k->boat, escape);
+		uint8_t c = step_cost(s, tx, (uint8_t)(ty + sy), k->boat, escape);
 
-		rows_init(&rc, (uint8_t)(ty - 2));
-		a = cost_rows(s, &rc, (uint8_t)(tx + sx), ty, k->boat);
-		c = cost_rows(s, &rc, tx, (uint8_t)(ty + sy), k->boat);
-
-		if (!a && c)
+		if (!a && !c)
+			return 0;
+		if (!a)
 			sx = 0;
-		else if (!c && a)
+		else if (!c)
 			sy = 0;
 	}
 	*x = (uint8_t)(tx + sx);
 	*y = (uint8_t)(ty + sy);
+	return 1;
 }
 
 // A tick off the mode's time, as the modes count it: escaping while it
@@ -1652,6 +1683,10 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	gd = cheb(tx, ty, b->goalX, b->goalY);
 	stopAt = b->goal == BG_REFUEL || b->goal == BG_PATROL || b->goal == BG_MAN;
 	if (gd == 0 && (stopAt || b->goal == BG_BASE || b->goal == BG_PILL)) {
+		if (b->goal == BG_REFUEL && wdist(k->x, k->y, mid(tx), mid(ty)) > 32) {
+			steer(k, b, util_angle(k->x, k->y, mid(tx), mid(ty)), 8, 128, 0, in);
+			return;
+		}
 		// Waiting at a pill's stage with no clear shot counts as failing.
 		if (b->goal == BG_PILL && mod32_16(s->tick + t, 24) == 0)
 			b->fails++;
@@ -1727,7 +1762,12 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 			b->want = 1;
 		}
 	}
-	next_square(s, k, &px, &py);
+	if (!next_square(s, k, &px, &py)) {
+		b->wayN = 0;
+		b->boatTask = 0;
+		b->want = 1;
+		tsp = 0;
+	}
 	// A boat must be fast to run aground, and slow keeps it off the bank
 	// while there is no path.
 	if (k->boat)
@@ -1738,10 +1778,11 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	if (tsp) {
 		int8_t pill = g_pill_at(s, px, py), base = g_base_at(s, px, py);
 
-		if (!step_cost(s, px, py, k->boat) ||
+		if (!step_cost(s, px, py, k->boat, !k->boat && !cost(s, tx, ty, 0)) ||
 		    (pill >= 0 && s->map.pills[pill].armour > 0) ||
 		    (base >= 0 && bases_cant_drive(s, (uint8_t)base, k->player))) {
 			b->wayN = 0;
+			b->boatTask = 0;
 			b->want = 1;
 			tsp = 0;
 		}
@@ -1758,6 +1799,7 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 			b->modeTime = 40;
 			b->veer = (uint8_t)((k->angle >> 8) + 12 + rnd(s, 9));
 			b->wayN = 0;
+			b->boatTask = 0;
 			// Away at once, counting from the next tick.
 			b->steerBits |= SB_TIME;
 			steer(k, b, (uint16_t)((uint16_t)(b->veer & 31) << 8), 24, 128, 0, in);
@@ -1842,6 +1884,7 @@ static void SEC_BOTS drive(GameState *s, uint8_t t, GameInput *in)
 	if (k->destroyed || k->deathWait) {
 		if (b->goal != BG_NONE || b->wayN) {
 			b->goal = BG_NONE;
+			b->boatTask = 0;
 			b->wayN = 0;
 			b->want = 0;
 			b->mode = BM_NAV;

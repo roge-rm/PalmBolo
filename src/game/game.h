@@ -215,7 +215,7 @@ typedef struct Bot {
 	uint8_t way[BOT_WAYS][2];
 } Bot;
 
-// One bounded Dijkstra search, shared by all bots. Heap ties use cell index.
+// One bounded A* search, shared by all bots. Equal costs favour the goal.
 #define BOT_WIN     32
 #define BOT_CELLS   (BOT_WIN * BOT_WIN)
 #define BOT_NO_CELL 65535U

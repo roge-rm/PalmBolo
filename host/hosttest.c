@@ -924,6 +924,11 @@ static void bot_checks(const uint8_t *ev, uint32_t len)
 	// Low on armour and shells, it goes back to a base and fills up.
 	for (t = 0; t < 2000; t++)
 		bot_tick(&g, &st);
+	// Keep the terrain and live pill obstacles, but isolate refuelling from combat.
+	// Route changes can leave the tank on a base still under hostile pill fire.
+	for (t = 0; t < g.map.numPills; t++)
+		g.map.pills[t].owner = g.tanks[0].player;
+	g.numShells = 0;
 	g.tanks[0].armour = 8;
 	g.tanks[0].shells = 2;
 	armour0 = g.tanks[0].armour;
@@ -932,6 +937,7 @@ static void bot_checks(const uint8_t *ev, uint32_t len)
 		int b = g_base_at(&g, g.tanks[0].x >> 8, g.tanks[0].y >> 8);
 
 		if (getenv("BT") && t % 10 == 0) printf("  t%d ang %u w%u %u,%u %u,%u arm %u goal %u tgt %u at %u,%u mode %u spd %d boat %u ter %u near %d\n", t, g.tanks[0].angle, g.bots[0].wayN, g.bots[0].way[0][0], g.bots[0].way[0][1], g.tanks[0].x>>8, g.tanks[0].y>>8, g.tanks[0].armour, g.bots[0].goal, g.bots[0].target, g.bots[0].goalX, g.bots[0].goalY, g.bots[0].mode, g.tanks[0].speed, g.tanks[0].boat, game_terrain(g.tanks[0].x>>8, g.tanks[0].y>>8), g.numShells);
+
 		bot_tick(&g, &st);
 		if (b >= 0 && g.map.bases[b].owner == g.tanks[0].player)
 			onBase = 1;
@@ -1283,6 +1289,12 @@ int main(int argc, char **argv)
 			gTeams = argc > 4 && strcmp(argv[4], "teams") == 0;
 
 			bot_soak(ev, len, games, ticks);
+			free(ev);
+			printf(gFails ? "%d checks failed\n" : "ok\n", gFails);
+			return gFails != 0;
+		}
+		if (argc > 1 && strcmp(argv[1], "--bots") == 0) {
+			bot_checks(ev, len);
 			free(ev);
 			printf(gFails ? "%d checks failed\n" : "ok\n", gFails);
 			return gFails != 0;

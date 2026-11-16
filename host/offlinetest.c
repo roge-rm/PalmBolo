@@ -46,7 +46,7 @@ uint8_t link_recv(Link *l,uint8_t *from,uint8_t *b) {
 }
 static void protocol(void) {
  Lockstep ls;Link link={0};protocolMode=1;
- ls_host_open(&ls,&link,"host");helloVersion=1;ls_poll(&ls,1);
+ ls_host_open(&ls,&link,"host");helloVersion=LS_VERSION-1;ls_poll(&ls,1);
  assert(rejected==1 && ls.seated==1);
  helloVersion=LS_VERSION;ls_poll(&ls,2);assert(ls.seated==3 && rejected==1);
  protocolMode=0;puts("protocol: old bot rules refused, current version joins");
@@ -155,15 +155,18 @@ static void saves(void) {
  SaveAllow(true); failCreate=1; assert(!SaveWrite(&g)); failCreate=0;
  assert(SaveRead(&read) && read.tick==saved.tick);
  assert(SaveWrite(&g) && SaveRead(&read) && read.tick==g.tick);
- // Older bot state layouts are refused without changing the stored record.
+ // Older bot layouts and search ordering are refused without changing the record.
  DmOpenRef d=DmOpenDatabaseByTypeCreator('Sgam','Rmrf',1);
- UInt16 version=2; memcpy(d->rec.p+4,&version,2);
- UInt32 bytes=d->rec.n; UInt8 *copy=malloc(bytes); assert(copy); memcpy(copy,d->rec.p,bytes);
- assert(!SaveExists() && !SaveRead(&read));
- assert(d->live && d->rec.n==bytes && !memcmp(copy,d->rec.p,bytes)); free(copy);
+ UInt16 version; UInt32 bytes=d->rec.n; UInt8 *copy=malloc(bytes); assert(copy);
+ for(version=2;version<=3;version++) {
+  memcpy(d->rec.p+4,&version,2);memcpy(copy,d->rec.p,bytes);
+  assert(!SaveExists() && !SaveRead(&read));
+  assert(d->live && d->rec.n==bytes && !memcmp(copy,d->rec.p,bytes));
+ }
+ free(copy);
  version=1; memcpy(d->rec.p+4,&version,2); d->rec.n--;
  assert(!SaveExists() && !SaveRead(&read) && d->live);
  SaveDrop(); assert(!SaveExists());
- puts("save: v3 joiner identity/state/map, older layouts preserved and refused, declined overwrite/drop and allocation failure pass");
+ puts("save: v4 joiner identity/state/map, older layouts preserved and refused, declined overwrite/drop and allocation failure pass");
 }
 int main(void) { conversion(); saves(); protocol(); return 0; }

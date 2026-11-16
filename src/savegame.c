@@ -18,7 +18,7 @@ Boolean SEC_FRONT SaveAllowed(void)
 #define kSaveDbType     'Sgam'
 #define kSaveCreator    'Rmrf'
 #define kSaveMagic      0x50426F53UL    // "PBoS"
-#define kSaveVersion    3
+#define kSaveVersion    4
 
 typedef struct SaveHead {
 	UInt32 magic;

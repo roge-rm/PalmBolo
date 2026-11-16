@@ -44,16 +44,25 @@ static void planner(void)
  setup(100,100,104,100); mapstore_set(104,100,TERRAIN_BUILDING); plan(104,100);
  n=0; for(x=0;x<BOT_CELLS;x++)n+=g.search.distance[x]!=BOT_NO_CELL;
  assert(n==BOT_CELLS-1);
+ // Shallow shoreline escape is allowed only from an already unsafe square.
+ setup(100,100,103,101);mapstore_fill(TERRAIN_BUILDING);
+ for(x=100;x<=103;x++) {
+  mapstore_set(x,99,TERRAIN_DEEP_SEA);mapstore_set(x,100,TERRAIN_RIVER);
+ }
+ mapstore_set(102,101,TERRAIN_GRASS);mapstore_set(103,101,TERRAIN_GRASS);
+ assert(!step_cost(&g,101,100,0,0) && step_cost(&g,101,100,0,1));
+ assert(!step_cost(&g,101,99,0,1));
+ plan(103,101);assert(g.bots[0].wayN && g.search.distance[at(103,101)]!=BOT_NO_CELL);
  // Every heap slot is available and ties are stable.
- memset(&g.search,0,sizeof(g.search));
+ memset(&g.search,0,sizeof(g.search));g.search.near=255;
  for(x=0;x<BOT_CELLS;x++){g.search.position[x]=BOT_NO_CELL;g.search.distance[x]=1000+x;heap_up(&g.search,x);}
  g.search.distance[999]=0;heap_up(&g.search,999);assert(heap_pop(&g.search)==999);
  for(x=0;x<BOT_CELLS;x++)if(x!=999)assert(heap_pop(&g.search)==x);
  assert(!g.search.count);
  // A live obstruction invalidates a kept route before driving into it.
- setup(100,100,106,100); plan(106,100);
+ setup(100,100,106,100); plan(106,100);g.bots[0].boatTask=2;
  {uint8_t nx=g.bots[0].way[0][0],ny=g.bots[0].way[0][1];next_square(&g,&g.tanks[0],&nx,&ny);mapstore_set(nx,ny,TERRAIN_BUILDING);}
- navigate(&g,0,&input[0]); assert(g.bots[0].wayN==0 && g.bots[0].want && !(input[0].keys&IN_FASTER));
+ navigate(&g,0,&input[0]); assert(g.bots[0].wayN==0 && !g.bots[0].boatTask && g.bots[0].want && !(input[0].keys&IN_FASTER));
  (void)y;
  puts("planner: cheaper detour, exact hazard cost, full window, heap decrease and changed obstacle pass");
 }
@@ -83,6 +92,19 @@ static void sea(int existing)
 static void scenarios(void)
 {
  int b=0,l=0,x,y,repeat;uint32_t sums[2];
+ setup(100,100,108,100);g.map.bases[0].owner=0;
+ g.tanks[0].armour=8;g.tanks[0].shells=2;
+ for(x=0;x<3000 && g.tanks[0].armour<40;x++)game_tick(&g,input);
+ assert(g.tanks[0].armour==40 && !g.tanks[0].deaths);
+ assert((g.tanks[0].x>>8)==108 && (g.tanks[0].y>>8)==100);
+ assert(wdist(g.tanks[0].x,g.tanks[0].y,mid(108),mid(100))<=64);
+ printf("return to base and refill: %d ticks\n",x);
+ setup(100,100,103,101);mapstore_fill(TERRAIN_BUILDING);
+ for(x=100;x<=103;x++) {
+  mapstore_set(x,99,TERRAIN_DEEP_SEA);mapstore_set(x,100,TERRAIN_RIVER);
+ }
+ mapstore_set(102,101,TERRAIN_GRASS);mapstore_set(103,101,TERRAIN_GRASS);
+ run_capture("follow shallow shoreline escape",4000,&b,&l);assert(!b && !l);
  for(repeat=0;repeat<2;repeat++) {
   b=l=0;sea(1);sums[repeat]=run_capture("board, cross and land",7000,&b,&l);assert(b==1 && l==1);
  }
