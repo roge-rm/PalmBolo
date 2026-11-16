@@ -37,7 +37,7 @@ ART      = build/art
 CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES) -I$(ART) -Isrc
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
-SRCS     = main screen detect dlog timing mapload mapimport mapio mapstore_palm tileview tilepick panel sound front savegame blit keys compose netgame looptest
+SRCS     = main appstate screen screendraw detect dlog timing mapload mapimport mapio mapstore_palm tileview tilepick panel sound front savegame blit keys compose netgame looptest
 GAMESRCS = game tank shells pills lgm treegrow util map mapthumb bot
 # The scripted games are for the debug self-test only.
 ifdef DEBUG
@@ -161,3 +161,20 @@ build/offline-ui.inc: src/main.c tools/offline-ui-source.py
 
 build/offlineuitest: host/offlineuitest.c host/savestub.h build/offline-ui.inc src/resource.h
 	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/offlineuitest.c -o $@
+
+build/screen-test.c: tools/screen-test-source.py host/screentest.c src/screen.c src/screendraw.c src/screendraw.h src/sonyhr.h src/palmbolo.h src/tileview.c src/panel.c src/detect.c | $(BUILD)
+	python3 tools/screen-test-source.py
+
+build/screentest: build/screen-test.c
+	gcc -Wall -Wextra -Wno-unused-parameter -Wno-multichar -O2 -fsanitize=address,undefined $< -o $@
+
+screen-test: build/screentest
+	build/screentest
+.PHONY: screen-test
+
+build/bottest: host/bottest.c $(HOSTSRC) src/game/*.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/bottest.c $(filter-out src/game/bot.c,$(HOSTSRC)) -o $@
+
+bot-test: build/bottest
+	build/bottest
+.PHONY: bot-test

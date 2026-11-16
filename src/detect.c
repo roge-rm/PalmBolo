@@ -49,7 +49,7 @@ void SEC_DETECT DeviceDetect(DeviceInfo *d)
 	}
 
 	d->sony = FtrGet(kSonyCreator, 1, &v) == errNone;
-	d->sonyHR = SysLibFind("Sony HR Lib", &ref) == errNone;
+	d->sonyHR = SysLibFind("Sony HR Library", &ref) == errNone;
 	d->pins = FtrGet(pinCreator, pinFtrAPIVersion, &v) == errNone;
 }
 

@@ -33,8 +33,24 @@ Err DmSetDatabaseInfo(UInt16 c,LocalID id,const Char *n,UInt16 *a,void *b,void *
  (void)c;(void)a;(void)b;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;
  strcpy(dbs[id-1].name,n); dbs[id-1].type=*t; return 0;
 }
-int link_send(Link *l,uint8_t to,const uint8_t *b,uint8_t n) { (void)l;(void)to;(void)b;(void)n; assert(0); return 1; }
-uint8_t link_recv(Link *l,uint8_t *from,uint8_t *b) { (void)l;(void)from;(void)b; assert(0); return 0; }
+static int protocolMode, helloVersion, rejected;
+int link_send(Link *l,uint8_t to,const uint8_t *b,uint8_t n) {
+ (void)l;(void)to;assert(protocolMode);
+ if(n>=2 && b[0]==9 && b[1]==LS_STOP_VERSION)rejected++;
+ return 0;
+}
+uint8_t link_recv(Link *l,uint8_t *from,uint8_t *b) {
+ (void)l;assert(protocolMode);
+ if(!helloVersion)return 0;
+ *from=1;b[0]=1;b[1]=helloVersion;b[2]=0;helloVersion=0;return 3;
+}
+static void protocol(void) {
+ Lockstep ls;Link link={0};protocolMode=1;
+ ls_host_open(&ls,&link,"host");helloVersion=1;ls_poll(&ls,1);
+ assert(rejected==1 && ls.seated==1);
+ helloVersion=LS_VERSION;ls_poll(&ls,2);assert(ls.seated==3 && rejected==1);
+ protocolMode=0;puts("protocol: old bot rules refused, current version joins");
+}
 static void setup(GameState *g, Lockstep *ls, int bank, int slot) {
  GameSetup s = {0};
  mapstore_host_bank(bank); mapstore_open(TERRAIN_GRASS);
@@ -139,11 +155,15 @@ static void saves(void) {
  SaveAllow(true); failCreate=1; assert(!SaveWrite(&g)); failCreate=0;
  assert(SaveRead(&read) && read.tick==saved.tick);
  assert(SaveWrite(&g) && SaveRead(&read) && read.tick==g.tick);
- // Legacy header/state layout has no viewer byte and resumes tank zero.
+ // Older bot state layouts are refused without changing the stored record.
  DmOpenRef d=DmOpenDatabaseByTypeCreator('Sgam','Rmrf',1);
- UInt16 version=1; memcpy(d->rec.p+4,&version,2); d->rec.n--;
- game_set_viewer(2); assert(SaveExists() && SaveRead(&read) && game_viewer()==0);
+ UInt16 version=2; memcpy(d->rec.p+4,&version,2);
+ UInt32 bytes=d->rec.n; UInt8 *copy=malloc(bytes); assert(copy); memcpy(copy,d->rec.p,bytes);
+ assert(!SaveExists() && !SaveRead(&read));
+ assert(d->live && d->rec.n==bytes && !memcmp(copy,d->rec.p,bytes)); free(copy);
+ version=1; memcpy(d->rec.p+4,&version,2); d->rec.n--;
+ assert(!SaveExists() && !SaveRead(&read) && d->live);
  SaveDrop(); assert(!SaveExists());
- puts("save: v2 joiner identity/state/map, v1 compatibility, declined overwrite/drop and allocation failure pass");
+ puts("save: v3 joiner identity/state/map, older layouts preserved and refused, declined overwrite/drop and allocation failure pass");
 }
-int main(void) { conversion(); saves(); return 0; }
+int main(void) { conversion(); saves(); protocol(); return 0; }

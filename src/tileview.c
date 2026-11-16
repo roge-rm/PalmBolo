@@ -20,6 +20,7 @@
 // row of buttons: the five builder actions, the one chosen shown inverted,
 // and the gunsight nearer and further.
 #include "palmbolo.h"
+#include "screendraw.h"
 #include "resource.h"
 #include "game/game.h"
 #include "game/mapstore.h"
@@ -122,7 +123,7 @@ static WinHandle SEC_COLD NewWindow1(Coord w, Coord ht)
 	WinHandle win = NULL;
 
 	gMaskBmp = BmpCreate(w, ht, 1, NULL, &err);
-	if (gMaskBmp && gHiRes) {
+	if (gMaskBmp && gHiRes && !ScreenSony()) {
 		gMaskBmpV3 = (BitmapType *)BmpCreateBitmapV3(gMaskBmp, kDensityDouble,
 			BmpGetBits(gMaskBmp), NULL);
 		if (gMaskBmpV3)
@@ -179,7 +180,7 @@ static WinHandle SEC_COLD LoadSheet(UInt16 id, UInt16 cells, Boolean oneBit, Bli
 		win = NewWindow1(w, ht);
 	else
 		win = WinCreateOffscreenWindow(w, ht, gHiRes ? nativeFormat : screenFormat, &err);
-	h = DmGetResource(bitmapRsc, id);
+	h = DmGetResource(bitmapRsc, ScreenSony() ? id + 10 : id);
 	if (!win || !h) {
 		if (oneBit)
 			FreeMask1(win);
@@ -311,14 +312,16 @@ static Boolean SEC_COLD LoadSheets(void)
 // Native pixel drawing is on for as long as the view draws.
 static void SEC_UI NativeOn(void)
 {
-	if (gHiRes)
+	ScreenNative(true);
+	if (gHiRes && !ScreenSony())
 		gOldCoord = WinSetCoordinateSystem(kCoordinatesNative);
 }
 
 static void SEC_UI NativeOff(void)
 {
-	if (gHiRes)
+	if (gHiRes && !ScreenSony())
 		WinSetCoordinateSystem(gOldCoord);
+	ScreenNative(false);
 }
 
 static Boolean SEC_UI PinsAvailable(void)
@@ -400,6 +403,8 @@ void SEC_COLD ViewResized(void)
 			gBarH = gTs + 5;
 		FntSetFont(old);
 	}
+	if (ScreenSony())
+		gBarH = (gBarH + 1) & ~1;
 	NativeOff();
 	gW = w;
 	gPanelH = PanelLayout(w);
@@ -816,13 +821,14 @@ static void SEC_UI DrawTerrain(const uint8_t *up, const uint8_t *row, const uint
 }
 
 // Draws the part of the view inside r (view pixels) from the map.
-static void SEC_UI DrawRegion(const RectangleType *r)
+static void SEC_UI DrawRegion(const RectangleType *requested)
 {
+	RectangleType aligned = *requested;
+	const RectangleType *r = &aligned;
 	// The view and r are never left of or above the map, so a shift
 	// divides by the tile size (256 world units over gShift).
 	UInt8 ts = (UInt8)(8 - gShift);
-	Int32 tx0 = (gVx + r->topLeft.x) >> ts, tx1 = (gVx + r->topLeft.x + r->extent.x - 1) >> ts;
-	Int32 ty0 = (gVy + r->topLeft.y) >> ts, ty1 = (gVy + r->topLeft.y + r->extent.y - 1) >> ts;
+	Int32 tx0, tx1, ty0, ty1;
 	Int32 tx, ty;
 	UInt16 i;
 	UInt8 x0, y0, w, h;
@@ -832,6 +838,13 @@ static void SEC_UI DrawRegion(const RectangleType *r)
 
 	if (!gSheet || r->extent.x <= 0 || r->extent.y <= 0)
 		return;
+	ScreenAlignRect(&aligned);
+	if (gComposing && ScreenSony())
+		CompAdd(r);
+	tx0 = (gVx + r->topLeft.x) >> ts;
+	tx1 = (gVx + r->topLeft.x + r->extent.x - 1) >> ts;
+	ty0 = (gVy + r->topLeft.y) >> ts;
+	ty1 = (gVy + r->topLeft.y + r->extent.y - 1) >> ts;
 	if (tx1 > MAP_SIZE - 1)
 		tx1 = MAP_SIZE - 1;
 	if (ty1 > MAP_SIZE - 1)
@@ -1416,6 +1429,7 @@ static void SEC_UI Erase(const RectangleType *r)
 {
 	RectangleType c = *r;
 
+	ScreenAlignRect(&c);
 	if (c.topLeft.x < 0) {
 		c.extent.x += c.topLeft.x;
 		c.topLeft.x = 0;

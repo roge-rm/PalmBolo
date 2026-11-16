@@ -4,6 +4,7 @@
 // title is on screen.
 #define ALLOW_ACCESS_TO_INTERNALS_OF_CONTROLS
 #include "palmbolo.h"
+#include "sonyhr.h"
 #include "mapio.h"
 #include "resource.h"
 #include "frontlayout.h"
@@ -384,14 +385,17 @@ static void SEC_FRONT TitleDraw(FormType *frm)
 
 	FormDraw(frm);
 	if (!gTitleRes)
-		gTitleRes = DmGetResource(bitmapRsc, ArtTitleBmp);
+		gTitleRes = DmGetResource(bitmapRsc, ArtTitleBmp + (ScreenSony() ? 10 : 0));
 	if (gTitleRes) {
 		clip.topLeft.x = 0;
 		clip.topLeft.y = 0;
 		clip.extent.x = 160;
 		clip.extent.y = 111;
 		WinSetClip(&clip);
-		WinDrawBitmap((BitmapType *)MemHandleLock(gTitleRes), 0, 0);
+		if (ScreenSony())
+			HRWinDrawBitmap(ScreenSonyRef(), (BitmapType *)MemHandleLock(gTitleRes), 0, 0);
+		else
+			WinDrawBitmap((BitmapType *)MemHandleLock(gTitleRes), 0, 0);
 		MemHandleUnlock(gTitleRes);
 		WinResetClip();
 	}

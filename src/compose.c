@@ -4,6 +4,7 @@
 // screen when the frame is done, so a sprite is never seen erased.
 // Without the memory for it the view is drawn on screen as before.
 #include "palmbolo.h"
+#include "screendraw.h"
 
 #define kMaxFlush   48
 // Left free in the dynamic heap after the window is made.

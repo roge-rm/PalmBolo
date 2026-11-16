@@ -191,6 +191,7 @@ typedef struct Bot {
 	uint8_t clear;          // the line to what it aims at was clear at the last look
 	uint8_t want;           // waiting for a path search
 	uint8_t pathX, pathY;   // goal the waypoints lead to
+	uint8_t pathOX, pathOY; // keep a useful maze window while following its route
 	uint8_t boat;           // on a boat when the path was made
 	uint8_t fails;          // searches in a row that got no nearer
 	uint8_t skip, skipTime; // goal (kind << 5 | index) left alone for a while
@@ -209,39 +210,27 @@ typedef struct Bot {
 	uint8_t fireRange;      // range of that shot, 16 world units
 	uint8_t lastArmour;     // armour at the last tick, to see a hit
 	uint8_t lookX, lookY;   // square at the last full look
+	uint8_t boatTask, boatX, boatY; // 1 board, 2 build at a river launch
 	uint8_t wayN;
 	uint8_t way[BOT_WAYS][2];
 } Bot;
 
-// The one path search running, shared by all bots in turn: a search by
-// cost over a window of BOT_WIN squares, a few cells a tick for each bot.
-// Cells wait in buckets by the round they spread in, BOT_BUCKETS rounds
-// ahead at most; a bucket is a list through link.
+// One bounded Dijkstra search, shared by all bots. Heap ties use cell index.
 #define BOT_WIN     32
-#define BOT_QUEUE   128
-#define BOT_BUCKETS 32
-#define BOT_NO_SLOT 255
+#define BOT_CELLS   (BOT_WIN * BOT_WIN)
+#define BOT_NO_CELL 65535U
 typedef struct BotSearch {
-	uint8_t who;            // tank searched for, plus 1; 0 when idle
-	uint8_t phase;          // 2 marking pill zones, 0 searching, 1 tracing the path back
-	uint8_t ox, oy;         // window's top left square
-	uint8_t goalX, goalY;
-	uint8_t round;          // bucket being spread
-	uint8_t free;           // first free queue slot
-	uint8_t count;          // cells queued
-	uint8_t boat;           // searching as a boat
-	uint8_t next;           // round robin: the tank after the last served
-	uint8_t bestH, wayN;
-	uint8_t near;           // stop this near the goal
-	uint8_t zone;           // next pill to mark the zone of
-	uint16_t best, cur;     // window cells: best so far; cells expanded, then the trace position
-	uint8_t lastDir, wayPos;        // wayPos: next slot of the ring
-	uint8_t way[BOT_WAYS][2];       // turning points found, a ring
-	uint8_t cell[BOT_WIN * BOT_WIN / 2];  // a nibble a cell: 0 new, 1-8 from, 9 start,
-	                                      // 10 new in a hostile pill's reach, 15 blocked
-	uint16_t queue[BOT_QUEUE];      // window cell in each slot
-	uint8_t link[BOT_QUEUE];        // next slot in its bucket or the free list
-	uint8_t bhead[BOT_BUCKETS], btail[BOT_BUCKETS]; // each bucket's first and last slot
+	uint8_t who, phase;     // owner + 1; 2 zones, 0 search, 1 trace
+	uint8_t ox, oy, goalX, goalY, boat, next;
+	uint8_t bestH, wayN, near, zone, lastDir, wayPos;
+	uint8_t launchKind, launchX, launchY, startH;
+	uint16_t best, cur, count, launch, launchScore;
+	uint8_t way[BOT_WAYS][2];
+	uint8_t cell[BOT_CELLS / 2]; // 0 new, 1..8 parent direction, 9 start, 15 solid
+	uint8_t danger[BOT_CELLS / 8];
+	uint16_t distance[BOT_CELLS];
+	uint16_t heap[BOT_CELLS];
+	uint16_t position[BOT_CELLS]; // BOT_NO_CELL when absent from the heap
 } BotSearch;
 
 typedef struct GameState {

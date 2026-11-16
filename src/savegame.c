@@ -18,7 +18,7 @@ Boolean SEC_FRONT SaveAllowed(void)
 #define kSaveDbType     'Sgam'
 #define kSaveCreator    'Rmrf'
 #define kSaveMagic      0x50426F53UL    // "PBoS"
-#define kSaveVersion    2
+#define kSaveVersion    3
 
 typedef struct SaveHead {
 	UInt32 magic;
@@ -54,12 +54,10 @@ static DmOpenRef SEC_FRONT OpenState(void)
 	if (!db)
 		return NULL;
 	h = DmQueryRecord(db, 0);
-	if (DmNumRecords(db) == 1 && h && (MemHandleSize(h) == sizeof(SaveHead) + sizeof(GameState) ||
-	    MemHandleSize(h) == sizeof(SaveHead) + sizeof(GameState) + 1)) {
+	if (DmNumRecords(db) == 1 && h && MemHandleSize(h) == sizeof(SaveHead) + sizeof(GameState) + 1) {
 		const SaveHead *sh = (const SaveHead *)MemHandleLock(h);
 		Boolean ok = sh->magic == kSaveMagic && sh->size == sizeof(GameState) &&
-			((sh->version == 1 && MemHandleSize(h) == sizeof(SaveHead) + sizeof(GameState)) ||
-			 (sh->version == kSaveVersion && MemHandleSize(h) == sizeof(SaveHead) + sizeof(GameState) + 1));
+			(sh->version == kSaveVersion && MemHandleSize(h) == sizeof(SaveHead) + sizeof(GameState) + 1);
 
 		MemHandleUnlock(h);
 		if (ok)
@@ -148,7 +146,7 @@ Boolean SEC_FRONT SaveRead(GameState *g)
 	{
 		const SaveHead *sh = (const SaveHead *)MemHandleLock(h);
 		const UInt8 *state = (const UInt8 *)sh + sizeof(SaveHead);
-		UInt8 viewer = sh->version == 1 ? 0 : state[sizeof(GameState)];
+		UInt8 viewer = state[sizeof(GameState)];
 
 		MemMove(g, state, sizeof(GameState));
 		if (viewer >= GAME_MAX_PLAYERS || game_tank_of(g, viewer) < 0) {

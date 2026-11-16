@@ -4,6 +4,8 @@ PalmBolo is Bolo for Palm OS. Drive a tank around an island, capture bases and p
 
 The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.10.0 has two-player infrared games and up to 7 bots in single-player. The current source also adds up to eight-player UDP network games and four-player Bluetooth games; neither is in the 0.10.0 release.
 
+The current source improves bot boats and maze routes. Bots can find or build a boat, gather nearby wood, cross water and collect a stranded builder. These builds use network protocol 2 and save layout 3; older builds cannot join them, and older saved games cannot resume. Existing save databases are left in place until a new save replaces them.
+
 Let me know what works and what doesn't, or open an issue here.
 
 Enjoy,<br>
@@ -33,6 +35,8 @@ All from the [Frond](https://github.com/roge-rm/frond) emulator.
 ## Devices
 
 Palm OS 3.0 and up, from 160×160 mono to 320×480 colour. So far it's been tested in Frond on a Tungsten TX, a Palm IIIx (it runs at full speed there), a Zire 72 and a Clié TG50 for the keyboard.
+
+The current source adds native 320×320 drawing on older Clié devices through Sony's HR library, with 16-pixel art. It keeps 160×160 drawing when the library is unavailable. Sony rendering has focused host checks; emulator and physical-device checks remain pending. This is not in the 0.10.0 release.
 
 ## Install
 

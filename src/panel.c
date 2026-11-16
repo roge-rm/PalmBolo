@@ -17,6 +17,7 @@
 // All drawing is in native pixels, so the caller has native coordinates on
 // on a double density screen.
 #include "palmbolo.h"
+#include "screendraw.h"
 #include "game/game.h"
 #include "game/mapstore.h"
 #include "netgame.h"
@@ -414,6 +415,15 @@ static void SEC_UI OvPatch(Coord x0, Coord y0, Coord w, Coord h)
 		h = kOv - y0;
 	if (!gOv || w <= 0 || h <= 0)
 		return;
+	r.topLeft.x = x0;
+	r.topLeft.y = y0;
+	r.extent.x = w;
+	r.extent.y = h;
+	ScreenAlignRect(&r);
+	x0 = r.topLeft.x;
+	y0 = r.topLeft.y;
+	w = r.extent.x;
+	h = r.extent.y;
 	old = WinSetDrawWindow(gOv);
 	gFore = 0xFFFF;
 	for (y = y0; y < y0 + h; y++) {

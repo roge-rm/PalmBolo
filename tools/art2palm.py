@@ -262,6 +262,21 @@ def main():
                 os.path.join(preview, "art-preview-masks%d-1bit.png" % s))
     rcp.append("END\n")
     rcp.extend(title_and_icons(out, mats, preview))
+    # Sony HR Lib uses physical sizes in ordinary bitmap families on OS 3/4.
+    for sheet, rid in (("terrain", RES_TERRAIN), ("sprites", RES_SPRITES)):
+        rcp.append("BITMAP ID %d\nBEGIN\n" % (rid + 10))
+        for depth in (1, 2, 4, 8):
+            img = render(src[sheet, 16], mats, depth)
+            f = os.path.join(out, "%s16-%d.bmp" % (sheet, depth))
+            (img.convert("1") if depth == 1 else img).save(f)
+            rcp.append('  BITMAP "%s" BPP %d%s\n' %
+                       (f, depth, " COMPRESS" if depth >= 4 else ""))
+        rcp.append("END\n")
+    rcp.append('BITMAP ID %d\nBEGIN\n  BITMAP "%s" BPP 1\nEND\n' %
+               (RES_MASKS + 10, os.path.join(out, "masks16-1.bmp")))
+    rcp.append("BITMAP ID %d\nBEGIN\n" % (RES_TITLE + 10))
+    rcp.extend(family(out, [("title-320", d, 1, False, True) for d in (1, 2, 4, 8)]))
+    rcp.append("END\n")
     open(os.path.join(out, "art.rcp"), "w").write("".join(rcp))
 
     h = ["// Made by tools/art2palm.py from res/art/layout.txt. Don't edit.\n",

@@ -128,6 +128,10 @@ void SEC_DRAW BlitSprite(const BlitWin *mask, Coord mx, Coord my, const BlitWin 
 // restores them.
 void SEC_COLD ScreenInit(const DeviceInfo *d);
 void SEC_COLD ScreenExit(void);
+Boolean SEC_UI ScreenSony(void);
+Boolean SEC_DRAW ScreenSonyNative(void);
+UInt16 SEC_DRAW ScreenSonyRef(void);
+void SEC_UI ScreenNative(Boolean on);
 Boolean SEC_UI ScreenHiRes(void);      // drawing in native (double density) pixels
 Boolean SEC_UI ScreenNewWin(void);     // OS 3.5 or later
 UInt16 SEC_UI ScreenDepth(void);

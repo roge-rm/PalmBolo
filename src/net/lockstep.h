@@ -15,7 +15,7 @@
 #include "../game/game.h"
 #include "link.h"
 
-#define LS_VERSION      1
+#define LS_VERSION      2
 #define LS_TICKS        4       // ticks in a turn, 80 ms
 #define LS_SLOTS        GAME_MAX_TANKS  // player n drives tank n
 #define LS_WIN          32      // turns kept, a power of two

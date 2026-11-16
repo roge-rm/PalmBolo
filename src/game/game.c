@@ -1013,18 +1013,24 @@ uint32_t SEC_COLD game_checksum(const GameState *s)
 		for (i = 0; i < s->numTanks; i++)
 			if (s->bots[i].level)
 				crc = util_crc(crc, &s->bots[i].level, sizeof(Bot));
-		crc = util_crc(crc, &q->who, 15);
+		crc = util_crc(crc, &q->who, 18);
 		if (q->who) {
-			uint8_t j, k;
+			uint16_t j;
 
 			crc = c16(crc, q->best);
 			crc = c16(crc, q->cur);
-			crc = c8(crc, q->lastDir);
+			crc = c16(crc, q->count);
+			crc = c16(crc, q->launch);
+			crc = c16(crc, q->launchScore);
 			crc = util_crc(crc, &q->way[0][0], sizeof(q->way));
 			crc = util_crc(crc, q->cell, sizeof(q->cell));
-			for (k = 0; k < BOT_BUCKETS; k++)
-				for (j = q->bhead[k]; j != BOT_NO_SLOT; j = q->link[j])
-					crc = c16(crc, q->queue[j]);
+			crc = util_crc(crc, q->danger, sizeof(q->danger));
+			for (j = 0; j < BOT_CELLS; j++) {
+				crc = c16(crc, q->distance[j]);
+				crc = c16(crc, q->position[j]);
+			}
+			for (j = 0; j < q->count; j++)
+				crc = c16(crc, q->heap[j]);
 		}
 	}
 	return ~crc;

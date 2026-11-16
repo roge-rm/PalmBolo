@@ -7,7 +7,7 @@
 #include "netgame.h"
 
 static DeviceInfo gDev;
-static GameState gGame;
+extern GameState gGame;
 static Boolean gClockReset;
 static Boolean gKeepSave; // old save stays until an offline game is written
 static Boolean gNet;        // the game is a network game (netgame.h)

@@ -1,6 +1,12 @@
 // Screen: depth and coordinate system setup.
 #include "palmbolo.h"
+#include "sonyhr.h"
 
+static UInt16 gSonyRef;
+static Boolean gSony, gSonyLoaded, gSonyOpen, gSonyMode, gNative;
+static UInt32 gSonyWidth, gSonyHeight, gSonyDepth;
+static Boolean gSonyColour;
+static FontID gNativeFont;
 static UInt32 gOldDepth;
 static Boolean gDepthSet;
 static Boolean gHiRes;          // drawing in the native (double density) system
@@ -22,6 +28,57 @@ IndexedColorType SEC_UI ScreenIndex(UInt8 r, UInt8 g, UInt8 b)
 	return WinRGBToIndex(&c);
 }
 
+// Only remove a library loaded here, after its last open reference closes.
+static void SEC_COLD SonyClose(void)
+{
+	Err err = errNone;
+
+	if (gSonyMode)
+		HRWinScreenMode(gSonyRef, winScreenModeSet, &gSonyWidth,
+			&gSonyHeight, &gSonyDepth, &gSonyColour);
+	if (gSonyOpen)
+		err = HRClose(gSonyRef);
+	if (gSonyLoaded && err == errNone)
+		SysLibRemove(gSonyRef);
+	gSony = gSonyLoaded = gSonyOpen = gSonyMode = false;
+}
+
+static Boolean SEC_COLD SonyInit(const DeviceInfo *d)
+{
+	UInt16 version = 0;
+	UInt32 w = 320, h = 320;
+	Err err;
+
+	if (d->winVersion >= 4 || (!d->sony && !d->sonyHR))
+		return false;
+	err = SysLibFind("Sony HR Library", &gSonyRef);
+	if (err == sysErrLibNotFound) {
+		err = SysLibLoad('libr', 'SlHr', &gSonyRef);
+		gSonyLoaded = err == errNone;
+	}
+	if (err != errNone)
+		return false;
+	if (HROpen(gSonyRef) != errNone) {
+		SonyClose();
+		return false;
+	}
+	gSonyOpen = true;
+	if (HRGetAPIVersion(gSonyRef, &version) != errNone || version == 0 ||
+		HRWinScreenMode(gSonyRef, winScreenModeGet, &gSonyWidth,
+			&gSonyHeight, &gSonyDepth, &gSonyColour) != errNone) {
+		SonyClose();
+		return false;
+	}
+	if (HRWinScreenMode(gSonyRef, winScreenModeSet, &w, &h, NULL, NULL) != errNone) {
+		SonyClose();
+		return false;
+	}
+	gSonyMode = true;
+	gSony = true;
+	LOG(("Sony HR %x: native 320 x 320", version));
+	return true;
+}
+
 void SEC_COLD ScreenInit(const DeviceInfo *d)
 {
 	UInt32 depth;
@@ -30,6 +87,8 @@ void SEC_COLD ScreenInit(const DeviceInfo *d)
 	gNewWin = d->rom >= kRom35;
 	gOs40 = d->rom >= sysMakeROMVersion(4, 0, 0, sysROMStageRelease, 0);
 	gHiRes = d->winVersion >= 4 && d->density == kDensityDouble;
+	if (!gHiRes && SonyInit(d))
+		gHiRes = true;
 	gDepth = 1;
 
 	if (d->rom >= kMinRomVersion) {
@@ -57,12 +116,15 @@ void SEC_COLD ScreenInit(const DeviceInfo *d)
 
 void SEC_COLD ScreenExit(void)
 {
+	ScreenNative(false);
 	if (gDepthSet) {
 		UInt32 depth = gOldDepth;
 
 		WinScreenMode(winScreenModeSet, NULL, NULL, &depth, NULL);
 		gDepthSet = false;
 	}
+	SonyClose();
+	gHiRes = false;
 }
 
 // File scope: a function-local const table in a segment other than the
@@ -91,4 +153,21 @@ void SEC_UI ScreenDisplayRect(RectangleType *r)
 	r->topLeft.x = 0;
 	r->topLeft.y = 0;
 	WinGetDisplayExtent(&r->extent.x, &r->extent.y);
+}
+
+Boolean SEC_UI ScreenSony(void) { return gSony; }
+Boolean SEC_DRAW ScreenSonyNative(void) { return gSony && gNative; }
+UInt16 SEC_DRAW ScreenSonyRef(void) { return gSonyRef; }
+
+void SEC_UI ScreenNative(Boolean on)
+{
+	if (gSony && on != gNative) {
+		if (on) {
+			gNativeFont = FntGetFont();
+			HRFntSetFont(gSonyRef, gNativeFont + 8);
+		} else {
+			FntSetFont(gNativeFont);
+		}
+	}
+	gNative = on;
 }
