@@ -22,7 +22,7 @@
 #define LINK_MAX_NODES  8
 
 // Kinds of link.
-enum { LINK_LOOP = 0, LINK_IR = 1 };
+enum { LINK_LOOP = 0, LINK_IR = 1, LINK_UDP = 2, LINK_BT = 3 };
 enum { LINK_ROLE_HOST = 0, LINK_ROLE_JOIN = 1 };
 
 // An open link end. reliable is 1 when frames arrive in order and none are

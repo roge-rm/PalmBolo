@@ -5,6 +5,8 @@
 #include "netgame.h"
 #include "net/lockstep.h"
 #include "net/infrared.h"
+#include "net/udp.h"
+#include "net/bluetooth.h"
 #include "game/game.h"
 #include "game/util.h"
 #ifdef LOOPBACK_TEST
@@ -28,6 +30,7 @@ static UInt32 gLobbySum;
 static UInt8 gBotsSeen;             // tanks known to be bots, for the "took over" line
 static Char gNote[40];
 static UInt32 gNoteUntil;
+static UInt32 gJoinAt;
 #ifdef DEBUG
 static UInt32 gCompared;
 static UInt8 gWaitLogged;
@@ -52,8 +55,14 @@ UInt8 NetLinks(UInt8 *kinds, const Char **names)
 		kinds[n] = LINK_IR;
 		names[n++] = "Infrared";
 	}
-	(void)kinds;
-	(void)names;
+	if (udp_available()) {
+		kinds[n] = LINK_UDP;
+		names[n++] = "Network";
+	}
+	if (bt_available()) {
+		kinds[n] = LINK_BT;
+		names[n++] = "Bluetooth";
+	}
 	return n;
 }
 
@@ -113,7 +122,7 @@ Boolean NetHost(UInt8 kind, UInt16 index, const Char *name, GameState *g)
 	}
 	if (!OpenLink(kind, LINK_ROLE_HOST)) {
 		MapBytesClose(&gBytes);
-		Why("Can't open the link.");
+		Why(kind == LINK_UDP ? udp_error() : kind == LINK_BT ? bt_error() : "Can't open the link.");
 		return false;
 	}
 	ls_host_open(&gLs, &gLink, p->name);
@@ -130,10 +139,11 @@ Boolean NetJoin(UInt8 kind, GameState *g)
 	gKind = kind;
 	gMap[0] = 0;
 	if (!OpenLink(kind, LINK_ROLE_JOIN)) {
-		Why("Can't open the link.");
+		Why(kind == LINK_UDP ? udp_error() : kind == LINK_BT ? bt_error() : "Can't open the link.");
 		return false;
 	}
 	ls_join_open(&gLs, &gLink, AppPrefsGet()->name);
+	gJoinAt = NetNowMs();
 	gPhase = NET_LOBBY;
 	return true;
 }
@@ -322,10 +332,23 @@ static void SEC_NET LobbyCheck(void)
 	sum = util_crc(0xFFFFFFFFUL, b, sizeof(b));
 	sum = util_crc(sum, (const UInt8 *)gLs.start.names, sizeof(gLs.start.names));
 	sum = util_crc(sum, (const UInt8 *)gLs.mapName, sizeof(gLs.mapName));
+	if (gKind == LINK_BT) {
+		const Char *status = bt_status();
+		sum = util_crc(sum, (const UInt8 *)status, StrLen(status));
+	}
 	if (sum != gLobbySum) {
 		gLobbySum = sum;
 		gSeq++;
 	}
+}
+
+static void SEC_NET TransportSync(void)
+{
+	UInt8 i, nodes = 0;
+	for (i = 1; i < LS_SLOTS; i++)
+		if (gLs.seated & (1 << i)) nodes |= 1 << gLs.node[i];
+	if (gKind == LINK_UDP) udp_sync(gLs.host && gLs.state == LS_LOBBY, nodes);
+	else if (gKind == LINK_BT) bt_sync(gLs.host && gLs.state == LS_LOBBY, nodes);
 }
 
 UInt8 NetPoll(void)
@@ -342,7 +365,25 @@ UInt8 NetPoll(void)
 	if (gKind == LINK_LOOP)
 		loop_time(now);
 #endif
+	if (gKind == LINK_UDP || gKind == LINK_BT) TransportSync();
 	ls_poll(&gLs, now);
+	if (gKind == LINK_UDP) {
+		TransportSync();
+		if (udp_error()[0]) {
+			Why(udp_error()); gPhase = NET_STOPPED;
+		} else if (!gLs.host && gLs.state == LS_HELLO && !gLs.inLobby && now - gJoinAt >= 10000) {
+			Why("No host reply. Check address and port."); gPhase = NET_STOPPED;
+		}
+		if (gPhase == NET_STOPPED) { gInPoll = false; return gPhase; }
+	}
+	if (gKind == LINK_BT) {
+		TransportSync();
+		if (bt_error()[0]) { Why(bt_error()); gPhase = NET_STOPPED; }
+		else if (!gLs.host && !gLs.inLobby && gLs.state == LS_HELLO && now - gJoinAt >= 45000) {
+			Why("No reply from the Bluetooth game."); gPhase = NET_STOPPED;
+		}
+		if (gPhase == NET_STOPPED) { gInPoll = false; return gPhase; }
+	}
 #ifdef LOOPBACK_TEST
 	if (gKind == LINK_LOOP) {
 		LoopPeerPoll(now, gLs.slot);
@@ -378,7 +419,8 @@ void NetService(void)
 {
 	if (!NetServiceActive())
 		return;
-	ir_service();
+	if (gKind == LINK_IR) ir_service();
+	else if (gKind == LINK_BT) bt_service();
 	// Polling may initialise the joiner's game. Never recurse into it or
 	// inspect a game whose tick is still running.
 	if (gPhase == NET_PLAY && !gInPoll && !gInTick)
@@ -387,7 +429,7 @@ void NetService(void)
 
 Boolean NetServiceActive(void)
 {
-	return gKind == LINK_IR && gPhase != NET_OFF && gPhase != NET_STOPPED;
+	return (gKind == LINK_IR || gKind == LINK_BT) && gPhase != NET_OFF && gPhase != NET_STOPPED;
 }
 
 UInt8 NetPhase(void)
@@ -467,9 +509,9 @@ void NetStatus(Char *buf)
 	switch (gPhase) {
 	case NET_LOBBY:
 		if (gLs.host)
-			StrCopy(buf, Bits(gLs.seated) < 2 ? "Waiting for players" : "Ready to start");
+			StrCopy(buf, Bits(gLs.seated) < 2 ? (gKind == LINK_BT ? bt_status() : "Waiting for players") : "Ready to start");
 		else if (!gLs.inLobby)
-			StrCopy(buf, "Looking for a game");
+			StrCopy(buf, gKind == LINK_BT ? bt_status() : "Looking for a game");
 		else
 			StrPrintF(buf, "Waiting for %s to start", gLs.start.names[0]);
 		break;
@@ -504,6 +546,7 @@ void NetEnd(void)
 	ls_leave(&gLs);
 	until = NetNowMs() + 2000;
 	do {
+		if (gKind == LINK_BT) bt_service();
 		ls_poll(&gLs, NetNowMs());
 		if (!gLs.stopLeft)
 			break;

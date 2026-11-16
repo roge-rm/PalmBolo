@@ -44,7 +44,7 @@ ifdef DEBUG
 GAMESRCS += script
 endif
 # Network play, segment net.
-NETSRCS  = lockstep link infrared
+NETSRCS  = lockstep link infrared udp udpwire bluetooth
 OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS) $(NETSRCS)))
 
 all: build/$(PRC)
@@ -116,3 +116,27 @@ clean:
 	rm -rf build
 
 .PHONY: all clean host-test menu-test art-preview
+
+# Focused UDP framing and eight-peer socket/lockstep integration.
+udp-test: build/udptest build/udpnettest
+	build/udptest
+	build/udpnettest
+
+build/udptest: host/udptest.c src/net/udpwire.c src/net/udpwire.h src/net/lockstep.c $(HOSTSRC) src/net/*.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/udptest.c src/net/udpwire.c src/net/lockstep.c $(HOSTSRC) -lm -o $@
+
+.PHONY: udp-test
+
+
+build/udpnettest: host/udpnettest.c host/netstub/PalmOS.h host/netstub/NetMgr.h src/net/udp.c src/net/udpwire.c src/net/udp.h src/net/udpwire.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined -Ihost/netstub host/udpnettest.c src/net/udp.c src/net/udpwire.c -o $@
+
+# Each test instance has private adapter globals, as on separate Palms.
+BTTESTOBJS = $(addprefix build/btinstance,$(addsuffix .o,0 1 2 3 4))
+build/btinstance%.o: host/btinstance.c src/net/bluetooth.c src/net/bluetooth.h host/btstub/BtLib.h host/btstub/PalmOS.h host/netstub/PalmOS.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined -Ihost/btstub -DBT_INSTANCE=$* -c $< -o $@
+build/bttest: host/bttest.c $(BTTESTOBJS) src/net/lockstep.c $(HOSTSRC) src/net/*.h
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined -Ihost/btstub host/bttest.c $(BTTESTOBJS) src/net/lockstep.c $(HOSTSRC) -lm -o $@
+bt-test: build/bttest
+	build/bttest
+.PHONY: bt-test

@@ -4,7 +4,7 @@
 
 // Banks of terrain, so the lockstep test can run several games side by
 // side; mapstore_host_bank picks the one the calls see.
-#define BANKS 5
+#define BANKS 9
 static uint8_t gMapBank[BANKS][256][256];       // [y][x]
 static uint8_t gFlagBank[BANKS][MS_PLANES][8192];   // bit x & 7 of [y * 32 + x / 8]
 static uint8_t (*gMap)[256] = gMapBank[0];

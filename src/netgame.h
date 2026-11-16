@@ -11,7 +11,7 @@
 UInt32 SEC_NET NetNowMs(void);
 
 // Links this Palm can use, in the order shown. The loopback is only in
-// LOOPBACK_TEST builds; IrLib supports two Palms.
+// LOOPBACK_TEST builds; IrLib supports two Palms, NetLib UDP up to eight.
 #define kNetMaxLinks    4
 UInt8 SEC_NET NetLinks(UInt8 *kinds, const Char **names);
 
@@ -40,7 +40,7 @@ void SEC_NET NetFinish(const struct GameState *g);
 // Takes what has come and sends what's due; sets up a joiner's game when
 // the host starts it. Returns the phase.
 UInt8 SEC_NET NetPoll(void);
-// Services IR during long Palm operations without dispatching UI events.
+// Services the active radio during long operations without dispatching UI input.
 void SEC_NET NetService(void);
 Boolean SEC_NET NetServiceActive(void);
 UInt8 SEC_NET NetPhase(void);

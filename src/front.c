@@ -12,6 +12,7 @@
 #include "game/util.h"
 #include "game/mapthumb.h"
 #include "netgame.h"
+#include "net/udp.h"
 
 #define kSaveDbName     "PalmBoloSavedGame"
 #define kSaveDbType     'Sgam'
@@ -402,6 +403,57 @@ static void SEC_FRONT FormDraw(FormType *frm)
 	FntSetFont(old);
 }
 
+// Network settings last for this app session without changing saved preferences.
+static Char gUdpHost[16];
+static Char gUdpPort[6] = "5046";
+
+static Boolean SEC_FRONT NetworkDialog(Boolean host)
+{
+	FormType *frm = FrmInitForm(NetSetupForm), *old = FrmGetActiveForm();
+	MemHandle addr = NULL, port = NULL;
+	UInt16 result, number;
+	UInt32 ip = 0;
+	Boolean ok = false;
+	if (!frm) return false;
+	addr = MemHandleNew(sizeof(gUdpHost)); port = MemHandleNew(sizeof(gUdpPort));
+	if (!addr || !port) {
+		if (addr) MemHandleFree(addr);
+		if (port) MemHandleFree(port);
+		addr = port = NULL;
+		goto done;
+	}
+	StrCopy(MemHandleLock(addr), gUdpHost); MemHandleUnlock(addr);
+	StrCopy(MemHandleLock(port), gUdpPort); MemHandleUnlock(port);
+	FldSetTextHandle(Obj(frm, NetSetupAddress), addr);
+	FldSetTextHandle(Obj(frm, NetSetupPort), port);
+	if (host) {
+		FrmHideObject(frm, FrmGetObjectIndex(frm, NetSetupAddress));
+		FrmHideObject(frm, FrmGetObjectIndex(frm, NetSetupAddressLabel));
+	}
+	ViewInputTrigger();
+	for (;;) {
+		const Char *a, *p;
+		result = FrmDoDialog(frm);
+		if (result != NetSetupOK) break;
+		a = FldGetTextPtr(Obj(frm, NetSetupAddress));
+		p = FldGetTextPtr(Obj(frm, NetSetupPort));
+		if (!udp_port(p ? p : "", &number) || (!host && !udp_ip(a ? a : "", &ip))) {
+			FrmCustomAlert(ViewAlert, "Enter an IPv4 address and port 1-65535.", "", "");
+			continue;
+		}
+		if (!host) StrCopy(gUdpHost, a);
+		StrCopy(gUdpPort, p);
+		udp_config(ip, number); ok = true; break;
+	}
+ done:
+	// Fields can resize their handles while editing.
+	if (addr) { addr = FldGetTextHandle(Obj(frm, NetSetupAddress)); FldSetTextHandle(Obj(frm, NetSetupAddress), NULL); if (addr) MemHandleFree(addr); }
+	if (port) { port = FldGetTextHandle(Obj(frm, NetSetupPort)); FldSetTextHandle(Obj(frm, NetSetupPort), NULL); if (port) MemHandleFree(port); }
+	FrmDeleteForm(frm);
+	FrmSetActiveForm(old);
+	return ok;
+}
+
 // ---- links ----
 
 static UInt8 gLinkKinds[kNetMaxLinks];
@@ -744,6 +796,7 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 			AppPrefsSave();
 			if (!FindLinks())
 				return true;
+			if (gLinkKinds[gLinkSel] == LINK_UDP && !NetworkDialog(true)) return true;
 			if (!NetHost(gLinkKinds[gLinkSel], gMapIndex, gNames[gMapIndex], AppGame())) {
 				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
 				return true;
@@ -766,6 +819,13 @@ static Boolean SEC_FRONT NewGameHandler(EventType *e)
 // ---- lobby: hosting and joining ----
 
 static UInt16 gLobbySeq;
+
+static void SEC_FRONT AddressButton(FormType *frm)
+{
+	UInt16 i = FrmGetObjectIndex(frm, LobAddress);
+	if (gNumLinks && gLinkKinds[gLinkSel] == LINK_UDP) FrmShowObject(frm, i);
+	else FrmHideObject(frm, i);
+}
 
 // The map, a row for each tank and the status, between the link and the
 // buttons.
@@ -866,6 +926,7 @@ static Boolean SEC_FRONT LobbyHandler(EventType *e)
 		FitForm(frm, false);
 		TallLayout(frm, LobStart, LobCancel, 0xFFFF, 0xFFFF, true);
 		LinkPopup(frm, LobLinkTrig, LobLinkList);
+		AddressButton(frm);
 		FormDraw(frm);
 		LobbyDraw();
 		return true;
@@ -873,18 +934,31 @@ static Boolean SEC_FRONT LobbyHandler(EventType *e)
 		LobbyIdle();
 		return true;
 	case popSelectEvent:
+		if (e->data.popSelect.selection < 0 || e->data.popSelect.selection >= gNumLinks) return true;
 		if (e->data.popSelect.listID == LobLinkList &&
 		    e->data.popSelect.selection != gLinkSel && NetPhase() == NET_LOBBY) {
+			if (gLinkKinds[e->data.popSelect.selection] == LINK_UDP && !NetworkDialog(true)) {
+				SetPopup(frm, LobLinkTrig, LobLinkList, gLinkSel);
+				return true;
+			}
 			gLinkSel = (UInt8)e->data.popSelect.selection;
 			if (!NetHost(gLinkKinds[gLinkSel], gMapIndex, gNames[gMapIndex], AppGame())) {
 				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
 				Go(NewGameForm);
 				return true;
 			}
+			AddressButton(frm);
+			FormDraw(frm);
 			LobbyDraw();
 		}
 		return false;
 	case ctlSelectEvent:
+		if (e->data.ctlSelect.controlID == LobAddress) {
+			Char address[48];
+			udp_local(address);
+			FrmCustomAlert(ViewAlert, address, "", "");
+			return true;
+		}
 		if (e->data.ctlSelect.controlID == LobStart) {
 			if (!NetCanStart())
 				return true;
@@ -931,6 +1005,7 @@ static Boolean SEC_FRONT JoinHandler(EventType *e)
 			LobbyIdle();
 		return true;
 	case popSelectEvent:
+		if (e->data.popSelect.selection < 0 || e->data.popSelect.selection >= gNumLinks) return true;
 		if (e->data.popSelect.listID == JoinLinkList &&
 		    e->data.popSelect.selection != gLinkSel) {
 			// Another link: look again from the start.
@@ -944,6 +1019,7 @@ static Boolean SEC_FRONT JoinHandler(EventType *e)
 		if (e->data.ctlSelect.controlID == JoinGo) {
 			if (!gNumLinks)
 				return true;
+			if (gLinkKinds[gLinkSel] == LINK_UDP && !NetworkDialog(false)) return true;
 			if (!NetJoin(gLinkKinds[gLinkSel], AppGame())) {
 				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
 				return true;

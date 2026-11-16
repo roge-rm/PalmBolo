@@ -112,3 +112,91 @@ A turn of 8 players with keys changing every tick and builder orders is 58 bytes
 - pause and pause-udp stop polling a joiner for 4 or 5 s, as with a menu open, and then go on: it must stop with reason 7 and its tank be a bot's. timed and timed-ir play a one minute game: every Palm must end on the same tick with the same state, no bots for players, the host with reason 8 and joiners quietly, each within 2.5 s of its end.
 - `LOCK_ONLY=backpressure build/hosttest --lockstep 1 1024` checks rejected send state and runs a reliable game with one queued frame per sender. The lobby, START names and 20000 byte map must arrive, and both peers must finish with matching states and checksum comparisons. `LOCK_ONLY=name` selects any other scenario.
 - On the Palm, a debug build with `EXTRA=-DLOOPBACK_TEST` adds a "Loopback" link to Host and Join game, with a second copy of the game in the app at the other end on a map store of its own. When you host it joins and gets the map (it has only Everard Island); when you join it hosts on the map last picked, starts 5 s after you join, and you get the map from it. Add `-DLOOPBACK_DROP_AT=N` (the second copy goes silent after N seconds) or `-DLOOPBACK_DESYNC_AT=N` (its state changes at tick N). `tools/m9-net.replay` hosts and then joins a game on a TX in Frond.
+
+## UDP link
+
+The Network link uses NetLib datagram sockets, with one socket on each Palm.
+The host binds the selected port (5046 by default); joiners use ephemeral local
+ports and send to a numeric IPv4 address. NetLib supplies the configured Palm
+connection. There is no discovery, encryption, authentication or router setup.
+
+The link wraps each existing lockstep frame in a 16-byte header:
+
+| Bytes | Contents |
+| --- | --- |
+| 0–3 | `PBUD` |
+| 4 | Wrapper version, 1 |
+| 5 | Payload size, 1–64 |
+| 6–7 | Reserved, zero |
+| 8–11 | Host session, big-endian; zero in the initial HELLO |
+| 12–15 | Joiner session, big-endian |
+
+Session values distinguish app/link openings; they are not authentication.
+A joiner accepts replies only from its configured IP/port with its session
+value, and remembers the host's session from the first reply. The host maps
+an IP/port plus joiner session to a link node. Only a correctly framed HELLO
+can reserve a node. An unknown joiner receives the existing STOP reason for a
+full/started game or incompatible lockstep version without taking a node.
+
+After each poll, unseated lobby nodes are freed; lockstep's existing silence
+expiry releases abandoned lobby seats. Nodes are never reassigned during a
+match. The lockstep slot-to-node table remains authoritative when lobby seats
+move after a departure. Stale sessions, wrong sources and oversized or
+malformed datagrams are discarded. Receive work is bounded to 32 datagrams per
+poll; UDP loss and rejected sends use the existing lockstep retry paths.
+
+The adapter uses zero-timeout, nonblocking socket operations. NetLib owns its
+connection dialog and cancellation. Open counts determine which reference the
+app owns, including partial opens; closing the game releases that reference
+without forcing other applications off the network. A new join times out after
+10 seconds without being seated. Socket errors stop the local game with a
+reason; lockstep handles peers who leave or go silent as on other links.
+
+`make udp-test` runs framing checks, production adapter calls against a NetLib
+fault-injection stub, and eight lockstep peers over real host loopback UDP
+sockets. The latter includes map transfer, loss and send backpressure, full and
+late join rejection, lobby seat reuse, player leave and host leave, with state
+and terrain checksums at 1024 ticks. This does not establish Palm NetLib or
+physical network interoperability; those checks remain in the release list.
+
+
+## Bluetooth link
+
+Bluetooth uses L2CAP with a 64-byte local MTU and minimum remote MTU, one
+lockstep frame per packet. The host creates a discoverable master piconet and
+advertises a listener with service UUID `d71c8923-a64b-4e80-b010-526d72660001`.
+Joiners use Palm's device picker, connect the ACL link, query that service by
+SDP and connect to the returned PSM. The host accepts three joiners; excess,
+duplicate and late connections are rejected. Discovery has the native Cancel
+button; pending connection stages time out after 30 seconds in total.
+
+Socket callbacks copy data into bounded per-peer queues. An overflowing or
+invalid reliable receive drops that peer instead of silently losing a frame.
+Each peer has one send buffer, unavailable until SendComplete or a synchronous
+successful return. Busy sends return backpressure to lockstep. Completion
+checks the buffer and length; callbacks from an earlier link opening are
+ignored. The first-segment callbacks restore the application's A5 before
+calling the Bluetooth segment.
+
+The foreground poll closes failed peer sockets and releases departed lobby
+ACL links owned by the host piconet. Node identities cannot be reused during a
+match. Losing a joiner leaves the others running until lockstep hands its tank
+to a bot; losing the host ends a joiner's game. Radio errors stop the local game.
+Normal event dispatch services Bluetooth; long operations and bounded close
+waits peek at the system key queue and consume only library hooks. Ordinary
+keys and application events stay queued in their original order.
+
+Closing releases the app's sockets, SDP record, callbacks and library reference.
+A joiner's pre-existing ACL is borrowed and is not explicitly disconnected.
+Hosting refuses an already-open library so it does not take over another app's
+piconet; only a successfully created piconet is destroyed on exit.
+
+`make bt-test` builds five isolated instances of the production adapter against
+a controlled asynchronous BtLib. Four run the actual lockstep and map-transfer
+code; the fifth exercises full/late rejection. The test checks map bytes,
+1024 matching game ticks and terrain checksums, lobby reuse, dropped-player
+bot takeover, host leave and busy sends. Fault cases cover missing hardware,
+open/registration/SDP/socket failures, cancelled discovery, borrowed ACL cleanup,
+pending/synchronous sends, receive overflow, old callback epochs and timeouts.
+This is not a radio interoperability test. Multi-Palm Frond checks where supported
+and physical-device checks are recorded separately in the release checklist.

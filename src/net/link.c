@@ -4,6 +4,8 @@
 #include "netutil.h"
 #ifdef __palmos__
 #include "infrared.h"
+#include "bluetooth.h"
+#include "udp.h"
 #endif
 
 #if !defined(__palmos__) || defined(LOOPBACK_TEST)
@@ -188,8 +190,12 @@ int link_open(Link *l, uint8_t kind, uint8_t role)
 	net_zero(l, sizeof(*l));
 	l->kind = kind;
 #ifdef __palmos__
+	if (kind == LINK_BT)
+		return bt_open(l, role);
 	if (kind == LINK_IR)
 		return ir_open(l, role);
+	if (kind == LINK_UDP)
+		return udp_open(l, role);
 #endif
 #ifdef HAVE_LOOP
 	if (kind == LINK_LOOP) {
@@ -217,6 +223,10 @@ int link_open(Link *l, uint8_t kind, uint8_t role)
 int link_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 {
 #ifdef __palmos__
+	if (l->kind == LINK_UDP)
+		return udp_send(l, to, buf, len);
+	if (l->kind == LINK_BT)
+		return bt_send(l, to, buf, len);
 	if (l->kind == LINK_IR && len && len <= LINK_FRAME_MAX)
 		return ir_send(l, to, buf, len);
 #endif
@@ -235,8 +245,12 @@ int link_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len)
 uint8_t link_recv(Link *l, uint8_t *from, uint8_t *buf)
 {
 #ifdef __palmos__
+	if (l->kind == LINK_BT)
+		return bt_recv(l, from, buf);
 	if (l->kind == LINK_IR)
 		return ir_recv(l, from, buf);
+	if (l->kind == LINK_UDP)
+		return udp_recv(l, from, buf);
 #endif
 #ifdef HAVE_LOOP
 	if (l->kind == LINK_LOOP)
@@ -252,8 +266,12 @@ uint8_t link_recv(Link *l, uint8_t *from, uint8_t *buf)
 void link_close(Link *l)
 {
 #ifdef __palmos__
+	if (l->kind == LINK_BT)
+		bt_close();
 	if (l->kind == LINK_IR)
 		ir_close();
+	if (l->kind == LINK_UDP)
+		udp_close();
 #endif
 #ifdef HAVE_LOOP
 	if (l->kind == LINK_LOOP)
