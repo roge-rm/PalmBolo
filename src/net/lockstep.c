@@ -308,14 +308,29 @@ uint32_t ls_checksum(const GameState *g)
 	return ~crc ^ game_checksum(g);
 }
 
+// Stops, with STOP_SENDS frames owed to every seated peer. Only peers still
+// playing hold stopLeft up; the others get what the link takes meanwhile.
 static void SEC_NET stop(Lockstep *ls, uint8_t why)
 {
+	uint8_t i;
+
 	if (ls->state == LS_STOPPED)
 		return;
+	net_zero(ls->stopOwed, sizeof(ls->stopOwed));
+	if (ls->host) {
+		ls->stopHold = (uint8_t)((ls->state == LS_PLAYING ? ls->humans : ls->seated) &
+			~ls->leaving & ~1);
+		for (i = 1; i < LS_SLOTS; i++)
+			if ((ls->seated >> i) & 1)
+				ls->stopOwed[i] = STOP_SENDS;
+	} else {
+		// A host that never seated us isn't waited for.
+		ls->stopHold = (uint8_t)(ls->inLobby || ls->gotStart);
+		ls->stopOwed[0] = STOP_SENDS;
+	}
 	ls->state = LS_STOPPED;
 	ls->stop = why;
 	ls->stopLeft = STOP_SENDS;
-	ls->stopPending = ls->host ? (uint8_t)(ls->seated & ~1) : 1;
 }
 
 static void SEC_NET desync(Lockstep *ls, uint8_t slot, uint32_t tick, uint32_t local, uint32_t remote)
@@ -1288,9 +1303,11 @@ static void SEC_NET send_map(Lockstep *ls, uint8_t s)
 	}
 }
 
+// One STOP (or a joiner's LEAVE) to each peer still owed one. A frame counts
+// only when the link takes it.
 static void SEC_NET send_stops(Lockstep *ls)
 {
-	uint8_t b[15], i;
+	uint8_t b[15], i, len = sizeof(b);
 
 	b[0] = MSG_STOP;
 	b[1] = ls->stop;
@@ -1300,22 +1317,23 @@ static void SEC_NET send_stops(Lockstep *ls)
 	net_put32(b + 11, ls->badRemote);
 	if (ls->host) {
 		for (i = 1; i < LS_SLOTS; i++)
-			if (((ls->stopPending >> i) & 1) && send(ls, i, b, sizeof(b)))
-				ls->stopPending = (uint8_t)(ls->stopPending & ~(1 << i));
-	} else if (ls->stop == LS_STOP_NONE) {
-		// We left: LEAVE rather than STOP.
-		b[0] = MSG_LEAVE;
-		b[1] = ls->slot;
-		if (send(ls, 0, b, 2))
-			ls->stopPending = 0;
+			if (ls->stopOwed[i] && send(ls, i, b, sizeof(b)))
+				ls->stopOwed[i]--;
 	} else {
-		if (send(ls, 0, b, sizeof(b)))
-			ls->stopPending = 0;
+		if (ls->stop == LS_STOP_NONE) {
+			// We left: LEAVE rather than STOP.
+			b[0] = MSG_LEAVE;
+			b[1] = ls->slot;
+			len = 2;
+		}
+		if (send(ls, 0, b, len))
+			ls->stopOwed[0]--;
 	}
-	if (!ls->stopPending) {
-		ls->stopLeft--;
-		ls->stopPending = ls->host ? (uint8_t)(ls->seated & ~1) : 1;
-	}
+	// The most a peer that holds the round open is still owed.
+	ls->stopLeft = 0;
+	for (i = 0; i < LS_SLOTS; i++)
+		if (((ls->stopHold >> i) & 1) && ls->stopOwed[i] > ls->stopLeft)
+			ls->stopLeft = ls->stopOwed[i];
 }
 
 static void SEC_NET send_ping(Lockstep *ls, uint8_t peer)

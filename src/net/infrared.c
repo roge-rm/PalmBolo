@@ -7,8 +7,12 @@
 #define IR_FEATURE 16
 #define IR_QUEUE 16
 #define IR_CREATOR 'Rmrf'
+// Seconds a joiner may spend in one connection step, and waiting for IrLAP to drop.
+#define IR_STEP_SECS 10
+#define IR_DROP_SECS 3
 
-enum { IR_LISTEN, IR_DISCOVER, IR_LAP, IR_QUERY, IR_CONNECT, IR_UP, IR_DEAD };
+// IR_DROP is a joiner waiting for IrLAP to go down before it discovers again.
+enum { IR_LISTEN, IR_DISCOVER, IR_LAP, IR_QUERY, IR_CONNECT, IR_UP, IR_DEAD, IR_DROP };
 typedef struct IrFrame {
 	UInt8 len, data[LINK_FRAME_MAX];
 } IrFrame;
@@ -16,8 +20,10 @@ typedef struct IrFrame {
 static UInt16 gRef;
 static Boolean gOpen, gBound, gBusy, gControlBusy, gEver;
 static Boolean gServicing;
+// gLmp: IrLMP is confirmed, so data may arrive. gDrop: polling must drop IrLAP.
+static Boolean gLmp, gDrop;
 static UInt8 gRole, gState, gEvent, gQueryDone, gQueryStatus, gPick;
-static UInt32 gRetry;
+static UInt32 gRetry, gDeadline;
 #ifdef DEBUG
 static UInt32 gDiagAt;
 static UInt16 gSent, gReceived, gFailed, gFragments, gMaxWire, gMaxFrame;
@@ -155,6 +161,11 @@ static void IrCallbackBody(IrCallBackParms *p)
 			gEvent = 3;
 		break;
 	case LEVENT_LM_CON_CNF:
+		if (gRole != LINK_ROLE_JOIN || gState != IR_CONNECT)
+			break;
+		// Data can follow before polling marks the link up, so start a clean queue.
+		gRxHead = gRxCount = gRxOffset = 0;
+		gLmp = true;
 		gEvent = 4;
 		break;
 	case LEVENT_PACKET_HANDLED:
@@ -169,12 +180,28 @@ static void IrCallbackBody(IrCallBackParms *p)
 	case LEVENT_LM_DISCON_IND:
 	case LEVENT_LAP_DISCON_IND:
 		gBusy = false;
-		gTxCount = gRxCount = gTxOffset = gRxOffset = 0;
-		gState = gEver || gControlBusy ? IR_DEAD : IR_LISTEN;
+		gLmp = gDrop = false;
+		gTxCount = gTxOffset = 0;
 		gEvent = 0;
+		// Whole received frames stay for ir_recv. A partial one can't finish.
+		gRxOffset = 0;
+		if (gEver || gState == IR_DEAD) {
+			gState = IR_DEAD;
+			break;
+		}
+		gRxHead = gRxCount = 0;
+		if (gRole == LINK_ROLE_JOIN && p->event == LEVENT_LM_DISCON_IND) {
+			// IrLAP is still connected and discovery can't run over it.
+			gState = IR_DROP;
+			gDrop = true;
+		} else {
+			gState = IR_LISTEN;
+		}
 		break;
 	case LEVENT_DATA_IND:
-		if (gState != IR_UP)
+		if (gState != IR_UP && !gLmp)
+			break;
+		if (!p->rxBuff)
 			break;
 		for (i = 0; i < p->rxLen; i++) {
 			IrFrame *f;
@@ -261,8 +288,9 @@ int ir_open(Link *l, uint8_t role)
 #endif
 	gRole = role;
 	gState = IR_LISTEN;
-	gRetry = TimGetTicks();
+	gRetry = gDeadline = TimGetTicks();
 	gEvent = gQueryDone = gPick = 0;
+	gLmp = gDrop = false;
 	gTxHead = gTxCount = gRxHead = gRxCount = gTxOffset = gRxOffset = 0;
 	MemSet(&gCon, sizeof(gCon), 0);
 	MemSet(&gPacket, sizeof(gPacket), 0);
@@ -311,6 +339,25 @@ void ir_service(void)
 	gServicing = false;
 }
 
+// Enter a joiner connection step with its time limit.
+static void SEC_NET IrStep(UInt8 state)
+{
+	gState = state;
+	gDeadline = TimGetTicks() + (UInt32)SysTicksPerSecond() * IR_STEP_SECS;
+}
+
+// Drop IrLAP and discover again once it is down.
+static void SEC_NET IrRestart(void)
+{
+	gLmp = gDrop = false;
+	gEvent = gQueryDone = 0;
+	gState = IR_DROP;
+	gDeadline = TimGetTicks() + (UInt32)SysTicksPerSecond() * IR_DROP_SECS;
+	// Without a pending disconnect no event will follow.
+	if (IrDisconnectIrLap(gRef) != IR_STATUS_PENDING && gState == IR_DROP)
+		gState = IR_LISTEN;
+}
+
 static void SEC_NET IrPump(void)
 {
 	UInt8 ev;
@@ -336,7 +383,7 @@ static void SEC_NET IrPump(void)
 	if (ev)
 		LOG(("ir: action %u state %u", ev, gState));
 	if (ev == 1) {
-		gState = IR_LAP;
+		IrStep(IR_LAP);
 		if (IrConnectIrLap(gRef, gDevice) != IR_STATUS_PENDING)
 			gState = IR_LISTEN;
 	} else if (ev == 2) {
@@ -346,10 +393,10 @@ static void SEC_NET IrPump(void)
 		gQuery.result = gResult;
 		gQuery.resultBufSize = sizeof(gResult);
 		gQuery.callBack = IrQueryCallback;
-		gState = IR_QUERY;
+		IrStep(IR_QUERY);
 		gQueryDone = 0;
 		if (IrIAS_Query(gRef, &gQuery) != IR_STATUS_PENDING)
-			IrDisconnectIrLap(gRef);
+			IrRestart();
 	} else if (ev == 3 || ev == 4) {
 		if (ev == 3) {
 			if (gControlBusy) {
@@ -369,7 +416,10 @@ static void SEC_NET IrPump(void)
 		}
 		LOG(("ir: connected, tx %u", IrMaxTxSize(gRef, &gCon)));
 		gEver = true;
-		gState = IR_UP;
+		gLmp = false;
+		// Bad data since the confirm keeps the link dead.
+		if (gState != IR_DEAD)
+			gState = IR_UP;
 	}
 	if (gQueryDone && gState == IR_QUERY) {
 		gQueryDone = 0;
@@ -383,23 +433,31 @@ static void SEC_NET IrPump(void)
 				return;
 			}
 			gControlBusy = true;
-			gState = IR_CONNECT;
+			IrStep(IR_CONNECT);
 			status = IrConnectReq(gRef, &gCon, &gControlPacket, 0);
 #if defined(DEBUG) && defined(IR_TRACE)
 			Trace(130, status, &gControlPacket, 0, NULL);
 #endif
 			if (status != IR_STATUS_PENDING) {
 				gControlBusy = false;
-				IrDisconnectIrLap(gRef);
+				IrRestart();
 			}
 		} else {
-			IrDisconnectIrLap(gRef);
+			IrRestart();
 		}
+	}
+	// A joiner step that got no answer, or an IrLAP that stayed up, starts over.
+	if (gRole == LINK_ROLE_JOIN &&
+	    ((gState == IR_DROP && gDrop) ||
+	     (((gState >= IR_DISCOVER && gState <= IR_CONNECT) || gState == IR_DROP) &&
+	      (Int32)(TimGetTicks() - gDeadline) >= 0))) {
+		LOG(("ir: restart from state %u", gState));
+		IrRestart();
 	}
 	if (gState == IR_LISTEN && gRole == LINK_ROLE_JOIN &&
 	    (Int32)(TimGetTicks() - gRetry) >= 0) {
 		gRetry = TimGetTicks() + SysTicksPerSecond() * 2;
-		gState = IR_DISCOVER;
+		IrStep(IR_DISCOVER);
 		if (IrDiscoverReq(gRef, &gCon) != IR_STATUS_PENDING)
 			gState = IR_LISTEN;
 	}
@@ -491,7 +549,8 @@ uint8_t ir_recv(Link *l, uint8_t *from, uint8_t *buf)
 	if (!gOpen)
 		return 0;
 	IrPump();
-	if (!gRxCount || gState != IR_UP)
+	// Frames that arrived before a disconnect are still handed out.
+	if (!gRxCount)
 		return 0;
 	len = gRx[gRxHead].len;
 	MemMove(buf, gRx[gRxHead].data, len);
@@ -499,4 +558,10 @@ uint8_t ir_recv(Link *l, uint8_t *from, uint8_t *buf)
 	gRxHead = (gRxHead + 1) % IR_QUEUE;
 	*from = l->node ^ 1;
 	return len;
+}
+
+// True once the session has ended and every received frame has been read.
+int ir_dead(void)
+{
+	return gOpen && gState == IR_DEAD && !gRxCount;
 }

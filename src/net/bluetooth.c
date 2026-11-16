@@ -77,6 +77,7 @@ static void SEC_BT CloseSocket(BtLibSocketRef *s)
 	*s = -1;
 	if (old >= 0) BtLibSocketClose(gRef, old);
 }
+// Close a peer's connection. Frames it already delivered stay for bt_recv.
 static void SEC_BT Drop(UInt8 i)
 {
 	BtPeer *p = &gPeers[i];
@@ -85,7 +86,7 @@ static void SEC_BT Drop(UInt8 i)
 		p->acl = false;
 		BtLibLinkDisconnect(gRef, &p->address);
 	}
-	p->up = p->busy = p->count = 0;
+	p->up = p->busy = 0;
 	p->dead = true;
 }
 static void SEC_BT Connected(UInt8 i, BtLibSocketRef socket)
@@ -152,7 +153,7 @@ static void SocketBody(BtLibSocketEventType *e, UInt32 epoch)
 		else Connected(i, e->socket);
 		break;
 	case btLibSocketEventDisconnected:
-		p->socket = -1; p->dead = true; p->up = p->busy = p->count = 0;
+		p->socket = -1; p->dead = true; p->up = p->busy = 0;
 		break;
 	case btLibSocketEventData:
 		if (!p->up || p->dead) break;
@@ -200,7 +201,14 @@ int bt_available(void)
 	return FtrGet(btLibFeatureCreator, btLibFeatureVersion, &version) == errNone &&
 		SysLibFind(btLibName, &ref) == errNone;
 }
-const char *bt_error(void) { return gError; }
+// A failure is reported only after every received frame has been read.
+const char *bt_error(void)
+{
+	UInt8 i;
+	if (gOpen && gError[0])
+		for (i = 0; i < BT_PEERS; i++) if (gPeers[i].used && gPeers[i].count) return "";
+	return gError;
+}
 const char *bt_status(void)
 {
 	switch (gState) {
@@ -383,10 +391,11 @@ uint8_t bt_recv(Link *l, uint8_t *from, uint8_t *buf)
 {
 	UInt8 j, i, len;
 	(void)l;
-	if (!gOpen || gState == BT_DEAD) return 0;
+	if (!gOpen) return 0;
+	// A dead peer or link still hands out what arrived before it went.
 	for (j = 0; j < BT_PEERS; j++) {
 		i = (gNext + j) % BT_PEERS;
-		if (gPeers[i].up && !gPeers[i].dead && gPeers[i].count) {
+		if (gPeers[i].used && gPeers[i].count) {
 			BtPeer *p = &gPeers[i]; BtFrame *f = &p->rx[p->head];
 			len = f->len; net_copy(buf, f->data, len); *from = i;
 			p->head = (p->head + 1) % BT_RX; p->count--; gNext = (i + 1) % BT_PEERS;

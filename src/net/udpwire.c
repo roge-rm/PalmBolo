@@ -1,5 +1,10 @@
 #include "udpwire.h"
 #include "netutil.h"
+#include "lockstep.h"
+
+// Lockstep's HELLO and STOP message types, as in lockstep.c.
+#define WIRE_HELLO 1
+#define WIRE_STOP  9
 
 int udp_port(const char *s, uint16_t *port)
 {
@@ -107,10 +112,10 @@ uint8_t udp_wire_recv(UdpWire *w, UdpAddress address, const uint8_t *p,
 		}
 		if (i == LINK_MAX_NODES) {
 			// Only a complete lockstep HELLO can reserve an endpoint.
-			if (p[UDP_HEADER] != 1 || len < 2 || len > 17) return 0;
-			if (!w->accepting || !freeNode || p[UDP_HEADER + 1] != 1) {
-				net_zero(reject, sizeof(reject)); reject[0] = 9;
-				reject[1] = p[UDP_HEADER + 1] != 1 ? 4 : 5;
+			if (p[UDP_HEADER] != WIRE_HELLO || len < 2 || len > 17) return 0;
+			if (!w->accepting || !freeNode || p[UDP_HEADER + 1] != LS_VERSION) {
+				net_zero(reject, sizeof(reject)); reject[0] = WIRE_STOP;
+				reject[1] = p[UDP_HEADER + 1] != LS_VERSION ? LS_STOP_VERSION : LS_STOP_FULL;
 				*replyLen = pack(w->session, client, reject, sizeof(reject), reply);
 				return 0;
 			}
@@ -119,7 +124,7 @@ uint8_t udp_wire_recv(UdpWire *w, UdpAddress address, const uint8_t *p,
 			w->peers[i].session = client;
 		}
 		// A pre-handshake packet may only repeat HELLO.
-		if (!host && p[UDP_HEADER] != 1) return 0;
+		if (!host && p[UDP_HEADER] != WIRE_HELLO) return 0;
 		*from = i;
 	}
 	net_copy(data, p + UDP_HEADER, len);

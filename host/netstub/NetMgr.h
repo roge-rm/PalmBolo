@@ -6,7 +6,10 @@ typedef Int16 NetSocketRef;
 typedef struct { UInt16 family, port; UInt32 addr; UInt8 zero[8]; } NetSocketAddrINType;
 typedef NetSocketAddrINType NetSocketAddrType;
 enum { netErrAlreadyOpen=1, netErrWouldBlock, netErrTimeout, netErrMessageTooBig,
- netErrBufTooSmall, netErrUnreachableDest, netSocketAddrINET=2, netSocketTypeDatagram=2,
+ netErrBufTooSmall, netErrUnreachableDest, netErrNotOpen, netErrSocketNotOpen,
+ netErrNoInterfaces, netErrInterfaceDown, netErrInterfaceNotFound, netErrPPPBroughtDown,
+ netErrQuitOnTxFail, netErrOutOfPackets, netErrOutOfMemory, netErrOutOfResources,
+ netErrSocketBusy, netSocketAddrINET=2, netSocketTypeDatagram=2,
  netSocketOptLevelSocket=0xffff, netSocketOptSockNonBlocking=0x2000,
  netIFSettingActualIPAddr=0x1002 };
 #define NetHToNS htons

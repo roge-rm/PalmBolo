@@ -463,7 +463,7 @@ static void backpressure_state(void)
 {
 	Lockstep *ls = &gDev[1].ls;
 	Link host, join;
-	uint8_t b[LINK_FRAME_MAX], from, map[122] = { 0 };
+	uint8_t b[LINK_FRAME_MAX], from, map[122] = { 0 }, i, n;
 	uint32_t sent, ack, last;
 
 	loop_reset(1, 0, 0, 0, 0);
@@ -548,15 +548,73 @@ static void backpressure_state(void)
 		"accepted host turn did not commit send state");
 	LCHECK(link_recv(&join, &from, b) == 20 && b[0] == 6 && (b[5] & 0x80),
 		"recovered host turn/checksum frame missing");
+	// Each peer counts its own accepted STOPs; the live ones hold stopLeft up.
 	ls->node[2] = 2;
-	ls->seated = 7;
+	ls->seated = ls->humans = 7;
 	ls_leave(ls);
 	loop_limit(1);
 	ls_poll(ls, 12);
-	LCHECK(ls->stopLeft == 3 && ls->stopPending == 4, "partial STOP round was consumed");
-	link_recv(&join, &from, b);
-	ls_poll(ls, 13);
-	LCHECK(ls->stopLeft == 2 && ls->stopPending == 6, "partial STOP round did not recover");
+	LCHECK(ls->stopLeft == 3 && ls->stopOwed[1] == 2 && ls->stopOwed[2] == 3,
+		"rejected STOP was consumed");
+	for (i = 0; i < 3; i++) {
+		link_recv(&join, &from, b);
+		ls_poll(ls, 13 + i);
+	}
+	LCHECK(ls->stopLeft == 2 && ls->stopOwed[1] == 0 && ls->stopOwed[2] == 2,
+		"rejected STOP did not recover");
+	// A live peer that rejects forever (no such node) holds stopLeft up, and
+	// the other live peer still gets all three STOPs.
+	loop_reset(1, 0, 0, 0, 0);
+	link_open(&host, LINK_LOOP, LINK_ROLE_HOST);
+	link_open(&join, LINK_LOOP, LINK_ROLE_JOIN);
+	ls_host_open(ls, &host, "host");
+	ls->state = LS_PLAYING;
+	ls->node[1] = 1;
+	ls->node[2] = LINK_MAX_NODES;
+	ls->seated = ls->humans = 7;
+	ls->start.dropSecs = 3;
+	ls_leave(ls);
+	for (i = 0; i < 6; i++)
+		ls_poll(ls, 20 + i);
+	for (n = 0; link_recv(&join, &from, b) == 15 && b[0] == 9; n++)
+		;
+	LCHECK(n == 3 && ls->stopOwed[1] == 0 && ls->stopOwed[2] == 3 && ls->stopLeft == 3,
+		"a rejecting peer cut the other peer's STOPs or stopped holding the round");
+	// A peer handed to a bot, or one that left, is tried but not waited for.
+	for (i = 0; i < 2; i++) {
+		ls_host_open(ls, &host, "host");
+		ls->state = LS_PLAYING;
+		ls->node[1] = 1;
+		ls->node[2] = LINK_MAX_NODES;
+		ls->seated = 7;
+		ls->humans = i ? 7 : 3;
+		ls->leaving = i ? 4 : 0;
+		ls->start.dropSecs = 3;
+		ls_leave(ls);
+		LCHECK(ls->stopLeft == 3, "host leave owes no STOP");
+		for (n = 0; n < 3; n++)
+			ls_poll(ls, 30 + n);
+		LCHECK(ls->stopLeft == 0 && ls->stopOwed[1] == 0 && ls->stopOwed[2] == 3,
+			"a peer no longer playing held the STOP round open (%u)", (unsigned)i);
+	}
+	// With nobody live, one try at each peer ends it.
+	ls_host_open(ls, &host, "host");
+	ls->state = LS_PLAYING;
+	ls->node[1] = LINK_MAX_NODES;
+	ls->seated = 3;
+	ls->humans = 1;
+	ls_leave(ls);
+	ls_poll(ls, 40);
+	LCHECK(ls->stopLeft == 0, "a host with nobody playing waited to send STOP");
+	// A joiner nobody seated tries one LEAVE and doesn't wait on it.
+	ls_join_open(ls, &join, "joiner");
+	ls_leave(ls);
+	loop_reject(1, 100);
+	ls_poll(ls, 41);
+	LCHECK(ls->stopLeft == 0 && ls->stopOwed[0] == 3, "an unseated joiner waited to send LEAVE");
+	loop_reset(1, 0, 0, 0, 0);
+	link_open(&host, LINK_LOOP, LINK_ROLE_HOST);
+	link_open(&join, LINK_LOOP, LINK_ROLE_JOIN);
 	// Ping timers move only when queued.
 	ls_host_open(ls, &host, "host");
 	ls->seated = 3;

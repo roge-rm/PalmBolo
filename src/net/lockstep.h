@@ -143,8 +143,9 @@ typedef struct Lockstep {
 	uint32_t pingAt[LS_SLOTS];
 	uint16_t rtt[LS_SLOTS];         // round trip, smoothed, ms; 0 until measured
 	uint8_t sumLeft[LS_SLOTS];      // frames still to carry our latest checksum
-	uint8_t stopPending;            // peers still owed the current STOP round
-	uint8_t stopLeft;               // STOP frames still to send
+	uint8_t stopOwed[LS_SLOTS];     // STOP frames each peer is still owed; a joiner's entry 0 is the host
+	uint8_t stopHold;               // peers still playing, the ones worth waiting for
+	uint8_t stopLeft;               // the most a stopHold peer is still owed; 0 when done
 
 	// Checksums: our last few, and one from each other side waiting for ours.
 	uint32_t sumTick[4], sumVal[4];
@@ -217,7 +218,8 @@ uint8_t SEC_NET ls_delay_for(uint16_t rttMs);
 
 // Leaves the game. The host stops it for everyone; a joiner's tank goes to
 // a bot. After ls_finish the host ends the game for everyone and a joiner
-// goes quietly.
+// goes quietly. Keep polling while stopLeft is set, so the peers still
+// playing get their STOP or LEAVE frames as the link takes them.
 void SEC_NET ls_leave(Lockstep *ls);
 
 // This device's game is over (g->over). Keep polling until ls_finished,

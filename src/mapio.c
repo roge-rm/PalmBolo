@@ -12,6 +12,7 @@ typedef struct {
 	UInt32 volumeIterator, iterator;
 	Char path[PATH_SIZE];
 	Char names[PAGE_ROWS][FILE_SIZE];
+	Char probe[FILE_SIZE];
 	Char labels[PAGE_ROWS][40];
 	Char *choices[PAGE_ROWS];
 	Boolean directory[PAGE_ROWS];
@@ -60,8 +61,9 @@ static Err SEC_MAPIO ReadPage(Browser *b)
 	b->count = 0;
 	err = VFSFileOpen(b->volume, b->path, vfsModeRead, &dir);
 	if (err) return err;
-	while (b->count < PAGE_ROWS && iterator != vfsIteratorStop) {
-		Char *name = b->names[b->count];
+	b->more = false;
+	while (iterator != vfsIteratorStop) {
+		Char *name = b->count < PAGE_ROWS ? b->names[b->count] : b->probe;
 		UInt16 len;
 		MemSet(&info, sizeof(info), 0);
 		info.nameP = name; info.nameBufLen = FILE_SIZE;
@@ -74,6 +76,8 @@ static Err SEC_MAPIO ReadPage(Browser *b)
 		if (!(info.attributes & vfsFileAttrDirectory) &&
 						(len < 4 || StrCaselessCompare(name + len - 4, ".map"))) continue;
 		if (skip) { skip--; continue; }
+		// One more match after a full page means there is a next page.
+		if (b->count == PAGE_ROWS) { b->more = true; break; }
 		b->directory[b->count] = (info.attributes & vfsFileAttrDirectory) != 0;
 		{
 			Char *label = b->labels[b->count];
@@ -83,7 +87,6 @@ static Err SEC_MAPIO ReadPage(Browser *b)
 		}
 		b->count++;
 	}
-	b->more = iterator != vfsIteratorStop;
 	b->iterator += b->count;
 	VFSFileClose(dir);
 	return err;
@@ -96,6 +99,7 @@ void SEC_MAPIO MapBrowse(void)
 	FormType *frm, *old;
 	ListType *list;
 	UInt16 button;
+	UInt32 pageStart;
 	Err err;
 	if (FtrGet(sysFileCVFSMgr, vfsFtrIDVersion, &version)) {
 		FrmCustomAlert(MapIoAlert, "This Palm has no memory-card support.", "", ""); return;
@@ -128,6 +132,7 @@ void SEC_MAPIO MapBrowse(void)
 			if (!b->more) b->iterator = vfsIteratorStart;
 			continue;
 		}
+		pageStart = b->iterator - b->count;
 		b->iterator = vfsIteratorStart;
 		if (button == MapCardVolume) {
 			if (b->volumeIterator == vfsIteratorStop) b->volumeIterator = vfsIteratorStart;
@@ -144,12 +149,14 @@ void SEC_MAPIO MapBrowse(void)
 		if (button == MapCardOpen) {
 			Int16 sel = LstGetSelection(list);
 			UInt16 n = StrLen(b->path);
-			if (sel < 0 || sel >= b->count) continue;
+			if (sel < 0 || sel >= b->count) { b->iterator = pageStart; continue; }
 			if (n + StrLen(b->names[sel]) + 2 > PATH_SIZE) {
-				FrmCustomAlert(MapIoAlert, "Folder path is too long.", "", ""); continue;
+				FrmCustomAlert(MapIoAlert, "Folder path is too long.", "", "");
+				b->iterator = pageStart; continue;
 			}
 			if (n > 1) StrCat(b->path, "/");
 			StrCat(b->path, b->names[sel]);
+			if (!b->directory[sel]) b->iterator = pageStart;
 			if (!b->directory[sel]) {
 				FileRef file;
 				UInt32 size;

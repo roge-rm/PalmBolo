@@ -34,12 +34,27 @@ static UInt32 ValidateFill(void *ctx, UInt8 *dst, UInt32 max)
 	return 0;
 }
 
+// Names the app keeps for its own databases.
+static Boolean Reserved(const Char *n)
+{
+	return StrCaselessCompare(n, "Everard Island") == 0 ||
+		StrCaselessCompare(n, "PalmBolo import") == 0 ||
+		StrCaselessCompare(n, "PalmBoloMapCache") == 0 ||
+		StrCaselessCompare(n, "PalmBoloSavedMap") == 0 ||
+		StrCaselessCompare(n, "PalmBoloMapIn") == 0 ||
+		StrCaselessCompare(n, "PalmBoloPeerMap") == 0 ||
+		StrCaselessCompare(n, "PalmBoloSavedGame") == 0 ||
+		StrCaselessCompare(n, "PalmBoloSavingGame") == 0 ||
+		StrCaselessCompare(n, "PalmBoloDesync") == 0 ||
+		StrCaselessCompare(n, "PalmBoloLog") == 0;
+}
+
 static Boolean UniqueName(const Char *base, Char *out)
 {
 	UInt16 i;
 	Char suffix[8];
 	StrNCopy(out, base, MAP_IO_NAME - 1); out[MAP_IO_NAME - 1] = 0;
-	for (i = 2; DmFindDatabase(0, out) || StrCompare(out, "Everard Island") == 0; i++) {
+	for (i = 2; DmFindDatabase(0, out) || Reserved(out); i++) {
 		if (i == 10000) return false;
 		StrPrintF(suffix, " %u", i);
 		StrNCopy(out, base, MAP_IO_NAME - 1); out[MAP_IO_NAME - 1 - StrLen(suffix)] = 0;
@@ -62,7 +77,15 @@ Err MapImport(MapReadProc read, void *ctx, UInt32 length, const Char *name, Char
 	if (length > MAP_IO_LIMIT) return exgErrBadData;
 	buffer = MemPtrNew(CHUNK);
 	if (!buffer) return exgMemError;
-	if (!UniqueName("PalmBolo import", stage)) { err = exgErrDeviceFull; goto done; }
+	// Remove staging databases left by an interrupted import.
+	for (;;) {
+		DmSearchStateType state;
+		UInt16 card;
+		LocalID old;
+		if (DmGetNextDatabaseByTypeCreator(true, &state, STAGE_TYPE, MAP_CREATOR, false, &card, &old)) break;
+		if (DmDeleteDatabase(card, old)) break;
+	}
+	StrCopy(stage, "PalmBolo import");
 	err = DmCreateDatabase(0, stage, MAP_CREATOR, STAGE_TYPE, false);
 	if (err) goto done;
 	id = DmFindDatabase(0, stage);

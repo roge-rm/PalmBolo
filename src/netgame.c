@@ -342,6 +342,29 @@ static void SEC_NET LobbyCheck(void)
 	}
 }
 
+// What the link says went wrong, "" while it's fine.
+static const Char * SEC_NET LinkError(void)
+{
+	return gKind == LINK_UDP ? udp_error() : gKind == LINK_BT ? bt_error() : "";
+}
+
+// The link has failed or its session is over, so no send can get through.
+static Boolean SEC_NET LinkDown(void)
+{
+	return LinkError()[0] || (gKind == LINK_IR && ir_dead());
+}
+
+// How long a joiner waits for a host to seat it, ms, and what it says then.
+static UInt32 SEC_NET JoinWait(const Char **why)
+{
+	switch (gKind) {
+	case LINK_UDP: *why = "No host reply. Check address and port."; return 10000;
+	case LINK_BT: *why = "No reply from the Bluetooth game."; return 45000;
+	case LINK_IR: *why = "No reply from the infrared game."; return 45000;
+	}
+	return 0;
+}
+
 static void SEC_NET TransportSync(void)
 {
 	UInt8 i, nodes = 0;
@@ -367,20 +390,20 @@ UInt8 NetPoll(void)
 #endif
 	if (gKind == LINK_UDP || gKind == LINK_BT) TransportSync();
 	ls_poll(&gLs, now);
-	if (gKind == LINK_UDP) {
-		TransportSync();
-		if (udp_error()[0]) {
-			Why(udp_error()); gPhase = NET_STOPPED;
-		} else if (!gLs.host && gLs.state == LS_HELLO && !gLs.inLobby && now - gJoinAt >= 10000) {
-			Why("No host reply. Check address and port."); gPhase = NET_STOPPED;
-		}
-		if (gPhase == NET_STOPPED) { gInPoll = false; return gPhase; }
-	}
-	if (gKind == LINK_BT) {
-		TransportSync();
-		if (bt_error()[0]) { Why(bt_error()); gPhase = NET_STOPPED; }
-		else if (!gLs.host && !gLs.inLobby && gLs.state == LS_HELLO && now - gJoinAt >= 45000) {
-			Why("No reply from the Bluetooth game."); gPhase = NET_STOPPED;
+	if (gKind == LINK_UDP || gKind == LINK_BT) TransportSync();
+	// A STOP that came in says why the game ended, so it goes before a link
+	// error or a join that ran out of time.
+	if (gLs.state != LS_STOPPED) {
+		const Char *why = LinkError();
+		UInt32 wait;
+
+		if (why[0]) {
+			Why(why);
+			gPhase = NET_STOPPED;
+		} else if (!gLs.host && gLs.state == LS_HELLO && !gLs.inLobby &&
+		           (wait = JoinWait(&why)) != 0 && now - gJoinAt >= wait) {
+			Why(why);
+			gPhase = NET_STOPPED;
 		}
 		if (gPhase == NET_STOPPED) { gInPoll = false; return gPhase; }
 	}
@@ -542,13 +565,14 @@ void NetEnd(void)
 	if (gKind == LINK_IR)
 		ir_test_close_queue();
 #endif
-	// Keep offering control frames as the transport makes queue space.
+	// Keep offering control frames as the transport makes queue space, while
+	// a peer still playing is owed one and the link can carry it.
 	ls_leave(&gLs);
 	until = NetNowMs() + 2000;
 	do {
 		if (gKind == LINK_BT) bt_service();
 		ls_poll(&gLs, NetNowMs());
-		if (!gLs.stopLeft)
+		if (!gLs.stopLeft || LinkDown())
 			break;
 		SysTaskDelay(1);
 	} while ((Int32)(NetNowMs() - until) < 0);
@@ -593,8 +617,13 @@ void NetFinish(const GameState *g)
 	if (gPhase == NET_PLAY) {
 		ls_finish(&gLs, g);
 		until = NetNowMs() + LS_END_MS + 500;
-		while (!ls_finished(&gLs) && NetNowMs() < until && NetPoll() == NET_PLAY)
+		while (!ls_finished(&gLs) && NetNowMs() < until) {
+			// Bluetooth only moves frames when serviced.
+			if (gKind == LINK_BT) bt_service();
+			if (NetPoll() != NET_PLAY)
+				break;
 			SysTaskDelay(1);
+		}
 		LOG(("net: game over at tick %lu, %s", g->tick, gLs.ended || gLs.host ? "ended" : "no word from the host"));
 	}
 	NetEnd();

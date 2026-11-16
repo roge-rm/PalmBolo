@@ -15,7 +15,9 @@ A link carries frames of up to 64 bytes between nodes. The host is node 0; each 
 - IrLAP and L2CAP links are reliable: frames arrive in order and none are lost. Each turn and each input is sent once, and sent again from what the other side has only when nothing new has been acknowledged for twice the round trip plus 40 ms (200 ms before a round trip is measured).
 - A UDP link can lose, repeat and reorder frames. Then every frame carries all the turns or inputs the other side hasn't acknowledged, and one goes out when there's something new or 60 ms after the last.
 
-Send positions, checksum copies and retry timers advance when the link accepts a frame. A full send queue leaves them pending. Roster and START batches resume at the first name still waiting, and each STOP round waits for every peer to accept its frame.
+Send positions, checksum copies and retry timers advance when the link accepts a frame. A full send queue leaves them pending. Roster and START batches resume at the first name still waiting, and each peer is owed three STOP frames (a joiner owes the host three LEAVEs), counted one by one as the link accepts them.
+
+When a Palm leaves it keeps polling for up to 2 s while a peer still playing is owed a frame. A peer handed to a bot or one that sent LEAVE is still sent its frames meanwhile, but isn't waited for, and neither is a host that never seated the joiner. The wait also ends when the link reports an error or its infrared session is over.
 
 Turn numbers in frames tell the receiver where things go, so the same messages work on both kinds of link. The loopback link (`LINK_LOOP`) can act as either.
 
@@ -35,7 +37,7 @@ Turn numbers in frames tell the receiver where things go, so the same messages w
 
 ## The end of a timed game
 
-The game is over on the same tick everywhere. Each Palm then calls `ls_finish` and keeps polling until `ls_finished`, at most 5 s (`LS_END_MS`), before it leaves and shows the results:
+The game is over on the same tick everywhere. Each Palm then calls `ls_finish` and keeps polling until `ls_finished`, at most 5 s (`LS_END_MS`), before it leaves and shows the results. Bluetooth is serviced during this wait, as it only moves frames then:
 - The host waits until every player has acknowledged the turns up to the end, then sends STOP 8 (the end) in place of STOP 2.
 - A joiner waits for STOP 8 and leaves without a LEAVE, so no bot takes over at the end. A joiner still playing when STOP 8 comes runs on to the end with the turns it has.
 
@@ -149,8 +151,10 @@ The adapter uses zero-timeout, nonblocking socket operations. NetLib owns its
 connection dialog and cancellation. Open counts determine which reference the
 app owns, including partial opens; closing the game releases that reference
 without forcing other applications off the network. A new join times out after
-10 seconds without being seated. Socket errors stop the local game with a
-reason; lockstep handles peers who leave or go silent as on other links.
+10 seconds without being seated (45 seconds over Bluetooth and infrared).
+Socket errors stop the local game with a reason, unless a STOP arrived in the
+same poll, whose reason is shown; lockstep handles peers who leave or go
+silent as on other links.
 
 `make udp-test` runs framing checks, production adapter calls against a NetLib
 fault-injection stub, and eight lockstep peers over real host loopback UDP
@@ -181,7 +185,8 @@ calling the Bluetooth segment.
 The foreground poll closes failed peer sockets and releases departed lobby
 ACL links owned by the host piconet. Node identities cannot be reused during a
 match. Losing a joiner leaves the others running until lockstep hands its tank
-to a bot; losing the host ends a joiner's game. Radio errors stop the local game.
+to a bot; losing the host ends a joiner's game. Radio errors stop the local game, after any
+STOP still queued has been read and shown.
 Normal event dispatch services Bluetooth; long operations and bounded close
 waits peek at the system key queue and consume only library hooks. Ordinary
 keys and application events stay queued in their original order.
@@ -217,10 +222,11 @@ map, entities, stocks, RNG and rule settings are retained. No wire or checksum
 layout changes; the other Palms still use the existing disconnect rules.
 `NetOffline` closes the transport before any continuation or replacement alert.
 
-The saved-game state code is in `src/savegame.c`. Version 2 retains the old
-8-byte header and unchanged GameState bytes, with one viewer-player byte after
-the state. Version 1 saves of the current GameState size still load as player
-zero. Saving writes version 2. `SaveAllow(false)` protects both state and map
+The saved-game state code is in `src/savegame.c`. A save has an 8-byte header
+(magic, version, GameState size), the GameState bytes and one viewer-player
+byte. Saving writes version 4. A save of any other version or size is left
+where it is and doesn't load. `SaveAllow(false)` protects both state and map
 from writes and deletion after the user keeps an existing save. New game and
-Resume reset that guard. App stop never asks to replace a network game's old
+Resume reset that guard. When the conversion fails or the player declines to
+carry on, the guard is left as it was. App stop never asks to replace a network game's old
 single-player save; it saves an offline copy only if no save exists.

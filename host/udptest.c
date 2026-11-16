@@ -184,7 +184,7 @@ static void framing(void)
 	UdpWire host, client;
 	UdpAddress a = {0x7f000001,5046}, b = {0x7f000001,5047}, dest;
 	uint8_t packet[UDP_PACKET + 1], reply[UDP_PACKET], data[64], from, rn, n;
-	uint8_t hello[] = {1,1,'A'};
+	uint8_t hello[] = {1,LS_VERSION,'A'};
 	uint32_t ip; uint16_t port;
 	assert(udp_ip("192.168.1.2", &ip) && ip == 0xc0a80102);
 	assert(!udp_ip("1.2.3", &ip) && !udp_ip("1.2.3.256", &ip) && !udp_ip("224.1.1.1", &ip));

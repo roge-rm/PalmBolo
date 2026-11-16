@@ -81,6 +81,22 @@ static uint32_t run_capture(const char *name,int limit,int *boarded,int *landed)
  assert(g.map.bases[0].owner==0);
  return game_checksum(&g)^game_terrain_checksum();
 }
+// Runs a goal the bot can't reach: the base stays neutral and is dropped.
+// With stop it ends at the drop, else it runs on to the limit.
+static void run_drop(const char *name,int limit,int stop,int *boarded,int *landed)
+{
+ int i,dropped=-1; uint8_t boat=0;
+ for(i=0;i<limit && !(stop && dropped>=0);i++) {
+  game_tick(&g,input);
+  assert(!g.tanks[0].destroyed && !g.tanks[0].deathWait);
+  if(g.tanks[0].boat && !boat)(*boarded)++;
+  if(!g.tanks[0].boat && boat)(*landed)++;
+  boat=g.tanks[0].boat;
+  if(dropped<0 && g.bots[0].skip==((BK_BASE<<5)|0))dropped=i;
+ }
+ printf("%s: dropped at %d ticks, boarded %d landed %d\n",name,dropped,*boarded,*landed); fflush(stdout);
+ assert(g.map.bases[0].owner==MAP_NEUTRAL && dropped>=0);
+}
 static void sea(int existing)
 {
  int x,y;
@@ -105,6 +121,19 @@ static void scenarios(void)
  }
  mapstore_set(102,101,TERRAIN_GRASS);mapstore_set(103,101,TERRAIN_GRASS);
  run_capture("follow shallow shoreline escape",4000,&b,&l);assert(!b && !l);
+ // A base beside deep sea is taken by land, whatever water is about.
+ b=l=0;setup(100,100,110,100);mapstore_set(111,100,TERRAIN_DEEP_SEA);mapstore_set(104,104,TERRAIN_RIVER);
+ run_capture("coastal base by land past a pond",2000,&b,&l);assert(!b && !l && g.tanks[0].trees==40);
+ // A walled base is dropped without a boat on a pond that leads nowhere.
+ b=l=0;setup(100,100,110,100);
+ for(x=0;x<8;x++)mapstore_set(110+kDX[x],100+kDY[x],TERRAIN_BUILDING);
+ mapstore_set(104,104,TERRAIN_RIVER);
+ run_drop("walled base with a pond",6000,0,&b,&l);assert(!b && !l && g.tanks[0].trees==40);
+ // A launch nearer than land gets is tried, then the base is dropped from the boat.
+ b=l=0;setup(100,100,110,100);
+ for(y=96;y<=104;y++)for(x=106;x<=114;x++)mapstore_set(x,y,TERRAIN_BUILDING);
+ mapstore_set(106,100,TERRAIN_RIVER);mapstore_set(107,100,TERRAIN_DEEP_SEA);
+ run_drop("walled base behind a dead-end launch",6000,1,&b,&l);assert(b==1 && !l);
  for(repeat=0;repeat<2;repeat++) {
   b=l=0;sea(1);sums[repeat]=run_capture("board, cross and land",7000,&b,&l);assert(b==1 && l==1);
  }

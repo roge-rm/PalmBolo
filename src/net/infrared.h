@@ -9,6 +9,8 @@ int SEC_NET ir_send(Link *l, uint8_t to, const uint8_t *buf, uint8_t len);
 uint8_t SEC_NET ir_recv(Link *l, uint8_t *from, uint8_t *buf);
 void SEC_NET ir_close(void);
 void SEC_NET ir_service(void);
+// True once the session has ended and every received frame has been read.
+int SEC_NET ir_dead(void);
 #if defined(DEBUG) && defined(IR_TEST_CLOSE_QUEUE)
 void SEC_NET ir_test_close_queue(void);
 #endif

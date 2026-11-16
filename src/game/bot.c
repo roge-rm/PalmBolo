@@ -542,36 +542,42 @@ static void SEC_BOTS launch_candidate(GameState *s, uint16_t n, uint8_t kind, ui
 }
 
 // Expand only settled cells; stop at the goal when its cheapest cost is known.
+// The cell's terrain and each straight neighbour's are read once, and a
+// straight neighbour's step cost is worked out once for both passes.
 static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 {
 	BotSearch *q = &s->search;
+	uint8_t ox = q->ox, oy = q->oy, boat = q->boat;
 	uint8_t lx = (uint8_t)(idx & 31), ly = (uint8_t)(idx >> 5);
-	uint8_t x = (uint8_t)(q->ox + lx), y = (uint8_t)(q->oy + ly);
-	uint8_t h = cell_h(q, idx), d, open[4], afloat = q->boat && water(terrain(x, y));
+	uint8_t x = (uint8_t)(ox + lx), y = (uint8_t)(oy + ly);
+	uint8_t h = cell_h(q, idx), d, open[4], sc[4], here = terrain(x, y);
+	uint8_t afloat = boat && water(here), escape = !boat && !cost(s, x, y, 0);
+	uint16_t base = q->distance[idx];
 
-	uint8_t escape = !q->boat && !cost(s, x, y, 0);
-
-	if (h < q->bestH || (h == q->bestH && cell_tie(q, idx) < cell_tie(q, q->best))) {
-		q->bestH = h;
-		q->best = idx;
-	}
 	if (h <= q->near) {
 		q->best = idx;
 		q->bestH = h;
 		return 1;
 	}
-	if (!q->boat && terrain(x, y) == TERRAIN_BOAT) {
+	// A boat to board is a launch, so it doesn't count as how near land gets.
+	if (!boat && here == TERRAIN_BOAT) {
 		launch_candidate(s, idx, 1, x, y);
 		return 0;
+	}
+	if (h < q->bestH || (h == q->bestH && cell_tie(q, idx) < cell_tie(q, q->best))) {
+		q->bestH = h;
+		q->best = idx;
 	}
 	// Straight neighbours first. A diagonal needs both sides open.
 	for (d = 0; d < 4; d++) {
 		uint8_t nx = (uint8_t)(x + kDX[d * 2]), ny = (uint8_t)(y + kDY[d * 2]);
-		uint16_t ni = (uint16_t)((uint8_t)(nx - q->ox) + (uint8_t)(ny - q->oy) * BOT_WIN);
-		open[d] = (uint8_t)(nx - q->ox) < BOT_WIN && (uint8_t)(ny - q->oy) < BOT_WIN &&
-			nib(q, ni) != 15 && step_cost(s, nx, ny, afloat, escape) &&
-			!(q->boat && !afloat && water(terrain(nx, ny)));
-		if (!q->boat && !water(terrain(x, y)) && terrain(nx, ny) == TERRAIN_RIVER &&
+		uint8_t wx = (uint8_t)(nx - ox), wy = (uint8_t)(ny - oy), nt = terrain(nx, ny);
+
+		// A boat that has landed stays off the water.
+		sc[d] = wx < BOT_WIN && wy < BOT_WIN && nib(q, (uint16_t)(wx + wy * BOT_WIN)) != 15 &&
+			!(boat && !afloat && water(nt)) ? step_cost(s, nx, ny, afloat, escape) : 0;
+		open[d] = sc[d] != 0;
+		if (!boat && !water(here) && nt == TERRAIN_RIVER &&
 		    g_base_at(s, nx, ny) < 0 && g_pill_at(s, nx, ny) < 0)
 			launch_candidate(s, idx, 2, nx, ny);
 	}
@@ -579,19 +585,25 @@ static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 		uint8_t nx = (uint8_t)(x + kDX[d]), ny = (uint8_t)(y + kDY[d]), c;
 		uint16_t n, distance;
 
-		if ((uint8_t)(nx - q->ox) >= BOT_WIN || (uint8_t)(ny - q->oy) >= BOT_WIN)
+		if ((uint8_t)(nx - ox) >= BOT_WIN || (uint8_t)(ny - oy) >= BOT_WIN)
 			continue;
-		n = (uint16_t)((nx - q->ox) + (ny - q->oy) * BOT_WIN);
+		n = (uint16_t)((nx - ox) + (ny - oy) * BOT_WIN);
 		if (nib(q, n) == 15 || (q->distance[n] != BOT_NO_CELL && q->position[n] == BOT_NO_CELL))
 			continue;
-		if ((d & 1) && (!open[d >> 1] || !open[((d >> 1) + 1) & 3]))
-			continue;
-		c = step_cost(s, nx, ny, afloat, escape);
-		if (!c || (q->boat && !afloat && water(terrain(nx, ny))))
-			continue;
+		if (d & 1) {
+			if (!open[d >> 1] || !open[((d >> 1) + 1) & 3])
+				continue;
+			c = step_cost(s, nx, ny, afloat, escape);
+			if (!c || (boat && !afloat && water(terrain(nx, ny))))
+				continue;
+		} else {
+			c = sc[d >> 1];
+			if (!c)
+				continue;
+		}
 		if (q->danger[n >> 3] & (1 << (n & 7)))
 			c = (uint8_t)(c + ZONE_WAIT);
-		distance = (uint16_t)(q->distance[idx] + c);
+		distance = (uint16_t)(base + c);
 		if (distance < q->distance[n]) {
 			q->distance[n] = distance;
 			set_nib(q, n, (uint8_t)(d + 1));
@@ -601,9 +613,17 @@ static uint8_t SEC_BOTS expand(GameState *s, uint16_t idx)
 	return 0;
 }
 
+// Picks where the path ends and starts tracing it back. A launch is taken
+// only when land stops more than a square short of what the goal needs and
+// the launch's water is nearer the goal than land gets, so each boat trip
+// ends nearer and a goal with no way on runs out of tries. A goal out of
+// the window also needs land to have got no nearer at all.
 static void SEC_BOTS trace_begin(BotSearch *q)
 {
-	if (!q->boat && q->bestH > q->near && q->launch != BOT_NO_CELL &&
+	if (!q->boat && q->launch != BOT_NO_CELL && q->bestH > (uint8_t)(q->near + 1) &&
+	    cheb(q->launchX, q->launchY, q->goalX, q->goalY) <
+	    cheb((uint8_t)(q->ox + (q->best & (BOT_WIN - 1))), (uint8_t)(q->oy + (q->best >> 5)),
+	         q->goalX, q->goalY) &&
 	    (((uint8_t)(q->goalX - q->ox) < BOT_WIN && (uint8_t)(q->goalY - q->oy) < BOT_WIN) ||
 	     q->bestH >= q->startH))
 		q->best = q->launch;
@@ -1713,7 +1733,10 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 		}
 		b->wayN--;
 	}
-	if (s->search.who != t + 1 && b->wayN == 0 && !b->boatTask)
+	// The next part of the path is asked for a waypoint early, so the tank
+	// needn't stop for it. A boat order keeps its last waypoint, the bank.
+	if (s->search.who != t + 1 && !b->boatTask &&
+	    (b->wayN == 0 || (b->wayN == 1 && (b->way[0][0] != b->goalX || b->way[0][1] != b->goalY))))
 		b->want = 1;
 	if (b->wayN) {
 		px = b->way[0][0];
@@ -1727,12 +1750,13 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 				tsp = 20;
 		}
 	} else {
-		// Wait for the route so a maze detour can start away from the goal.
+		// No path yet: slowly towards it while the way is open. With a boat
+		// on order it waits at the bank.
 		px = b->goalX;
 		py = b->goalY;
-		tsp = 0;
+		tsp = b->boatTask ? 0 : 12;
 	}
-	if (b->wayN && gd <= 2 && px == b->goalX && py == b->goalY)
+	if (tsp && gd <= 2 && px == b->goalX && py == b->goalY)
 		tsp = stopAt ? 12 : 20;
 	if (b->boatTask && b->wayN == 1 && cheb(tx, ty, px, py) <= 2)
 		tsp = 12;
@@ -1775,6 +1799,10 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	else if (!s->men[t].inTank && !s->men[t].isDead && b->goal != BG_MAN &&
 	    terrain(px, py) == TERRAIN_RIVER && terrain(tx, ty) != TERRAIN_RIVER)
 		tsp = 0;    // waits on the bank for the builder, who may be bridging it
+	// With no path it keeps off water, boats and known mines.
+	if (tsp && !b->wayN && !b->boatTask &&
+	    (water(terrain(px, py)) || cost(s, px, py, 0) == MINE_COST))
+		tsp = 0;
 	if (tsp) {
 		int8_t pill = g_pill_at(s, px, py), base = g_base_at(s, px, py);
 
@@ -1789,11 +1817,13 @@ static void SEC_BOTS navigate(GameState *s, uint8_t t, GameInput *in)
 	}
 	want = util_angle(k->x, k->y, mid(px), mid(py));
 	turn = turn_to(want, k->angle);
-	// Stuck: no new square in 72 ticks while facing where it means to go.
+	// Stuck: no new square in 72 ticks while facing where it means to go,
+	// or 120 at a crawl, which takes 86 ticks to cross a square. Creeping
+	// on with no path doesn't count.
 	if (tsp > 0 && mod32_16(s->tick + t, 24) == 0) {
-		if (tx != b->lastX || ty != b->lastY) {
+		if (tx != b->lastX || ty != b->lastY || (!b->wayN && !b->boatTask)) {
 			b->stuck = 0;
-		} else if (turn < 1024 && turn > -1024 && ++b->stuck >= 3) {
+		} else if (turn < 1024 && turn > -1024 && ++b->stuck >= (tsp <= 12 ? 5 : 3)) {
 			b->stuck = 0;
 			b->mode = BM_ESCAPE;
 			b->modeTime = 40;

@@ -149,9 +149,11 @@ GameState *AppGame(void)
 
 // Close the link before alerts. A declined replacement protects the old save
 // for the rest of this game, including app stop and the results screen.
+// When the game doesn't carry on, the save guard is left as it was.
 static Boolean SEC_COLD OfflineGame(Boolean ask)
 {
 	UInt8 result = NetOffline(&gGame);
+	Boolean keepWas = gKeepSave, allowWas = SaveAllowed();
 
 	gNet = result == 2; // keep the network names for natural-end results
 	gKeepSave = SaveExists();
@@ -165,10 +167,13 @@ static Boolean SEC_COLD OfflineGame(Boolean ask)
 	SoundStop();
 	gClockReset = true;
 	gDirty = gFull = true;
-	if (!result) return false;
+	if (!result || (result != 2 && ask && FrmAlert(OfflineAlert) != 0)) {
+		gKeepSave = keepWas;
+		SaveAllow(allowWas);
+		return false;
+	}
 	if (result == 2) return true;
 	if (ask) {
-		if (FrmAlert(OfflineAlert) != 0) return false;
 		if (!SaveAllowed())
 			SaveAllow(FrmAlert(OfflineSaveAlert) == 0);
 	}

@@ -5,7 +5,7 @@
 #include "../src/mapio.h"
 #include "../src/resource.h"
 struct Handle { UInt8 *p; UInt32 n; };
-struct Database { Char name[32]; UInt32 type; struct Handle rec[300]; UInt16 n; Boolean live; } dbs[12];
+struct Database { Char name[32]; UInt32 type, creator; struct Handle rec[300]; UInt16 n; Boolean live; } dbs[12];
 struct Form { int unused; } form;
 struct List { Int16 sel; UInt16 n; } list;
 static const UInt8 minimal[] = "BMAPBOLO\1\0\0\0\4\377\377\377";
@@ -14,6 +14,7 @@ static UInt32 len, pos, shortRead, shortSend, sentLen;
 static int failWrite, failRename, failOpen, failRecord, failReadAt, canceled, disconnects, accepts, closed, alerts;
 static Err disconnected;
 static int actions[20], actionAt, dirEntries, volumes, activeVolume, cardGone, noVfs;
+static int failMapOpen;
 static int cancelEvent, requeued, zeroSend, dirFolder;
 static Char currentPath[512];
 static struct Handle builtin;
@@ -33,12 +34,13 @@ UInt32 MemHandleSize(MemHandle h){return h->n;}
 void *MemHandleLock(MemHandle h){return h->p;}
 Err MemHandleUnlock(MemHandle h){(void)h;return 0;}
 LocalID DmFindDatabase(UInt16 c,const Char *n){int i;(void)c;for(i=0;i<12;i++)if(dbs[i].live&&!strcmp(dbs[i].name,n))return i+1;return 0;}
-Err DmCreateDatabase(UInt16 c,const Char *n,UInt32 cr,UInt32 t,Boolean r){int i;(void)c;(void)cr;(void)r;for(i=0;i<12;i++)if(!dbs[i].live){dbs[i].live=1;strcpy(dbs[i].name,n);dbs[i].type=t;return 0;}return 2;}
+Err DmCreateDatabase(UInt16 c,const Char *n,UInt32 cr,UInt32 t,Boolean r){int i;(void)c;(void)r;for(i=0;i<12;i++)if(!dbs[i].live){dbs[i].live=1;strcpy(dbs[i].name,n);dbs[i].type=t;dbs[i].creator=cr;return 0;}return 2;}
 DmOpenRef DmOpenDatabase(UInt16 c,LocalID id,UInt16 m){(void)c;(void)m;return failOpen?NULL:&dbs[id-1];}
 MemHandle DmNewRecord(DmOpenRef d,UInt16 *r,UInt32 n){MemHandle h;if(failRecord)return NULL;assert(d->n<300);*r=d->n++;h=&d->rec[*r];h->n=n;h->p=malloc(n);return h;}
 Err DmWrite(void *p,UInt32 off,const void *b,UInt32 n){if(failWrite)return 2;memcpy((UInt8*)p+off,b,n);return 0;}
 Err DmReleaseRecord(DmOpenRef d,UInt16 r,Boolean dirty){(void)d;(void)r;(void)dirty;return 0;}
 Err DmCloseDatabase(DmOpenRef d){(void)d;closed++;return 0;}
+Err DmGetNextDatabaseByTypeCreator(Boolean n,DmSearchStateType *st,UInt32 t,UInt32 c,Boolean o,UInt16 *card,LocalID *id){int i;(void)n;(void)st;(void)o;for(i=0;i<12;i++)if(dbs[i].live&&dbs[i].type==t&&dbs[i].creator==c){*card=0;*id=i+1;return 0;}return 1;}
 Err DmDeleteDatabase(UInt16 c,LocalID id){unsigned i;(void)c;for(i=0;i<dbs[id-1].n;i++)free(dbs[id-1].rec[i].p);memset(&dbs[id-1],0,sizeof(dbs[0]));return 0;}
 Err DmSetDatabaseInfo(UInt16 c,LocalID id,const Char *name,UInt16 *a,void *b,void *d,void *e,void *f,void *g,void *h,void *i,UInt32 *t,void *j){(void)c;(void)a;(void)b;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;if(failRename)return 2;strcpy(dbs[id-1].name,name);dbs[id-1].type=*t;return 0;}
 static UInt32 readData(void *ctx,UInt8 *p,UInt32 max,Err *err){UInt32 n;(void)ctx;*err=0;if(canceled){*err=exgErrUserCancel;return 0;}if(failReadAt>=0&&pos>=(unsigned)failReadAt){*err=exgErrDisconnected;return 0;}n=len-pos;if(n>max)n=max;if(shortRead&&n>shortRead)n=shortRead;memcpy(p,data+pos,n);pos+=n;return n;}
@@ -65,7 +67,7 @@ Boolean MapFileSum(UInt16 i,const Char *n,UInt32 *s,UInt32 *l){(void)i;(void)n;*
 Boolean MapBytesOpen(MapBytes *m,UInt16 i,const Char *n){memset(m,0,sizeof(*m));if(!i){builtin.n=len;m->res=&builtin;}else m->db=&dbs[DmFindDatabase(0,n)-1];return 1;}
 void MapBytesClose(MapBytes *m){(void)m;}
 Err VFSFileRead(FileRef f,UInt32 max,void *p,UInt32 *n){Err e;(void)f;if(cardGone)return 9;*n=readData(NULL,p,max,&e);if(e)return e;return *n?0:vfsErrFileEOF;}
-Err VFSFileOpen(UInt16 v,const Char *path,UInt16 m,FileRef *f){(void)m;strcpy(currentPath,path);activeVolume=v;if(cardGone)return 9;*f=strstr(path,".map")?2:1;return 0;}
+Err VFSFileOpen(UInt16 v,const Char *path,UInt16 m,FileRef *f){(void)m;strcpy(currentPath,path);activeVolume=v;if(cardGone)return 9;if(failMapOpen&&strstr(path,".map")){failMapOpen=0;return 9;}*f=strstr(path,".map")?2:1;return 0;}
 Err VFSFileClose(FileRef f){(void)f;return 0;}
 Err VFSFileSize(FileRef f,UInt32 *n){(void)f;*n=len;return 0;}
 Err VFSVolumeEnumerate(UInt16 *v,UInt32 *it){if((int)*it>=volumes)return 9;*v=*it+1;(*it)++;if((int)*it==volumes)*it=vfsIteratorStop;return 0;}
@@ -75,13 +77,20 @@ void EvtAddEventToQueue(EventType *e){(void)e;requeued++;}
 Boolean SysHandleEvent(EventType *e){(void)e;return 0;}
 Boolean FrmHandleEvent(FormType *f,EventType *e){(void)f;(void)e;return 0;}
 void FrmDrawForm(FormType *f){(void)f;}
-static int count(void){int i,n=0;for(i=0;i<12;i++)if(dbs[i].live){assert(dbs[i].type!='Mimp');if(dbs[i].type=='Map ')n++;}return n;}
+static int count(void){int i,n=0;for(i=0;i<12;i++)if(dbs[i].live){assert(dbs[i].type!='Mimp'||dbs[i].creator!='Rmrf');if(dbs[i].type=='Map ')n++;}return n;}
 static void importFail(void){Char name[32];assert(MapImport(readData,NULL,0,"bad.map",name)!=0);assert(count()==0);}
 int main(void){Char name[32];ExgSocketType s;unsigned i;
  reset();assert(!MapImport(readData,NULL,len,"Everard Island.map",name));assert(!strcmp(name,"Everard Island 2"));assert(count()==1);
  pos=0;assert(!MapImport(readData,NULL,0,"Everard Island.map",name));assert(!strcmp(name,"Everard Island 3"));assert(count()==2);
  reset();assert(!DmCreateDatabase(0,"Save",0,'Save',0));strcpy(name,dbs[0].name);
  assert(!MapImport(readData,NULL,0,"Save.map",name));assert(!strcmp(dbs[0].name,"Save")&&dbs[0].type=='Save');assert(!strcmp(name,"Save 2"));assert(count()==1);
+ reset();DmCreateDatabase(0,"PalmBoloMapCache",0,0,0);DmCreateDatabase(0,"PalmBoloSavedMap",0,0,0);DmCreateDatabase(0,"palmbolomapin",0,0,0);
+ assert(!MapImport(readData,NULL,len,"PalmBoloMapCache.map",name));assert(!strcmp(name,"PalmBoloMapCache 2"));
+ pos=0;assert(!MapImport(readData,NULL,len,"PalmBoloSavedGame.map",name));assert(!strcmp(name,"PalmBoloSavedGame 2"));
+ pos=0;assert(!MapImport(readData,NULL,len,"PalmBolo import.map",name));assert(!strcmp(name,"PalmBolo import 2"));
+ pos=0;assert(!MapImport(readData,NULL,len,"PalmBoloMapIn.map",name));assert(!strcmp(name,"PalmBoloMapIn 2"));
+ reset();DmCreateDatabase(0,"PalmBolo import",'Rmrf','Mimp',0);DmCreateDatabase(0,"Other stage",'Xxxx','Mimp',0);DmCreateDatabase(0,"Keep",'Rmrf','Map ',0);
+ assert(!MapImport(readData,NULL,len,"New.map",name));assert(!strcmp(name,"New"));assert(!DmFindDatabase(0,"PalmBolo import")&&DmFindDatabase(0,"Other stage")&&DmFindDatabase(0,"Keep")&&count()==2);
  reset();shortRead=1;len=70000;memset(data+16,42,len-16);assert(!MapImport(readData,NULL,len,"/folder/Big.map",name));assert(count()==1);assert(dbs[0].n==18);
  MapBeam(1,name);assert(sentLen==len&&!memcmp(data,sentData,len));
  reset();zeroSend=1;MapBeam(0,"Everard Island");assert(disconnected==exgErrDisconnected);
@@ -104,6 +113,11 @@ int main(void){Char name[32];ExgSocketType s;unsigned i;
  reset();shortRead=2;failReadAt=8;MapBrowse();assert(alerts==1&&count()==0);
  reset();volumes=2;actions[0]=MapCardVolume;actions[1]=MapCardOpen;MapBrowse();assert(activeVolume==2&&count()==1);
  reset();dirEntries=10;actions[0]=MapCardMore;actions[1]=MapCardOpen;MapBrowse();assert(!strcmp(dbs[0].name,"Map7")&&count()==1);
+ reset();dirEntries=7;actions[0]=MapCardMore;actions[1]=MapCardOpen;MapBrowse();assert(!strcmp(dbs[0].name,"Map0"));
+ reset();dirEntries=8;actions[0]=MapCardMore;actions[1]=MapCardOpen;MapBrowse();assert(!strcmp(dbs[0].name,"Map7"));
+ reset();dirEntries=14;actions[0]=MapCardMore;actions[1]=MapCardMore;actions[2]=MapCardOpen;MapBrowse();assert(!strcmp(dbs[0].name,"Map0"));
+ reset();dirEntries=10;actions[0]=MapCardMore;actions[1]=MapCardOpen;MapBrowse();assert(count()==1);
+ reset();dirEntries=10;failMapOpen=1;actions[0]=MapCardMore;actions[1]=MapCardOpen;actions[2]=MapCardOpen;MapBrowse();assert(alerts==1&&count()==1&&!strcmp(dbs[0].name,"Map7"));
  reset();dirFolder=1;actions[0]=MapCardOpen;actions[1]=MapCardOpen;MapBrowse();assert(count()==1&&!strcmp(currentPath,"/Folder/Map0.map"));
  reset();dirFolder=1;actions[0]=MapCardOpen;actions[1]=MapCardUp;actions[2]=MapCardCancel;MapBrowse();assert(count()==0&&!strcmp(currentPath,"/"));
  reset();cancelEvent=ctlSelectEvent;MapBrowse();assert(count()==0&&!alerts);

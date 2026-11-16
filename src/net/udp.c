@@ -13,6 +13,14 @@ static UInt32 gSerial;
 static UInt8 gBudget;
 
 static void SEC_UDP Error(const Char *s) { StrCopy(gError, s); }
+// True when the interface or the socket is gone. Any other send or receive
+// error counts as a lost packet, and lockstep times out a peer that stays silent.
+static Boolean SEC_UDP Fatal(Err err)
+{
+	return err == netErrNotOpen || err == netErrSocketNotOpen || err == netErrNoInterfaces ||
+		err == netErrInterfaceDown || err == netErrInterfaceNotFound ||
+		err == netErrPPPBroughtDown || err == netErrQuitOnTxFail;
+}
 uint8_t udp_available(void) { UInt16 ref; return SysLibFind("Net.lib", &ref) == errNone; }
 void udp_config(uint32_t address, uint16_t port) { gRemote.ip = address; gRemote.port = gPort = port; }
 const char *udp_error(void) { return gError; }
@@ -72,8 +80,7 @@ static int SEC_UDP Send(UdpAddress to, UInt8 *data, UInt16 len)
 	addr.family = netSocketAddrINET;
 	addr.addr = NetHToNL(to.ip); addr.port = NetHToNS(to.port);
 	sent = NetLibSend(gRef, gSocket, data, len, 0, &addr, sizeof(addr), 0, &err);
-	// An unreachable peer expires through lockstep; the shared socket stays open.
-	if (sent < 0 && err != netErrWouldBlock && err != netErrTimeout && err != netErrUnreachableDest)
+	if (sent < 0 && Fatal(err))
 		Error("UDP send failed. Connection closed.");
 	return sent == len ? 0 : 1;
 }
@@ -105,11 +112,12 @@ uint8_t udp_recv(Link *l, uint8_t *from, uint8_t *buf)
 		size = NetLibReceive(gRef, gSocket, packet, sizeof(packet), 0, &addr, &addrLen, 0, &err);
 		if (size < 0) {
 			if (err == netErrMessageTooBig || err == netErrBufTooSmall || err == netErrUnreachableDest) continue;
-			if (err != netErrWouldBlock && err != netErrTimeout)
+			if (Fatal(err))
 				Error("UDP receive failed. Connection closed.");
+			// Nothing waiting, or a passing shortage: try again on the next poll.
 			return 0;
 		}
-		if (addrLen < sizeof(addr) || addr.family != netSocketAddrINET) continue;
+		if (addrLen < sizeof(addr) || addr.family != netSocketAddrINET || size > (Int16)sizeof(packet)) continue;
 		address.ip = NetNToHL(addr.addr); address.port = NetNToHS(addr.port);
 		n = udp_wire_recv(&gWire, address, packet, (UInt16)size, from, buf, reply, &replyLen);
 		if (replyLen) Send(address, reply, replyLen);

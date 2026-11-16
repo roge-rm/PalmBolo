@@ -8,12 +8,23 @@ The host advertises PalmBolo/LSAP through IAS. A joiner discovers it,
 connects IrLAP, queries LSAP and opens IrLMP. Host and joiner are nodes
 0 and 1. Link frames have a one-byte length and up to 64 payload bytes,
 split at IrMaxTxSize. TX and RX queues hold 16 frames each. Receive
-overflow stops delivery. A disconnected session is not reopened. Connection
+overflow ends the session. A disconnected session is not reopened. Frames
+received before a disconnect or overflow stay queued, `ir_recv` still hands
+them out, and `ir_dead` reports the ended session once they are all read.
+The queue is cleared when a new IrLMP connection is confirmed. Connection
 control has its own persistent packet and buffer; only a pending data packet
 blocks the next data send. A control packet still held by IrLib is not reused
 before close. OS 5 may return a copied IrPacket, so completion matches an
 actually pending application buffer and its submitted length. The packet
 structure address is not used to match completion.
+
+A joiner has 10 seconds for each step (discovery, IrLAP, the LSAP query and
+the IrLMP connect). When a step runs out, fails to start, or IrLMP drops
+before the link was up, it disconnects IrLAP, waits up to 3 seconds for that
+(asking again if it's still up) and goes back to discovery. A host that has
+already had a session doesn't answer a new IrLMP connect, so that joiner keeps
+retrying until the game gives up. Data that arrives after the IrLMP confirm
+but before polling marks the link up is queued.
 
 Callbacks enter code1, recover A5 through feature Rmrf/16 and restore A5
 on return. They copy data and record state changes in memory. Normal

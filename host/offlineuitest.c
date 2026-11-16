@@ -58,10 +58,12 @@ int main(void) {
  reset(); assert(!NetTurns()); assert(!gNet && gInGame && shown[0]==OfflineAlert);
  reset(); result=0; assert(!NetTurns()); assert(!gInGame && destination==TitleForm && shown[0]==ViewAlert);
  reset(); result=2; assert(!NetTurns()); assert(gInGame && gGame.over && gNet && !numShown);
+ reset(); gKeepSave=0; exists=1; answers[1]=1; LeaveGame(); assert(!gInGame && allowed && !gKeepSave);
+ reset(); gKeepSave=0; exists=1; result=0; assert(!NetTurns()); assert(allowed && !gKeepSave);
  reset(); AppStop(); assert(!numShown && !connected && saves==1);
  reset(); exists=1; AppStop(); assert(!numShown && !connected && !saves);
  reset(); result=0; AppStop(); assert(!numShown && !saves);
  reset(); result=2; AppStop(); assert(!numShown && !saves);
- puts("offline UI: leave/cancel, loss/error/end, replacement/decline, input reset and app-stop paths pass");
+ puts("offline UI: leave/cancel, loss/error/end, replacement/decline, save guard restore, input reset and app-stop paths pass");
  return 0;
 }

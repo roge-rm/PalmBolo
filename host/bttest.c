@@ -56,9 +56,9 @@ static void se(int s,int kind,Err status) {
  struct Event *e=event();e->owner=sockets[s].owner;e->callback=sockets[s].callback;e->epoch=sockets[s].epoch;
  e->socket.event=kind;e->socket.socket=s;e->socket.status=status;
 }
-static void me(int who,int kind,Err status) {
+static void me(int who,int kind,Err status,int about) {
  struct Event *e=event();e->owner=who;e->management=1;e->mgmt=dev[who].callback;e->epoch=dev[who].epoch;
- e->m.event=kind;e->m.status=status;e->m.eventData.bdAddr=address(0);
+ e->m.event=kind;e->m.status=status;e->m.eventData.bdAddr=address(about);
 }
 static void deliver(void) {
  unsigned saved=current, limit=tail;
@@ -88,11 +88,12 @@ Err BtLibOpen(UInt16 r,Boolean allow) { assert(r==7&&!allow);if(dev[current].ope
 Err BtLibClose(UInt16 r) {ref(r);dev[current].open--;return 0;}
 Err BtLibRegisterManagementNotification(UInt16 r,BtLibManagementProcPtr cb,UInt32 epoch) {ref(r);if(dev[current].regError)return dev[current].regError;dev[current].callback=cb;dev[current].epoch=epoch;dev[current].mgmt++;return 0;}
 Err BtLibUnregisterManagementNotification(UInt16 r,BtLibManagementProcPtr cb) {ref(r);assert(dev[current].callback==cb&&dev[current].mgmt==1);dev[current].mgmt--;dev[current].callback=NULL;return 0;}
-Err BtLibPiconetCreate(UInt16 r,Boolean inbound,Boolean discoverable) {ref(r);assert(inbound&&discoverable);if(dev[current].picoError)return dev[current].picoError;dev[current].pico++;if(syncConnect)return 0;me(current,btLibManagementEventPiconetCreated,0);return btLibErrPending;}
+Err BtLibPiconetCreate(UInt16 r,Boolean inbound,Boolean discoverable) {ref(r);assert(inbound&&discoverable);if(dev[current].picoError)return dev[current].picoError;dev[current].pico++;if(syncConnect)return 0;me(current,btLibManagementEventPiconetCreated,0,0);return btLibErrPending;}
 Err BtLibPiconetDestroy(UInt16 r) {ref(r);assert(dev[current].pico==1);dev[current].pico--;return 0;}
 Err BtLibDiscoverSingleDevice(UInt16 r,Char *label,BtLibClassOfDeviceType *filter,UInt8 n,BtLibDeviceAddressType *out,Boolean addr,Boolean previous) {ref(r);assert(label&&!filter&&!n&&!addr&&!previous);*out=address(0);return dev[current].discoverError;}
-Err BtLibLinkConnect(UInt16 r,BtLibDeviceAddressType *a) {ref(r);assert(a->address[5]==1);if(dev[current].aclError)return dev[current].aclError;dev[current].acl++;if(syncConnect)return 0;me(current,btLibManagementEventACLConnectOutbound,0);return btLibErrPending;}
-Err BtLibLinkDisconnect(UInt16 r,BtLibDeviceAddressType *a) {ref(r);if(!current){assert(a->address[5]>1);dev[current].disconnects++;return 0;}assert(a->address[5]==1&&dev[current].acl);dev[current].acl--;dev[current].disconnects++;return 0;}
+Err BtLibLinkConnect(UInt16 r,BtLibDeviceAddressType *a) {ref(r);assert(a->address[5]==1);if(dev[current].aclError)return dev[current].aclError;dev[current].acl++;if(syncConnect)return 0;me(current,btLibManagementEventACLConnectOutbound,0,0);return btLibErrPending;}
+// Each end of a dropped ACL link hears about the other device.
+Err BtLibLinkDisconnect(UInt16 r,BtLibDeviceAddressType *a) {ref(r);if(!current){assert(a->address[5]>1);dev[current].disconnects++;me(a->address[5]-1,btLibManagementEventACLDisconnect,0,0);return 0;}assert(a->address[5]==1&&dev[current].acl);dev[current].acl--;dev[current].disconnects++;me(0,btLibManagementEventACLDisconnect,0,current);return 0;}
 static int socket_new(int owner,BtLibSocketProcPtr cb,UInt32 epoch,int protocol) {int s;for(s=1;s<SOCKS&&sockets[s].used;s++);assert(s<SOCKS);memset(&sockets[s],0,sizeof(sockets[s]));sockets[s].used=1;sockets[s].owner=owner;sockets[s].callback=cb;sockets[s].epoch=epoch;sockets[s].protocol=protocol;return s;}
 Err BtLibSocketCreate(UInt16 r,BtLibSocketRef *s,BtLibSocketProcPtr cb,UInt32 epoch,BtLibProtocolEnum protocol) {ref(r);if(dev[current].createError)return dev[current].createError;*s=socket_new(current,cb,epoch,protocol);return 0;}
 Err BtLibSocketClose(UInt16 r,BtLibSocketRef s) {
@@ -206,4 +207,26 @@ static void lifecycle(void) {
  }
  puts("Bluetooth lifecycle: unavailable/busy/radio failure, cancellation, borrowed ACL, stale epoch, pending/synchronous sends, overflow, timeout, SDP/socket failures, input FIFO, overlapping rejection completion and cleanup passed");
 }
-int main(void){lifecycle();integration();return 0;}
+// A frame sent just before closing still reaches the other side.
+static void leave_close(void) {
+ uint8_t data[64]={250,7},copy[64],from;
+ // The frame and the disconnect are handled back to back before the host reads.
+ reset();open_dev(0);ls_host_lobby(&dev[0].ls,"Everard Island",0,0,get_map,NULL);advance(100);
+ open_dev(1);advance(800);assert(dev[0].ls.seated==3);
+ current=1;assert(!api[1].send(&dev[1].link,0,data,2));api[1].close();dev[1].gone=1;deliver();
+ current=0;assert(api[0].recv(&dev[0].link,&from,copy)==2&&from==1&&copy[0]==250&&copy[1]==7);
+ assert(!api[0].recv(&dev[0].link,&from,copy));
+ // The freed seat takes a new connection with nothing left from the old one.
+ advance(4000);assert(dev[0].ls.seated==1);open_dev(1);advance(800);assert(dev[0].ls.seated==3);close_all();
+ // A joiner's LEAVE frees its seat at once, not after the silence timeout.
+ reset();open_dev(0);ls_host_lobby(&dev[0].ls,"Everard Island",0,0,get_map,NULL);advance(100);
+ open_dev(1);advance(500);open_dev(2);advance(500);assert(dev[0].ls.seated==7);
+ deliver();current=1;ls_leave(&dev[1].ls);ls_poll(&dev[1].ls,now);api[1].close();dev[1].gone=1;deliver();
+ poll_all();assert(dev[0].ls.seated==3);
+ // The host's STOP is read before the joiner reports the lost connection.
+ deliver();current=0;ls_leave(&dev[0].ls);ls_poll(&dev[0].ls,now);api[0].close();dev[0].gone=1;deliver();
+ sync_dev(2);current=2;assert(!api[2].error()[0]);
+ poll_all();current=2;assert(dev[2].ls.stop==LS_STOP_HOST_LEFT&&api[2].error()[0]);
+ puts("Bluetooth leave then close: last frame, joiner LEAVE and host STOP delivered across the disconnect, seat reuse passed");close_all();
+}
+int main(void){lifecycle();leave_close();integration();return 0;}

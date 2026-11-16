@@ -43,6 +43,8 @@ MemHandle DmNewRecord(DmOpenRef,UInt16 *,UInt32);
 Err DmWrite(void *,UInt32,const void *,UInt32);
 Err DmReleaseRecord(DmOpenRef,UInt16,Boolean);
 Err DmCloseDatabase(DmOpenRef);
+typedef struct { int unused; } DmSearchStateType;
+Err DmGetNextDatabaseByTypeCreator(Boolean,DmSearchStateType *,UInt32,UInt32,Boolean,UInt16 *,LocalID *);
 Err DmDeleteDatabase(UInt16,LocalID);
 Err DmSetDatabaseInfo(UInt16,LocalID,const Char *,UInt16 *,void *,void *,void *,void *,void *,void *,void *,UInt32 *,void *);
 Err ExgAccept(ExgSocketType *);
