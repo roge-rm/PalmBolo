@@ -69,16 +69,20 @@ static void SEC_FRONT UiColour(UIColorTableEntries entry, UInt16 colour)
 	UIColorSetTableEntry(entry, &rgb);
 }
 
-static void SEC_FRONT UiBegin(void)
+// Nests: a dialog or alert opened from a handler can send the form below a
+// frmUpdateEvent, which comes back through FrontEvent. Each level pops only
+// what it pushed, as a leaked UIColorPushTable level overruns the OS 5 table
+// stack and corrupts the heap. Returns the outer state for UiEnd.
+static Boolean SEC_FRONT UiBegin(void)
 {
 	UInt16 i;
-	Boolean colour = ScreenDepth() >= 8;
+	Boolean colour = ScreenDepth() >= 8, outer = gUiPushed;
 
 	for (i = 0; i < UI_COUNT; i++)
 		gUi[i] = colour ? ScreenIndex(gUiRGB[i][0], gUiRGB[i][1], gUiRGB[i][2]) :
 			ScreenIndex(gUiGrey[i], gUiGrey[i], gUiGrey[i]);
 	gUiPushed = false;
-	if (!ScreenNewWin()) return;
+	if (!ScreenNewWin()) return outer;
 	WinPushDrawState();
 	gUiPushed = UIColorPushTable() == errNone;
 	UiColour(UIFormFill, UI_PAPER);
@@ -94,12 +98,13 @@ static void SEC_FRONT UiBegin(void)
 	WinSetForeColor(gUi[UI_INK]);
 	WinSetTextColor(gUi[UI_INK]);
 	WinSetBackColor(gUi[UI_PAPER]);
+	return outer;
 }
 
-static void SEC_FRONT UiEnd(void)
+static void SEC_FRONT UiEnd(Boolean outer)
 {
 	if (gUiPushed) UIColorPopTable();
-	gUiPushed = false;
+	gUiPushed = outer;
 	if (ScreenNewWin()) WinPopDrawState();
 }
 
@@ -1159,8 +1164,7 @@ static Boolean SEC_FRONT FrontEvent(EventType *e)
 	Boolean handled = false;
 	FontID old = FntSetFont(stdFont);
 	UInt16 id = 0;
-
-	UiBegin();
+	Boolean outer = UiBegin();
 	if (e->eType == frmUpdateEvent) {
 		switch (FrmGetFormId(frm)) {
 		case TitleForm: TitleDraw(frm); break;
@@ -1178,7 +1182,7 @@ static Boolean SEC_FRONT FrontEvent(EventType *e)
 		if (id && id == Primary(frm)) UiColour(UIObjectFill, UI_GOLD);
 		FrmHandleEvent(frm, e);
 	}
-	UiEnd();
+	UiEnd(outer);
 	FntSetFont(old);
 	return true;
 }
