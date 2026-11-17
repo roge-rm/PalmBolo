@@ -21,6 +21,10 @@ struct GameState;
 #define SEC_FRONT __attribute__((section("front")))
 #define SEC_KEYS __attribute__((section("keys")))
 #define SEC_DRAW __attribute__((section("draw")))
+// The map editor (editor.c, src/game/mapedit.c).
+#ifndef SEC_EDITOR
+#define SEC_EDITOR __attribute__((section("editor")))
+#endif
 // Code run rarely: setup, map parsing, checksums, the log, benches.
 #ifndef SEC_COLD
 #define SEC_COLD __attribute__((section("cold")))
@@ -209,6 +213,40 @@ void SEC_UI ViewIcon(UInt16 cell, Coord x, Coord y);
 // view), else -1 with the map square in mx, my.
 #define kTapPanel 7
 Int16 SEC_UI ViewTap(Coord x, Coord y, UInt8 *mx, UInt8 *my);
+// The map editor's view: the map, pills, bases and starts with no tank,
+// sprites or panel, and the editor's own button row. ViewEditOpen is
+// ViewOpen centred on square cx, cy; ViewClose closes it.
+// ViewEditFrame draws the squares changed through game_set_terrain and
+// the scrolling asked for, or everything when full. ViewEditScroll asks to
+// move the view by dx, dy standard pixels. ViewEditBar sets the button
+// row: n labels with \0 between, the buttons in bit mask sel shown chosen,
+// and button swatch
+// (or -1) showing terrain, or a pill, base or start or the remove mark for
+// the kSwatch codes. ViewEditCentre centres on a square; draw it full
+// after. ViewEditMark has the next frame redraw a square whose pill, base
+// or start changed, and the squares round it. ViewEditSelect frames the
+// square of the chosen item, or none if on is false. ViewTap works as in
+// a game, with the editor's buttons.
+// ViewEditZoom turns on or off the whole playable area at one or more
+// pixels a square, or a pixel for each two squares on a 160 by 160 screen,
+// which ViewEditFrame then draws; ViewTap gives the square under a point
+// there, or kTapPanel off the map. ViewEditBox inverts the frame of a box
+// of squares, and the same call again takes it off. ViewEditWhere gives
+// the square in the middle of the normal view.
+#define kSwatchPill   16
+#define kSwatchBase   17
+#define kSwatchStart  18
+#define kSwatchRemove 19
+Boolean SEC_COLD ViewEditOpen(const DeviceInfo *d, const struct GameState *game, UInt8 cx, UInt8 cy);
+void SEC_UI ViewEditFrame(Boolean full);
+void SEC_UI ViewEditScroll(Int16 dx, Int16 dy);
+void SEC_UI ViewEditBar(const Char *labels, UInt8 n, UInt8 sel, Int8 swatch, UInt8 terrain);
+void SEC_UI ViewEditCentre(UInt8 x, UInt8 y);
+void SEC_UI ViewEditMark(UInt8 x, UInt8 y);
+void SEC_UI ViewEditSelect(Boolean on, UInt8 x, UInt8 y);
+void SEC_EDITOR ViewEditZoom(Boolean on);
+void SEC_EDITOR ViewEditBox(UInt8 x0, UInt8 y0, UInt8 x1, UInt8 y1);
+void SEC_EDITOR ViewEditWhere(UInt8 *x, UInt8 *y);
 #ifdef DEBUG
 // Draws the whole view count times and logs the average time.
 void SEC_COLD ViewTimeFull(UInt16 count);
@@ -294,6 +332,8 @@ AppPrefs *AppPrefsGet(void);
 void SEC_COLD AppPrefsSave(void);
 void AppSetSound(Boolean on);
 
+// The device found at launch.
+const DeviceInfo *AppDevice(void);
 // Starts a game on map index (named name) with the prefs' settings. Replaces
 // the saved game.
 void SEC_COLD AppOpenMap(UInt16 index, const Char *name);
@@ -327,6 +367,26 @@ Boolean SEC_FRONT SaveWrite(const struct GameState *g);
 // the game in progress until written again.
 Boolean SEC_FRONT SaveRead(struct GameState *g);
 void SEC_FRONT SaveDrop(void);
+// The map editor (editor.c). EditStart opens a copy of map index (named
+// name) in the editor form; the map itself changes only when saved, and
+// never the built-in one. EditFormHandler is the form's event handler.
+// EditKey takes the hardware buttons first, as the app eats them.
+void SEC_EDITOR EditStart(UInt16 index, const Char *name);
+FormEventHandlerType *SEC_EDITOR EditFormHandler(void);
+Boolean SEC_EDITOR EditKey(const EventType *e);
+// EditNew asks for a size and opens a new map in the editor. EditDrop
+// frees what the editor keeps over a test game, when the app stops.
+void SEC_EDITOR EditNew(void);
+void SEC_EDITOR EditDrop(void);
+// EditStop keeps unsaved work in the draft as the app stops, before the
+// view closes. EditResume opens the editor on the draft at launch, false
+// when there's none.
+void SEC_EDITOR EditStop(void);
+Boolean SEC_EDITOR EditResume(void);
+// Test play from the editor: a game on the map in AppGame with the
+// prefs' settings and three bots, that never touches the saved game and
+// goes back to the editor when it ends or is left.
+void SEC_COLD AppTestPlay(void);
 #if defined(DEBUG) && defined(DEMO_SHOWCASE)
 // Sets up a new game so the parachute, the builder walking, carried pills
 // and a wreck are on screen (EXTRA=-DDEMO_SHOWCASE).

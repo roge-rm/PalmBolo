@@ -80,7 +80,139 @@ Boolean FrmHandleEvent(FormType *f,EventType *e){(void)f;(void)e;return 0;}
 void FrmDrawForm(FormType *f){(void)f;}
 static int count(void){int i,n=0;for(i=0;i<12;i++)if(dbs[i].live){assert(dbs[i].type!='Mimp'||dbs[i].creator!='Rmrf');if(dbs[i].type=='Map ')n++;}return n;}
 static void importFail(void){Char name[32];assert(MapImport(readData,NULL,0,"bad.map",name)!=0);assert(count()==0);}
+
+// Map writer round trips: read -> write -> read gives the same terrain and
+// items, and writing again gives the same bytes.
+#include "../src/game/map.h"
+#include "../src/game/mapstore.h"
+static uint8_t wbuf[70000], wbuf2[70000], terrainA[256][256];
+static uint32_t wlen, wcap = sizeof(wbuf);
+static uint8_t *wdst = wbuf;
+static int wfailAt = -1;
+static int memWrite(void *ctx, const uint8_t *src, uint32_t n) {
+ (void)ctx; if (wfailAt >= 0 && wlen + n > (uint32_t)wfailAt) return 1;
+ if (wlen + n > wcap) return 1;
+ memcpy(wdst + wlen, src, n); wlen += n; return 0;
+}
+static int writeTo(uint8_t *dst, const MapInfo *info, uint32_t *n) {
+ int err; wdst = dst; wlen = 0; err = map_write(info, memWrite, NULL); *n = wlen; wdst = wbuf; return err;
+}
+static int readFrom(MapInfo *info, const uint8_t *d, uint32_t n) {
+ MapSource ms; MapMemory mm; map_source_memory(&ms, &mm, d, n); return map_parse(info, &ms);
+}
+static void snapTerrain(void) { int y; for (y = 0; y < 256; y++) memcpy(terrainA[y], mapstore_row(y), 256); }
+static int sameTerrain(void) { int y; for (y = 0; y < 256; y++) if (memcmp(terrainA[y], mapstore_row(y), 256)) return 0; return 1; }
+// Reads d, writes it, reads that back and checks nothing changed. Returns the written length in wbuf.
+static uint32_t roundTrip(const uint8_t *d, uint32_t n, MapInfo *first) {
+ MapInfo again; uint32_t n1, n2;
+ assert(readFrom(first, d, n) == MAP_OK); snapTerrain();
+ assert(writeTo(wbuf, first, &n1) == MAP_OK);
+ assert(readFrom(&again, wbuf, n1) == MAP_OK);
+ assert(!memcmp(first, &again, sizeof(again))); assert(sameTerrain());
+ assert(writeTo(wbuf2, &again, &n2) == MAP_OK); assert(n1 == n2 && !memcmp(wbuf, wbuf2, n1));
+ return n1;
+}
+// Writes the store and info as built, reads it back and checks it's unchanged.
+// Built maps keep their rows centred on 126 so map_parse doesn't move them.
+static void builtTrip(MapInfo *info) {
+ MapInfo got, again; uint32_t n; int i;
+ snapTerrain(); assert(writeTo(wbuf2, info, &n) == MAP_OK);
+ assert(readFrom(&got, wbuf2, n) == MAP_OK); assert(sameTerrain());
+ assert(got.numPills == info->numPills && got.numBases == info->numBases && got.numStarts == info->numStarts);
+ for (i = 0; i < info->numPills; i++) { MapPill *a = &info->pills[i], *b = &got.pills[i];
+  assert(a->x == b->x && a->y == b->y && a->owner == b->owner && a->armour == b->armour && a->speed == b->speed && b->active); }
+ for (i = 0; i < info->numBases; i++) { MapBase *a = &info->bases[i], *b = &got.bases[i];
+  assert(a->x == b->x && a->y == b->y && a->owner == b->owner && a->armour == b->armour && a->shells == b->shells && a->mines == b->mines && b->active); }
+ for (i = 0; i < info->numStarts; i++) { MapStart *a = &info->starts[i], *b = &got.starts[i];
+  assert(a->x == b->x && a->y == b->y && a->dir == b->dir && b->active); }
+ roundTrip(wbuf2, n, &again);
+}
+static void builtStart(MapInfo *info) { memset(info, 0, sizeof(*info)); mapstore_fill(TERRAIN_DEEP_SEA); }
+// Land block x0..x1, rows 100..152, of one terrain.
+static void block(uint8_t t, int x0, int x1) { int x, y; for (y = 100; y <= 152; y++) for (x = x0; x <= x1; x++) mapstore_set(x, y, t); }
+static void writerTests(void) {
+ FILE *f; uint8_t *ev = malloc(70000); uint32_t evLen, n, p, q; MapInfo info, got; int i, x, y, dx, dy, k, diff;
+ assert(mapstore_open(TERRAIN_DEEP_SEA) == 0);
+ // The minimal map: no items, no runs.
+ n = roundTrip(minimal, 16, &info); assert(n == 16 && !memcmp(wbuf, minimal, 16));
+ // Everard Island, written by WinBolo. Compare the bytes with every
+ // coordinate moved by the amount map_parse moved it, if any.
+ f = fopen("res/everard.map", "rb"); assert(f); evLen = fread(ev, 1, 70000, f); fclose(f);
+ n = roundTrip(ev, evLen, &info);
+ dx = (uint8_t)(wbuf[12] - ev[12]); dy = (uint8_t)(wbuf[13] - ev[13]);
+ assert(!memcmp(wbuf, ev, 12));
+ for (p = 12, i = 0; i < ev[9] + ev[10] + ev[11]; i++) {
+  k = i < ev[9] ? 5 : i < ev[9] + ev[10] ? 6 : 3;
+  assert(wbuf[p] == (uint8_t)(ev[p] + dx) && wbuf[p + 1] == (uint8_t)(ev[p + 1] + dy) && !memcmp(wbuf + p + 2, ev + p + 2, k - 2)); p += k;
+ }
+ // Runs match byte for byte, except rows where map_parse put road under a
+ // pill or base.
+ for (q = p, diff = 0; ev[p] != 4 || ev[p + 1] != 255; p += ev[p], q += wbuf[q]) {
+  assert(wbuf[q + 1] == (uint8_t)(ev[p + 1] + dy) && wbuf[q + 2] == (uint8_t)(ev[p + 2] + dx) && wbuf[q + 3] == (uint8_t)(ev[p + 3] + dx));
+  if (wbuf[q] == ev[p] && !memcmp(wbuf + q + 4, ev + p + 4, ev[p] - 4)) continue;
+  for (k = 0, i = 0; i < info.numPills; i++) k |= info.pills[i].y == wbuf[q + 1];
+  for (i = 0; i < info.numBases; i++) k |= info.bases[i].y == wbuf[q + 1];
+  assert(k); diff++;
+ }
+ assert(!memcmp(wbuf + q, ev + p, 4) && q + 4 == n && p + 4 == evLen);
+ printf("map-test: Everard Island written byte for byte but %d rows with road added, moved by %d,%d\n", diff, (int8_t)dx, (int8_t)dy);
+ // An island with no items.
+ builtStart(&info); block(TERRAIN_GRASS, 110, 142); builtTrip(&info);
+ // 16 of each item, owners, stock and the neutral owner.
+ builtStart(&info); block(TERRAIN_GRASS, 60, 192);
+ info.numPills = info.numBases = info.numStarts = 16;
+ for (i = 0; i < 16; i++) {
+  MapPill *pl = &info.pills[i]; MapBase *b = &info.bases[i]; MapStart *s = &info.starts[i];
+  pl->x = 60 + i * 8; pl->y = 110; pl->owner = i == 15 ? MAP_NEUTRAL : i; pl->armour = i; pl->speed = 100 - i;
+  b->x = 60 + i * 8; b->y = 120; b->owner = i == 0 ? MAP_NEUTRAL : i; b->armour = 90; b->shells = 40 + i; b->mines = i * 2;
+  mapstore_set(b->x, b->y, TERRAIN_ROAD);
+  s->x = 61 + i * 8; s->y = 130 + (i & 7); s->dir = i;
+ }
+ builtTrip(&info);
+ // Items in the mined border stay in the file, inactive after reading.
+ builtStart(&info); block(TERRAIN_GRASS, 60, 192); info.numPills = 2; info.numStarts = 1;
+ info.pills[0].x = 100; info.pills[0].y = 120; info.pills[1].x = 5; info.pills[1].y = 120; info.starts[0].x = 120; info.starts[0].y = 120;
+ assert(writeTo(wbuf2, &info, &n) == MAP_OK); roundTrip(wbuf2, n, &got);
+ assert(got.numPills == 2 && got.pills[0].active && !got.pills[1].active);
+ // A map off centre is moved on the first read only.
+ builtStart(&info); for (y = 30; y <= 70; y++) for (x = 20; x <= 60; x++) mapstore_set(x, y, TERRAIN_FOREST);
+ info.numStarts = 1; info.starts[0].x = 40; info.starts[0].y = 50; info.starts[0].dir = 3;
+ assert(writeTo(wbuf2, &info, &n) == MAP_OK); roundTrip(wbuf2, n, &got);
+ assert(got.starts[0].x == 40 + 86 && got.starts[0].y == 50 + 76 && mapstore_get(20 + 86, 30 + 76) == TERRAIN_FOREST);
+ // Every terrain, mines included, in single squares, pairs and long rows.
+ builtStart(&info);
+ for (y = 100; y <= 152; y++) for (x = 0; x < 255; x++) mapstore_set(x, y, (uint8_t)((y & 1) ? x % 16 : (x / (1 + y % 11)) % 16));
+ for (x = 0; x < 255; x++) mapstore_set(x, 126, TERRAIN_MINE_GRASS);
+ for (x = 0; x < 255; x++) mapstore_set(x, 127, (uint8_t)(TERRAIN_MINE_FIRST + x % 6));
+ builtTrip(&info);
+ // The longest run a row can code to: a single square then a pair, across
+ // all 255 squares, 4 nibbles for 3 squares.
+ builtStart(&info);
+ for (y = 100; y <= 152; y++) for (x = 0; x < 255; x++) mapstore_set(x, y, x % 3 ? TERRAIN_FOREST : TERRAIN_GRASS);
+ builtTrip(&info); assert(writeTo(wbuf2, &info, &n) == MAP_OK && wbuf2[12] == 174);
+ // Random land with deep sea gaps and runs of every length.
+ srand(7);
+ for (k = 0; k < 300; k++) {
+  builtStart(&info);
+  for (y = 100; y <= 152; y++) for (x = 0; x < 255; ) {
+   int len = 1 + rand() % 14, t = rand() % 18;
+   for (; len-- && x < 255; x++) mapstore_set(x, y, t >= 16 ? TERRAIN_DEEP_SEA : t);
+  }
+  for (x = 0; x < 255; x++) { mapstore_set(x, 100, TERRAIN_SWAMP); mapstore_set(x, 152, TERRAIN_SWAMP); }
+  builtTrip(&info);
+ }
+ // Land at x 255 can't be written; a failing write proc stops the writer.
+ builtStart(&info); block(TERRAIN_GRASS, 110, 142); mapstore_set(255, 3, TERRAIN_ROAD);
+ assert(writeTo(wbuf, &info, &n) == MAP_ERR_EDGE);
+ mapstore_set(255, 3, TERRAIN_DEEP_SEA);
+ for (wfailAt = 0; wfailAt < 40; wfailAt++) assert(writeTo(wbuf, &info, &n) == MAP_ERR_WRITE);
+ wfailAt = -1; assert(writeTo(wbuf, &info, &n) == MAP_OK);
+ info.numPills = 17; assert(writeTo(wbuf, &info, &n) == MAP_ERR_COUNTS);
+ free(ev);
+ puts("map-test: map writer round trips passed");
+}
 int main(void){Char name[32];ExgSocketType s;unsigned i;
+ writerTests();
  reset();assert(!MapImport(readData,NULL,len,"Everard Island.map",name));assert(!strcmp(name,"Everard Island 2"));assert(count()==1);
  pos=0;assert(!MapImport(readData,NULL,0,"Everard Island.map",name));assert(!strcmp(name,"Everard Island 3"));assert(count()==2);
  reset();assert(!DmCreateDatabase(0,"Save",0,'Save',0));strcpy(name,dbs[0].name);

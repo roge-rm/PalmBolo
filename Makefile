@@ -2,6 +2,7 @@
 #   make             release PRC
 #   make DEBUG=1     adds the debug log, timers and self-test (build-debug/)
 #   make host-test   builds and runs the game rules test on the host
+#   make editor-test the map editor's save checks and a saved map played
 #   make build/maprender   host tool: maprender FILE.map OUT.png [8|16 [X Y W H]]
 #   make art-preview       PNGs of the art sheets at every depth in build/art/preview
 # EXTRA="-DAUTOQUIT_SECONDS=9" makes a debug build quit by itself, and
@@ -37,8 +38,8 @@ ART      = build/art
 CFLAGS   = -O2 -Wall -Wno-unknown-pragmas $(DEFS) $(INCLUDES) -I$(ART) -Isrc
 LDFLAGS  = -L$(SDK)/lib/m68k-palmos-coff
 
-SRCS     = main appstate screen screendraw detect dlog timing mapload mapimport mapio mapstore_palm tileview tilepick panel sound front savegame blit keys compose netgame looptest
-GAMESRCS = game tank shells pills lgm treegrow util map mapthumb bot
+SRCS     = main appstate screen screendraw detect dlog timing mapload mapimport mapio mapstore_palm tileview tilepick panel sound front editor savegame blit keys compose netgame looptest
+GAMESRCS = game tank shells pills lgm treegrow util map mapwrite mapthumb mapedit bot
 # The scripted games are for the debug self-test only.
 ifdef DEBUG
 GAMESRCS += script
@@ -149,8 +150,8 @@ bt-test: build/bttest
 map-test: build/maptest
 	build/maptest
 
-build/maptest: host/maptest.c host/mapstub/PalmOS.h host/mapstub/VFSMgr.h src/mapimport.c src/mapio.c src/mapio.h src/game/mapthumb.c | $(BUILD)
-	gcc -Wall -Wextra -Wno-multichar -O2 -fsanitize=address,undefined -DPALMBOLO_H -Ihost/mapstub -Isrc host/maptest.c src/mapimport.c src/mapio.c src/game/mapthumb.c -o $@
+build/maptest: host/maptest.c host/mapstub/PalmOS.h host/mapstub/VFSMgr.h src/mapimport.c src/mapio.c src/mapio.h src/game/mapthumb.c src/game/map.c src/game/mapwrite.c src/game/map.h host/mapstore_host.c | $(BUILD)
+	gcc -Wall -Wextra -Wno-multichar -O2 -fsanitize=address,undefined -DPALMBOLO_H -Ihost/mapstub -Isrc host/maptest.c src/mapimport.c src/mapio.c src/game/mapthumb.c src/game/map.c src/game/mapwrite.c host/mapstore_host.c -o $@
 
 # Offline conversion and the production saved-game adapter.
 offline-test: build/offlinetest build/offlineuitest
@@ -183,3 +184,11 @@ build/bottest: host/bottest.c $(HOSTSRC) src/game/*.h | $(BUILD)
 bot-test: build/bottest
 	build/bottest
 .PHONY: bot-test
+
+# Map editor rules: save checks, then a painted and saved map played by bots.
+editor-test: build/editortest
+	build/editortest
+
+build/editortest: host/editortest.c src/game/mapedit.c src/game/mapwrite.c $(HOSTSRC) src/game/*.h | $(BUILD)
+	gcc -Wall -Wextra -O2 -fsanitize=address,undefined host/editortest.c src/game/mapedit.c src/game/mapwrite.c $(HOSTSRC) -lm -o $@
+.PHONY: editor-test

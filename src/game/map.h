@@ -93,7 +93,9 @@ enum {
 	MAP_ERR_VERSION,    // version other than 1
 	MAP_ERR_COUNTS,     // too many pills, bases or starts
 	MAP_ERR_RUN,        // bad run header
-	MAP_ERR_DATA        // run data doesn't fit its header or the map
+	MAP_ERR_DATA,       // run data doesn't fit its header or the map
+	MAP_ERR_EDGE,       // land at x 255, which the format can't hold
+	MAP_ERR_WRITE       // the write proc failed
 };
 
 // Where the file bytes come from. fill copies up to max bytes into dst and
@@ -123,5 +125,23 @@ void SEC_COLD map_source_memory(MapSource *ms, MapMemory *mm, const uint8_t *dat
 int SEC_COLD map_parse(MapInfo *info, MapSource *ms);
 
 const char *SEC_COLD map_error_text(int err);
+
+// WinBolo's mapCenter as map_parse runs it: the move in addX, addY that
+// centres the land's box, which items widen only left and up. Returns 1
+// when map_parse would move the map, which it does only when both are
+// non-zero.
+int SEC_COLD map_center_move(const MapInfo *info, int16_t *addX, int16_t *addY);
+// Moves the terrain and the items right by addX and down by addY,
+// wrapping at 256.
+void SEC_COLD map_shift(MapInfo *info, uint8_t addX, uint8_t addY);
+
+// Takes len bytes of the file being written. Returns 0, or non-zero to stop.
+typedef int (*MapWriteProc)(void *ctx, const uint8_t *src, uint32_t len);
+
+// Writes info and the map store as a .map file through write. Items are
+// written as they are, inactive ones included, so their numbers stay.
+// It doesn't centre: a map map_center_move would move loads elsewhere.
+// Returns MAP_OK, MAP_ERR_COUNTS, MAP_ERR_EDGE or MAP_ERR_WRITE.
+int SEC_COLD map_write(const MapInfo *info, MapWriteProc write, void *ctx);
 
 #endif

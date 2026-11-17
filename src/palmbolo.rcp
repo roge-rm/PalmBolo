@@ -19,8 +19,10 @@ MENUID MapMenu
 BEGIN
   TITLE "Choose a map"
   LIST "" ID MapList AT (7 96 146 33) VISIBLEITEMS 3
-  BUTTON "Next" ID MapNext AT (4 143 60 13) RECTFRAME USABLE
-  BUTTON "Back" ID MapBack AT (96 143 60 13) RECTFRAME USABLE
+  BUTTON "Next" ID MapNext AT (4 143 36 13) RECTFRAME USABLE
+  BUTTON "Edit" ID MapEdit AT (43 143 36 13) RECTFRAME USABLE
+  BUTTON "New" ID MapNew AT (82 143 36 13) RECTFRAME USABLE
+  BUTTON "Back" ID MapBack AT (121 143 36 13) RECTFRAME USABLE
 END
 
 FORM ID NewGameForm AT (0 0 160 160)
@@ -279,4 +281,125 @@ BEGIN
   TITLE "Offline save"
   MESSAGE "Replace the saved game when you leave? Keeping it means this game will not be saved."
   BUTTONS "Replace" "Keep old save"
+END
+
+// The map editor (editor.c). The list is the picker, in the order of
+// map_edit_terrain (src/game/mapedit.c), then the items.
+FORM ID EditForm AT (0 0 160 160)
+NOFRAME
+USABLE
+MENUID EditMenu
+BEGIN
+  LIST "Grass" "Forest" "Road" "Building" "Shot building" "Rubble" "Crater" "Swamp" "River" "Boat" "Deep sea" "Mined grass" "Mined forest" "Mined road" "Mined rubble" "Mined crater" "Mined swamp" "Pill" "Base" "Start" "Erase item" ID EditTerrainList AT (40 4 80 132) NONUSABLE VISIBLEITEMS 12
+  LIST "Paint" "Paint 3x3" "Paint 5x5" "Fill" "Box" ID EditToolList AT (30 4 60 55) NONUSABLE VISIBLEITEMS 5
+END
+
+MENU ID EditMenu
+BEGIN
+  PULLDOWN "Map"
+  BEGIN
+    MENUITEM "Save" ID EditSaveItem "S"
+    MENUITEM "Whole map" ID EditZoomItem "W"
+    MENUITEM "Test play" ID EditTestItem "T"
+    MENUITEM "Leave editor" ID EditLeaveItem
+  END
+  PULLDOWN "Edit"
+  BEGIN
+    MENUITEM "Undo" ID EditUndoItem "U"
+    MENUITEM "Item settings" ID EditItemItem "I"
+  END
+END
+
+FORM ID EditNameForm AT (2 56 156 70)
+MODAL
+USABLE
+DEFAULTBTNID EditNameCancel
+BEGIN
+  TITLE "Save map"
+  LABEL "Name" AUTOID AT (7 22)
+  FIELD ID EditNameField AT (36 22 114 12) USABLE EDITABLE UNDERLINED SINGLELINE MAXCHARS 31
+  BUTTON "Save" ID EditNameOK AT (7 50 50 13) RECTFRAME USABLE
+  BUTTON "Cancel" ID EditNameCancel AT (63 50 50 13) RECTFRAME USABLE
+  GRAFFITISTATEINDICATOR AT (132 52)
+END
+
+ALERT ID EditCheckAlert
+ERROR
+BEGIN
+  TITLE "Save map"
+  MESSAGE "^1^2^3"
+  BUTTONS "OK"
+END
+
+ALERT ID EditLeaveAlert
+CONFIRMATION
+BEGIN
+  TITLE "Leave editor"
+  MESSAGE "Save the changes to this map?"
+  BUTTONS "Save" "Discard" "Cancel"
+END
+
+ALERT ID EditReplaceAlert
+CONFIRMATION
+BEGIN
+  TITLE "Save map"
+  MESSAGE "Replace the map ^1?"
+  BUTTONS "Replace" "Cancel"
+END
+
+// The island size for a new map, the buttons in MAP_BLANK_ order.
+FORM ID EditSizeForm AT (2 98 156 60)
+MODAL
+USABLE
+DEFAULTBTNID EditSizeCancel
+BEGIN
+  TITLE "New map"
+  BUTTON "Small" ID EditSizeSmall AT (7 20 44 13) RECTFRAME USABLE
+  BUTTON "Medium" ID EditSizeMedium AT (56 20 44 13) RECTFRAME USABLE
+  BUTTON "Large" ID EditSizeLarge AT (105 20 44 13) RECTFRAME USABLE
+  BUTTON "Cancel" ID EditSizeCancel AT (7 41 44 13) RECTFRAME USABLE
+END
+
+ALERT ID EditNoUndoAlert
+CONFIRMATION
+BEGIN
+  TITLE "Map editor"
+  MESSAGE "Not enough memory to undo this. Go ahead?"
+  BUTTONS "OK" "Cancel"
+END
+
+ALERT ID EditItemAlert
+INFORMATION
+BEGIN
+  TITLE "Map editor"
+  MESSAGE "^1^2^3"
+  BUTTONS "OK"
+END
+
+// A pill's or base's owner and stock, or a start's direction. editor.c
+// hides the rows the item doesn't have. The facing list runs clockwise
+// from north.
+FORM ID EditItemForm AT (2 58 156 100)
+MODAL
+USABLE
+DEFAULTBTNID EditItemCancel
+BEGIN
+  TITLE "Item"
+  LABEL "Owner" ID EditOwnerLabel AT (7 18)
+  POPUPTRIGGER "Neutral" ID EditOwnerTrigger AT (56 18 70 AUTO) LEFTANCHOR
+  LIST "Neutral" "Player 1" "Player 2" "Player 3" "Player 4" "Player 5" "Player 6" "Player 7" "Player 8" "Player 9" "Player 10" "Player 11" "Player 12" "Player 13" "Player 14" "Player 15" "Player 16" ID EditOwnerList AT (60 1 60 99) NONUSABLE VISIBLEITEMS 9
+  POPUPLIST ID EditOwnerTrigger EditOwnerList
+  LABEL "Facing" ID EditFacingLabel AT (7 18)
+  POPUPTRIGGER "N" ID EditFacingTrigger AT (56 18 50 AUTO) LEFTANCHOR
+  LIST "N" "NNE" "NE" "ENE" "E" "ESE" "SE" "SSE" "S" "SSW" "SW" "WSW" "W" "WNW" "NW" "NNW" ID EditFacingList AT (60 1 40 99) NONUSABLE VISIBLEITEMS 9
+  POPUPLIST ID EditFacingTrigger EditFacingList
+  LABEL "Armour" ID EditArmourLabel AT (7 33)
+  FIELD ID EditArmourField AT (60 33 20 12) USABLE EDITABLE UNDERLINED SINGLELINE NUMERIC MAXCHARS 2
+  LABEL "Shells" ID EditShellsLabel AT (7 48)
+  FIELD ID EditShellsField AT (60 48 20 12) USABLE EDITABLE UNDERLINED SINGLELINE NUMERIC MAXCHARS 2
+  LABEL "Mines" ID EditMinesLabel AT (7 63)
+  FIELD ID EditMinesField AT (60 63 20 12) USABLE EDITABLE UNDERLINED SINGLELINE NUMERIC MAXCHARS 2
+  BUTTON "OK" ID EditItemOK AT (7 82 50 13) RECTFRAME USABLE
+  BUTTON "Cancel" ID EditItemCancel AT (63 82 50 13) RECTFRAME USABLE
+  GRAFFITISTATEINDICATOR AT (132 84)
 END

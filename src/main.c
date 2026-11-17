@@ -25,6 +25,8 @@ static UInt8 gBuild, gBuildX, gBuildY;  // builder order to send next tick
 static Boolean gDemo;       // the title's demo game is playing
 static Boolean gDemoSave;   // SaveAllowed() from before the demo
 static Boolean gDemoRest;   // a demo has played since the last user input
+static Boolean gTest;       // test play from the map editor
+static Boolean gTestSave;   // SaveAllowed() from before test play
 static UInt32 gDemoAt;      // system tick the title was last touched, or the demo began
 #define kDemoIdleSecs   60
 #define kDemoRunSecs    180
@@ -153,6 +155,11 @@ GameState *AppGame(void)
 	return &gGame;
 }
 
+const DeviceInfo *AppDevice(void)
+{
+	return &gDev;
+}
+
 // Close the link before alerts. A declined replacement protects the old save
 // for the rest of this game, including app stop and the results screen.
 // When the game doesn't carry on, the save guard is left as it was.
@@ -187,9 +194,15 @@ static Boolean SEC_COLD OfflineGame(Boolean ask)
 }
 
 // Leaves for the title. Network players may carry on locally first.
+static void SEC_COLD TestEnd(void);
+
 static void SEC_COLD LeaveGame(void)
 {
 	if (gInGame && gForm == GameForm) {
+		if (gTest) {
+			TestEnd();
+			return;
+		}
 		if (gNet) {
 			if (NetAsk("Leave network game", "Disconnect from the other players?", "Leave",
 			    "Cancel") != 0)
@@ -234,6 +247,53 @@ static Boolean SEC_COLD HandleMenu(UInt16 id)
 	return false;
 }
 
+// A game for the player and bots with the prefs' settings.
+static void SEC_COLD Setup(GameSetup *setup, UInt8 bots)
+{
+	UInt8 i, j, n = (UInt8)(1 + bots), half = (UInt8)((n + 1) / 2);
+
+	MemSet(setup, sizeof(*setup), 0);
+	setup->gameType = gPrefs.gameType;
+	setup->hiddenMines = gPrefs.hiddenMines;
+	setup->timeLimit = (UInt8)AppTimeMinutes(gPrefs.timeLimit);
+	setup->numPlayers = 1;
+	setup->numBots = bots;
+	setup->botLevel = (UInt8)(gPrefs.botLevel + BOT_EASY);
+	// Teams: the player and the first bots against the rest.
+	if (gPrefs.teams)
+		for (i = 0; i < n; i++)
+			for (j = 0; j < n; j++)
+				if (i != j && (i < half) == (j < half))
+					setup->allies[i] = (UInt16)(setup->allies[i] | (1 << j));
+}
+
+void SEC_COLD AppTestPlay(void)
+{
+	GameSetup setup;
+
+	Setup(&setup, 3);
+	game_init(&gGame, TimGetSeconds(), &setup);
+	gTestSave = SaveAllowed();
+	SaveAllow(false);
+	gTest = true;
+	gNet = false;
+	gInGame = true;
+	game_set_viewer(0);
+	gBuild = BUILD_NONE;
+	FrmGotoForm(GameForm);
+}
+
+// Back to the editor from test play.
+static void SEC_COLD TestEnd(void)
+{
+	gTest = false;
+	SaveAllow(gTestSave);
+	gInGame = false;
+	gFormOpen = false;
+	game_take_sounds(NULL, 0);
+	FrmGotoForm(EditForm);
+}
+
 void SEC_COLD AppOpenMap(UInt16 index, const Char *name)
 {
 	Int16 err;
@@ -255,21 +315,8 @@ void SEC_COLD AppOpenMap(UInt16 index, const Char *name)
 		(Int16)gGame.map.numBases, (Int16)gGame.map.numStarts));
 	{
 		GameSetup setup;
-		UInt8 i, j, n = (UInt8)(1 + gPrefs.numBots), half = (UInt8)((n + 1) / 2);
 
-		MemSet(&setup, sizeof(setup), 0);
-		setup.gameType = gPrefs.gameType;
-		setup.hiddenMines = gPrefs.hiddenMines;
-		setup.timeLimit = (UInt8)AppTimeMinutes(gPrefs.timeLimit);
-		setup.numPlayers = 1;
-		setup.numBots = gPrefs.numBots;
-		setup.botLevel = (UInt8)(gPrefs.botLevel + BOT_EASY);
-		// Teams: the player and the first bots against the rest.
-		if (gPrefs.teams)
-			for (i = 0; i < n; i++)
-				for (j = 0; j < n; j++)
-					if (i != j && (i < half) == (j < half))
-						setup.allies[i] = (UInt16)(setup.allies[i] | (1 << j));
+		Setup(&setup, gPrefs.numBots);
 		LOG(("start: map loaded %lu sys ticks after Start", TimGetTicks() - gStartTicks));
 #if defined(DRAW_BENCH)
 		game_init(&gGame, 4321, &setup);
@@ -490,6 +537,10 @@ static Boolean GameHandler(EventType *e)
 				DemoStop();
 				gDemoRest = true;
 			}
+			if (gTest) {
+				TestEnd();
+				return true;
+			}
 			gInGame = false;
 			FrmGotoForm(TitleForm);
 			return true;
@@ -551,8 +602,8 @@ static Boolean HandleEvent(EventType *e)
 
 	// A menu drag-cancel can be consumed without posting menuEvent.
 	// Resume when the game window actually becomes active again.
-	if (e->eType == winEnterEvent && gForm == GameForm) {
-		frm = FrmGetFormPtr(GameForm);
+	if (e->eType == winEnterEvent && (gForm == GameForm || gForm == EditForm)) {
+		frm = FrmGetFormPtr(gForm);
 		if (frm && e->data.winEnter.enterWindow == FrmGetWindowHandle(frm) &&
 		    WinGetActiveWindow() == e->data.winEnter.enterWindow) {
 			gMenuOpen = false;
@@ -593,6 +644,11 @@ static Boolean HandleEvent(EventType *e)
 		if (a & KA_EAT)
 			return true;
 	}
+	// The map editor scrolls with the buttons, unless a menu is up.
+	if (gForm == EditForm && e->eType == keyDownEvent && !gMenuOpen &&
+	    (frm = FrmGetActiveForm()) != NULL && FrmGetFormId(frm) == EditForm &&
+	    WinGetActiveWindow() == FrmGetWindowHandle(frm) && EditKey(e))
+		return true;
 	if (e->eType == keyDownEvent && (IsGameKey(e->data.keyDown.chr) ||
 	    e->data.keyDown.chr == vchrTxCenter))
 		return true;
@@ -655,7 +711,8 @@ static Boolean HandleEvent(EventType *e)
 		// Keeps a closed input area closed while the form comes up.
 		ViewDialogInputArea(frm);
 		FrmSetActiveForm(frm);
-		FrmSetEventHandler(frm, gForm == GameForm ? GameHandler : FrontHandler(gForm));
+		FrmSetEventHandler(frm, gForm == GameForm ? GameHandler :
+			gForm == EditForm ? EditFormHandler() : FrontHandler(gForm));
 		return true;
 	case winDisplayChangedEvent:
 		if (gForm == GameForm) {
@@ -665,6 +722,8 @@ static Boolean HandleEvent(EventType *e)
 		}
 		return FrmDispatchEvent(e);
 	case menuEvent:
+		if (gForm == EditForm)
+			return FrmDispatchEvent(e);
 		if (gForm == MapListForm && (e->data.menu.itemID == MapImportItem || e->data.menu.itemID == MapBeamItem || e->data.menu.itemID == MapPageItem))
 			return FrmDispatchEvent(e);
 		return HandleMenu(e->data.menu.itemID);
@@ -1325,6 +1384,8 @@ static void EventLoop(void)
 		// The time limit ran out: show who did what.
 		if (gDemo && gInGame && gForm == GameForm && gGame.over)
 			DemoEnd();
+		else if (gTest && gInGame && gForm == GameForm && gGame.over)
+			TestEnd();
 		else if (gInGame && gForm == GameForm && gGame.over) {
 			gInGame = false;
 			gFormOpen = false;
@@ -1457,7 +1518,8 @@ static void SEC_COLD AppStart(void)
 	ViewPins(gDev.pins);
 	gQuit = gFormOpen = false;
 	gDirty = gFull = true;
-	FrmGotoForm(TitleForm);
+	if (!EditResume())
+		FrmGotoForm(TitleForm);
 }
 
 static void SEC_COLD AppStop(void)
@@ -1467,7 +1529,7 @@ static void SEC_COLD AppStop(void)
 	// App switching must not open continuation or replacement alerts.
 	if (gNet && !OfflineGame(false)) gInGame = false;
 	NetEnd();
-	if (gDemo)
+	if (gDemo || gTest)
 		gInGame = false;
 	if (gInGame && !gGame.over && SaveAllowed()) {
 		gInGame = false;
@@ -1476,8 +1538,10 @@ static void SEC_COLD AppStop(void)
 	}
 	SoundStop();
 	KeysStop();
+	EditStop();
 	ViewClose();
 	FrmCloseAllForms();
+	EditDrop();
 	ScreenExit();
 	LOG(("stop tick %lu", gGame.tick));
 }

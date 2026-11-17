@@ -221,7 +221,7 @@ static void SEC_FRONT TallLayout(FormType *frm, UInt16 bot1, UInt16 bot2, UInt16
 		if (reset) gBaseY[i] = y;
 		y = gBaseY[i];
 		shift = 0;
-		if (id == bot1 || id == bot2 || id == bot3) shift = extra;
+		if (id == bot1 || id == bot2 || id == bot3 || id == MapNew) shift = extra;
 		else shift = front_shift(form, y, r.extent.y);
 		if (id == list) {
 			y = front_map_list_y(r.extent.y);
@@ -628,7 +628,7 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 				sel = i;
 		}
 		LstSetListChoices(lst, gNamePtrs, gNumMaps);
-		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, e->eType == frmOpenEvent);
+		TallLayout(frm, MapNext, MapBack, MapEdit, MapList, e->eType == frmOpenEvent);
 		LstSetSelection(lst, sel);
 		gThumb = MemPtrNew(MAP_THUMB_SIZE * MAP_THUMB_SIZE);
 		MapThumbLoad(sel);
@@ -664,10 +664,22 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 			Go(TitleForm);
 			return true;
 		}
+		// A copy of the chosen map in the editor.
+		if (e->data.ctlSelect.controlID == MapEdit) {
+			Int16 sel = LstGetSelection((ListType *)Obj(frm, MapList));
+
+			if (sel >= 0 && sel < (Int16)gNumMaps)
+				EditStart((UInt16)sel, gNames[sel]);
+			return true;
+		}
+		if (e->data.ctlSelect.controlID == MapNew) {
+			EditNew();
+			return true;
+		}
 		return false;
 	case winDisplayChangedEvent:
 		FitWindow(frm);
-		TallLayout(frm, MapNext, MapBack, 0xFFFF, MapList, false);
+		TallLayout(frm, MapNext, MapBack, MapEdit, MapList, false);
 		FormDraw(frm);
 		MapThumbDraw();
 		return true;

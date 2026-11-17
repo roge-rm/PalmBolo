@@ -24,6 +24,7 @@
 #include "resource.h"
 #include "game/game.h"
 #include "game/mapstore.h"
+#include "game/mapthumb.h"
 #include "netgame.h"
 #include "game/util.h"
 #include "tilepick.h"
@@ -46,6 +47,23 @@ static UInt16 gShownDeaths = 0xFFFF;
 static Coord gBarH, gBarY, gPanelH, gLine;
 static UInt8 gAction, gBarShown = 0xFF;
 static Boolean gWasCovered;
+// The map editor's view (ViewEditOpen): no tank, sprites or panel, and its
+// own button row of gEditButtons labels in gEditText.
+static Boolean gEdit, gEditBarNew;
+static const Char *gEditText;
+static UInt8 gEditButtons, gEditSel, gEditTerrain;
+static Int8 gEditSwatch;
+static Int32 gEditDx, gEditDy;  // scrolling asked for, native pixels
+#define kEditMarks 8
+static UInt8 gEditMark[kEditMarks][2];
+static UInt8 gEditMarks;        // over kEditMarks: redraw everything
+static Boolean gEditSelOn;
+static UInt8 gEditSelX, gEditSelY;
+// The zoomed out view: gZoomCells cells a side from native pixel gZoomX,
+// gZoomY, each gZoomPix pixels showing the first of gZoomStep squares.
+static Boolean gZoom;
+static UInt8 gZoomPix, gZoomStep, gZoomCells;
+static Coord gZoomX, gZoomY;
 
 static void SEC_UI CentreOnTank(void);
 static void SEC_UI NearBases(void);
@@ -421,6 +439,8 @@ void SEC_COLD ViewResized(void)
 	NativeOff();
 	gW = w;
 	gPanelH = PanelLayout(w);
+	if (gEdit)
+		gPanelH = 0;
 	gH = h - gBarH - gPanelH;
 	gBarY = gH + gPanelH;
 	gBarShown = 0xFF;
@@ -442,7 +462,7 @@ static void SEC_UI ClampView(void)
 		gVy = 0;
 }
 
-Boolean SEC_COLD ViewOpen(const DeviceInfo *d, const GameState *game)
+static Boolean SEC_COLD Open(const DeviceInfo *d, const GameState *game)
 {
 	Boolean ok;
 
@@ -489,12 +509,36 @@ Boolean SEC_COLD ViewOpen(const DeviceInfo *d, const GameState *game)
 	gWasCovered = false;
 	if (gSheetB.bits)
 		BlitFind(WinGetDrawWindow(), &gViewB);
-	CentreOnTank();
+	if (!gEdit)
+		CentreOnTank();
+	return true;
+}
+
+Boolean SEC_COLD ViewOpen(const DeviceInfo *d, const GameState *game)
+{
+	gEdit = false;
+	return Open(d, game);
+}
+
+Boolean SEC_COLD ViewEditOpen(const DeviceInfo *d, const GameState *game, UInt8 cx, UInt8 cy)
+{
+	gEdit = true;
+	gEditDx = gEditDy = 0;
+	gEditBarNew = true;
+	gEditMarks = 0;
+	gEditSelOn = false;
+	gZoom = false;
+	if (!Open(d, game)) {
+		gEdit = false;
+		return false;
+	}
+	ViewEditCentre(cx, cy);
 	return true;
 }
 
 void SEC_COLD ViewClose(void)
 {
+	gEdit = false;
 	ViewSetInputArea(false);
 	FreeSheets();
 	PanelClose();
@@ -1265,15 +1309,20 @@ void SEC_UI ViewSetAction(UInt8 action)
 	gAction = action;
 }
 
+static Int16 SEC_EDITOR ZoomTap(Int32 nx, Int32 ny, UInt8 *mx, UInt8 *my);
+
 Int16 SEC_UI ViewTap(Coord x, Coord y, UInt8 *mx, UInt8 *my)
 {
 	Int32 nx = (Int32)x * gTs / 8, ny = (Int32)y * gTs / 8;
+	Int16 nb = gEdit ? gEditButtons : kButtons;
 
 	if (ny >= gBarY) {
-		Int16 b = (Int16)(nx * kButtons / (gW > 0 ? gW : 1));
+		Int16 b = (Int16)(nx * nb / (gW > 0 ? gW : 1));
 
-		return b < kButtons ? b : kButtons - 1;
+		return b < nb ? b : nb - 1;
 	}
+	if (gEdit && gZoom)
+		return ZoomTap(nx, ny, mx, my);
 	// The panel, or the overview covering the view, toggles the overview.
 	if (ny >= gH || PanelCovers())
 		return kTapPanel;
@@ -1660,6 +1709,514 @@ void SEC_UI ViewFrame(Boolean full, Boolean ticked)
 			(Int16)gW, (Int16)gH, (Int16)gTs));
 	TimingDraw(t0, TimGetTicks());
 #endif
+}
+
+// ---- the map editor ----
+
+void SEC_UI ViewEditBar(const Char *labels, UInt8 n, UInt8 sel, Int8 swatch, UInt8 terrain)
+{
+	gEditText = labels;
+	gEditButtons = n;
+	gEditSel = sel;
+	gEditSwatch = swatch;
+	gEditTerrain = terrain;
+	gEditBarNew = true;
+}
+
+void SEC_UI ViewEditScroll(Int16 dx, Int16 dy)
+{
+	gEditDx += (Int32)dx * gTs / 8;
+	gEditDy += (Int32)dy * gTs / 8;
+}
+
+void SEC_UI ViewEditMark(UInt8 x, UInt8 y)
+{
+	if (gEditMarks < kEditMarks) {
+		gEditMark[gEditMarks][0] = x;
+		gEditMark[gEditMarks][1] = y;
+		gEditMarks++;
+	} else {
+		gEditMarks = kEditMarks + 1;
+	}
+}
+
+void SEC_UI ViewEditSelect(Boolean on, UInt8 x, UInt8 y)
+{
+	if (gEditSelOn == on && gEditSelX == x && gEditSelY == y)
+		return;
+	if (gEditSelOn)
+		ViewEditMark(gEditSelX, gEditSelY);
+	gEditSelOn = on;
+	gEditSelX = x;
+	gEditSelY = y;
+}
+
+// Redraws the marked squares and those round them, as for a terrain change.
+static void SEC_UI EditMarks(void)
+{
+	RectangleType r;
+	UInt8 i;
+
+	for (i = 0; i < gEditMarks && i < kEditMarks; i++) {
+		PickForget(gEditMark[i][0], gEditMark[i][1]);
+		r.topLeft.x = (Coord)((Int32)(gEditMark[i][0] - 1) * gTs - gVx);
+		r.topLeft.y = (Coord)((Int32)(gEditMark[i][1] - 1) * gTs - gVy);
+		r.extent.x = gTs * 3;
+		r.extent.y = gTs * 3;
+		if (r.topLeft.x > -gTs * 3 && r.topLeft.x < gW && r.topLeft.y > -gTs * 3 && r.topLeft.y < gH)
+			Erase(&r);
+	}
+	gEditMarks = 0;
+}
+
+// A black and white frame inside the chosen item's square, drawn over the
+// finished frame.
+static void SEC_UI EditSelFrame(void)
+{
+	Coord x = (Coord)((Int32)gEditSelX * gTs - gVx), y = (Coord)((Int32)gEditSelY * gTs - gVy);
+	RectangleType clip;
+
+	if (!gEditSelOn || x <= -gTs || x >= gW || y <= -gTs || y >= gH)
+		return;
+	clip.topLeft.x = clip.topLeft.y = 0;
+	clip.extent.x = gW;
+	clip.extent.y = gH;
+	WinSetClip(&clip);
+	Fill(x, y, gTs, 1, gBlack);
+	Fill(x, y + gTs - 1, gTs, 1, gBlack);
+	Fill(x, y, 1, gTs, gBlack);
+	Fill(x + gTs - 1, y, 1, gTs, gBlack);
+	Fill(x + 1, y + 1, gTs - 2, 1, gWhite);
+	Fill(x + 1, y + gTs - 2, gTs - 2, 1, gWhite);
+	Fill(x + 1, y + 1, 1, gTs - 2, gWhite);
+	Fill(x + gTs - 2, y + 1, 1, gTs - 2, gWhite);
+	WinResetClip();
+}
+
+void SEC_UI ViewEditCentre(UInt8 x, UInt8 y)
+{
+	gVx = (Int32)x * gTs + gTs / 2 - gW / 2;
+	gVy = (Int32)y * gTs + gTs / 2 - gH / 2;
+	gEditDx = gEditDy = 0;
+	ClampView();
+}
+
+// The editor's button row: a label on each button, the chosen one white on
+// black, and the swatch button showing the terrain to paint.
+static void SEC_UI EditBar(void)
+{
+	const Char *p = gEditText;
+	UInt16 i, len;
+	Coord x0, x1;
+	FontID old = FntSetFont(stdFont);
+	IndexedColorType oldBack = 0, oldText = 0;
+
+	gEditBarNew = false;
+	if (ScreenNewWin()) {
+		oldBack = WinSetBackColor(PanelBg());
+		oldText = WinSetTextColor(gBlack);
+	}
+	Fill(0, gBarY, gW, gBarH, PanelBg());
+	Fill(0, gBarY, gW, 1, gBlack);
+	Fill(0, gBarY + 1, gW, 1, gWhite);
+	for (i = 0; p && i < gEditButtons; i++, p += len + 1) {
+		Coord ty = gBarY + 2 + (gBarH - 2 - gLine) / 2;
+
+		x0 = (Coord)((Int32)gW * i / gEditButtons);
+		x1 = (Coord)((Int32)gW * (i + 1) / gEditButtons);
+		len = StrLen(p);
+		if (i > 0)
+			Fill(x0, gBarY, 1, gBarH, gBlack);
+		if ((Int8)i == gEditSwatch && gSheet) {
+			UInt8 t = gEditTerrain, n[8], k;
+			Boolean mine = t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST;
+			Coord tx = x0 + (x1 - x0 - gTs) / 2 + 1, ty2 = gBarY + 2 + (gBarH - 2 - gTs) / 2;
+			RectangleType src;
+
+			if (t >= kSwatchPill && t <= kSwatchRemove) {
+				Fill(tx - 1, ty2 - 1, gTs + 2, gTs + 2, gBlack);
+				if (t == kSwatchRemove) {
+					// A cross on white.
+					Fill(tx, ty2, gTs, gTs, gWhite);
+					for (k = 1; k + 1 < (UInt8)gTs; k++) {
+						Fill(tx + k, ty2 + k, 1, 1, gBlack);
+						Fill(tx + gTs - 1 - k, ty2 + k, 1, 1, gBlack);
+					}
+				} else {
+					CellRect(t == kSwatchPill ? AT_PILL_ENEMY_0 : t == kSwatchBase ?
+						AT_BASE_NEUTRAL : AT_START, &src);
+					WinCopyRectangle(gSheet, WinGetDrawWindow(), &src, tx, ty2, winPaint);
+				}
+				continue;
+			}
+			if (mine)
+				t = (UInt8)(t - TERRAIN_MINE_ADD);
+			for (k = 0; k < 8; k++)
+				n[k] = t;
+			// A frame round the tile, so deep sea and grass show on the grey.
+			Fill(tx - 1, ty2 - 1, gTs + 2, gTs + 2, gBlack);
+			CellRect(tile_pick(t, n), &src);
+			WinCopyRectangle(gSheet, WinGetDrawWindow(), &src, tx, ty2, winPaint);
+			if (mine)
+				DrawSprite(AS_MINE, tx, ty2);
+			continue;
+		}
+		if (gEditSel & (1 << i)) {
+			Fill(x0 + 1, gBarY + 2, x1 - x0 - 1, gBarH - 2, gBlack);
+			if (ScreenNewWin()) {
+				WinSetTextColor(gWhite);
+				WinSetBackColor(gBlack);
+				WinDrawChars(p, len, x0 + (x1 - x0 - FntCharsWidth(p, len)) / 2 + 1, ty);
+				WinSetTextColor(gBlack);
+				WinSetBackColor(PanelBg());
+			} else {
+				WinDrawInvertedChars(p, len, x0 + (x1 - x0 - FntCharsWidth(p, len)) / 2 + 1, ty);
+			}
+		} else {
+			WinDrawChars(p, len, x0 + (x1 - x0 - FntCharsWidth(p, len)) / 2 + 1, ty);
+		}
+	}
+	if (ScreenNewWin()) {
+		WinSetBackColor(oldBack);
+		WinSetTextColor(oldText);
+	}
+	FntSetFont(old);
+}
+
+static void SEC_EDITOR ZoomFrame(Boolean full);
+
+void SEC_UI ViewEditFrame(Boolean full)
+{
+	WinHandle scr = NULL;
+	Int32 dx, dy;
+
+	if (gZoom) {
+		ZoomFrame(full);
+		return;
+	}
+	NativeOn();
+	if (gEditMarks > kEditMarks)
+		full = true;
+	if (full)
+		gEditMarks = 0;
+	// Bases count as road to their neighbours, and may have moved.
+	if (full || gEditMarks)
+		NearBases();
+	if (full && !gViewB.bits && !CompFit(gW, gH))
+		gCompValid = false;
+	if (CompWin()) {
+		if (!gCompValid)
+			full = true;
+		scr = WinSetDrawWindow(CompWin());
+		CompBegin();
+		gComposing = true;
+	}
+	if (!full) {
+		DirtyStart();
+		DrawChanges(false);
+		DrawItemChanges(false, false);
+		EditMarks();
+		DirtyFlush();
+		gDirtyOn = false;
+		// Sideways moves of the bits go by whole bytes, 4 pixels at 2 bits;
+		// the rest waits for the next frame.
+		dx = gEditDx;
+		dy = gEditDy;
+		if (ScrollDirect(true, 4))
+			dx = dx / 4 * 4;
+		gEditDx -= dx;
+		gEditDy -= dy;
+		if (dx)
+			ScrollAxis(dx, true);
+		if (dy)
+			ScrollAxis(dy, false);
+		if (gBgMoved) {
+			RectangleType all;
+
+			all.topLeft.x = all.topLeft.y = 0;
+			all.extent.x = gW;
+			all.extent.y = gH;
+			gBgMoved = false;
+			BgToView(&all);
+		}
+	} else {
+		gVx += gEditDx;
+		gVy += gEditDy;
+		gEditDx = gEditDy = 0;
+		ClampView();
+		game_take_changes(NULL, 0);
+		DrawItemChanges(true, false);
+		PickClear();
+		PanelRebuild();
+		BgFit();
+		DrawAll();
+		gBgValid = BgUse();
+		gCompValid = gComposing;
+	}
+	if (gComposing) {
+		gComposing = false;
+		WinSetDrawWindow(scr);
+		CompFlush(scr);
+	}
+	EditSelFrame();
+	if (full || gEditBarNew)
+		EditBar();
+	NativeOff();
+}
+
+// ---- the editor's zoomed out view ----
+
+// The map preview's colours (front.c), for the THUMB_ values.
+static const UInt8 gZoomRGB[THUMB_COLOURS][3] = {
+	{80,112,120}, {117,149,149}, {166,177,110}, {68,104,61},
+	{239,232,187}, {91,84,71}, {237,200,94}, {30,35,26}
+};
+static const UInt8 gZoomGrey[THUMB_COLOURS] = {170,170,255,85,255,0,0,0};
+static const CustomPatternType gZoomSea = {0x11,0,0,0,0x11,0,0,0};
+static IndexedColorType gZoomColour[THUMB_COLOURS];
+static Boolean gZoomStipple;    // sea as a dot pattern, on screens without colours
+
+static UInt8 SEC_EDITOR ZoomKind(UInt8 t)
+{
+	if (t == TERRAIN_DEEP_SEA)
+		return THUMB_SEA;
+	if (t >= TERRAIN_MINE_FIRST && t <= TERRAIN_MINE_LAST)
+		t = (UInt8)(t - TERRAIN_MINE_ADD);
+	switch (t) {
+	case TERRAIN_RIVER: case TERRAIN_BOAT: return THUMB_WATER;
+	case TERRAIN_FOREST: return THUMB_FOREST;
+	case TERRAIN_ROAD: return THUMB_ROAD;
+	case TERRAIN_BUILDING: case TERRAIN_HALFBUILDING: return THUMB_WALL;
+	}
+	return THUMB_LAND;
+}
+
+#define kZoomFirst  (MAP_EDGE_LOW + 1)
+#define kZoomSquares (MAP_EDGE_HIGH - MAP_EDGE_LOW - 1)
+
+void SEC_EDITOR ViewEditZoom(Boolean on)
+{
+	UInt16 i;
+
+	gZoom = on;
+	if (!on)
+		return;
+	gZoomStipple = !ScreenNewWin() || ScreenDepth() == 1;
+	for (i = 0; i < THUMB_COLOURS; i++)
+		gZoomColour[i] = ScreenDepth() >= 8 ?
+			ScreenIndex(gZoomRGB[i][0], gZoomRGB[i][1], gZoomRGB[i][2]) :
+			ScreenIndex(gZoomGrey[i], gZoomGrey[i], gZoomGrey[i]);
+}
+
+// The cells' size and place for the view as it is now.
+static void SEC_EDITOR ZoomFit(void)
+{
+	Coord m = gW < gH ? gW : gH, size;
+
+	if (m >= kZoomSquares) {
+		gZoomPix = (UInt8)(m / kZoomSquares);
+		gZoomStep = 1;
+	} else {
+		gZoomPix = 1;
+		gZoomStep = (UInt8)((kZoomSquares + m - 1) / m);
+	}
+	gZoomCells = (UInt8)((kZoomSquares + gZoomStep - 1) / gZoomStep);
+	size = (Coord)gZoomCells * gZoomPix;
+	gZoomX = (gW - size) / 2;
+	gZoomY = (gH - size) / 2;
+}
+
+static Int16 SEC_EDITOR ZoomTap(Int32 nx, Int32 ny, UInt8 *mx, UInt8 *my)
+{
+	Int32 cx = nx - gZoomX, cy = ny - gZoomY;
+
+	if (cx < 0 || cy < 0)
+		return kTapPanel;
+	cx /= gZoomPix;
+	cy /= gZoomPix;
+	if (cx >= gZoomCells || cy >= gZoomCells)
+		return kTapPanel;
+	*mx = (UInt8)(kZoomFirst + cx * gZoomStep);
+	*my = (UInt8)(kZoomFirst + cy * gZoomStep);
+	return -1;
+}
+
+static void SEC_EDITOR ZoomRect(UInt16 cx, UInt16 cy, UInt16 n, UInt8 kind)
+{
+	Coord x = gZoomX + (Coord)(cx * gZoomPix), y = gZoomY + (Coord)(cy * gZoomPix);
+	RectangleType r;
+
+	if (gZoomStipple && kind == THUMB_SEA) {
+		r.topLeft.x = x;
+		r.topLeft.y = y;
+		r.extent.x = (Coord)(n * gZoomPix);
+		r.extent.y = gZoomPix;
+		if (ScreenNewWin()) {
+			WinSetForeColor(gBlack);
+			WinSetBackColor(gWhite);
+		}
+		WinFillRectangle(&r, 0);
+		return;
+	}
+	Fill(x, y, (Coord)(n * gZoomPix), gZoomPix, gZoomColour[kind]);
+}
+
+// The cell for square x, y, or false if it shows another square.
+static Boolean SEC_EDITOR ZoomCell(UInt8 x, UInt8 y, UInt16 *cx, UInt16 *cy)
+{
+	if (x < kZoomFirst || y < kZoomFirst || x >= MAP_EDGE_HIGH || y >= MAP_EDGE_HIGH ||
+	    (x - kZoomFirst) % gZoomStep || (y - kZoomFirst) % gZoomStep)
+		return false;
+	*cx = (UInt16)((x - kZoomFirst) / gZoomStep);
+	*cy = (UInt16)((y - kZoomFirst) / gZoomStep);
+	return true;
+}
+
+// A dot at least 3 pixels wide on the cell nearest square x, y.
+static void SEC_EDITOR ZoomDot(UInt8 x, UInt8 y, UInt8 kind)
+{
+	Coord s = gZoomPix < 3 ? 3 : gZoomPix, px, py;
+
+	if (x < kZoomFirst || y < kZoomFirst || x >= MAP_EDGE_HIGH || y >= MAP_EDGE_HIGH)
+		return;
+	px = gZoomX + (Coord)((x - kZoomFirst) / gZoomStep) * gZoomPix + (gZoomPix - s) / 2;
+	py = gZoomY + (Coord)((y - kZoomFirst) / gZoomStep) * gZoomPix + (gZoomPix - s) / 2;
+	Fill(px, py, s, s, gZoomColour[kind]);
+}
+
+static void SEC_EDITOR ZoomItems(void)
+{
+	const MapInfo *m = &gGame->map;
+	UInt16 i;
+
+	for (i = 0; i < m->numBases; i++)
+		ZoomDot(m->bases[i].x, m->bases[i].y, THUMB_BASE);
+	for (i = 0; i < m->numPills; i++)
+		ZoomDot(m->pills[i].x, m->pills[i].y, THUMB_PILL);
+}
+
+static void SEC_EDITOR ZoomFrame(Boolean full)
+{
+	uint8_t xy[64];
+	UInt8 n, i, k, y;
+	UInt16 cx, cy, e;
+	CustomPatternType oldPattern;
+	IndexedColorType oldFore = 0, oldBack = 0;
+
+	NativeOn();
+	n = game_take_changes(xy, 32);
+	if (gEditMarks)
+		full = true;
+	gEditMarks = 0;
+	if (ScreenNewWin()) {
+		oldFore = WinSetForeColor(gBlack);
+		oldBack = WinSetBackColor(gWhite);
+	}
+	if (gZoomStipple) {
+		WinGetPattern(&oldPattern);
+		WinSetPattern(&gZoomSea);
+	}
+	if (full || n == 255) {
+		ZoomFit();
+		Fill(0, 0, gW, gH, PanelBg());
+		for (cy = 0; cy < gZoomCells; cy++) {
+			const uint8_t *row = mapstore_row(kZoomFirst + cy * gZoomStep);
+
+			for (cx = 0; cx < gZoomCells; cx = e) {
+				k = ZoomKind(row[kZoomFirst + cx * gZoomStep]);
+				for (e = cx + 1; e < gZoomCells &&
+				    ZoomKind(row[kZoomFirst + e * gZoomStep]) == k; e++)
+					;
+				ZoomRect(cx, cy, e - cx, k);
+			}
+		}
+	} else {
+		for (i = 0; i < n; i++) {
+			y = xy[i * 2 + 1];
+			if (ZoomCell(xy[i * 2], y, &cx, &cy))
+				ZoomRect(cx, cy, 1, ZoomKind(mapstore_get(xy[i * 2], y)));
+		}
+	}
+	ZoomItems();
+	if (gZoomStipple)
+		WinSetPattern((const CustomPatternType *)&oldPattern);
+	if (ScreenNewWin()) {
+		WinSetForeColor(oldFore);
+		WinSetBackColor(oldBack);
+	}
+	if (full || gEditBarNew)
+		EditBar();
+	NativeOff();
+}
+
+// A native pixel box for squares x0..x1, y0..y1 in the view, cut to it.
+// False if none of it shows.
+static Boolean SEC_EDITOR BoxRect(UInt8 x0, UInt8 y0, UInt8 x1, UInt8 y1, Int32 *l, Int32 *t,
+	Int32 *r, Int32 *b)
+{
+	UInt8 k;
+
+	if (x0 > x1) {
+		k = x0;
+		x0 = x1;
+		x1 = k;
+	}
+	if (y0 > y1) {
+		k = y0;
+		y0 = y1;
+		y1 = k;
+	}
+	if (gZoom) {
+		if (x0 < kZoomFirst) x0 = kZoomFirst;
+		if (y0 < kZoomFirst) y0 = kZoomFirst;
+		if (x1 >= MAP_EDGE_HIGH) x1 = MAP_EDGE_HIGH - 1;
+		if (y1 >= MAP_EDGE_HIGH) y1 = MAP_EDGE_HIGH - 1;
+		*l = gZoomX + (Int32)((x0 - kZoomFirst) / gZoomStep) * gZoomPix;
+		*t = gZoomY + (Int32)((y0 - kZoomFirst) / gZoomStep) * gZoomPix;
+		*r = gZoomX + (Int32)((x1 - kZoomFirst) / gZoomStep + 1) * gZoomPix;
+		*b = gZoomY + (Int32)((y1 - kZoomFirst) / gZoomStep + 1) * gZoomPix;
+	} else {
+		*l = (Int32)x0 * gTs - gVx;
+		*t = (Int32)y0 * gTs - gVy;
+		*r = (Int32)(x1 + 1) * gTs - gVx;
+		*b = (Int32)(y1 + 1) * gTs - gVy;
+	}
+	if (*l < 0) *l = 0;
+	if (*t < 0) *t = 0;
+	if (*r > gW) *r = gW;
+	if (*b > gH) *b = gH;
+	return *l < *r && *t < *b;
+}
+
+void SEC_EDITOR ViewEditBox(UInt8 x0, UInt8 y0, UInt8 x1, UInt8 y1)
+{
+	Int32 l, t, r, b;
+	Coord w = gTs / 8;
+	RectangleType e;
+
+	if (!BoxRect(x0, y0, x1, y1, &l, &t, &r, &b))
+		return;
+	NativeOn();
+	if (r - l <= 2 * w || b - t <= 2 * w) {
+		RctSetRectangle(&e, (Coord)l, (Coord)t, (Coord)(r - l), (Coord)(b - t));
+		WinInvertRectangle(&e, 0);
+	} else {
+		RctSetRectangle(&e, (Coord)l, (Coord)t, (Coord)(r - l), w);
+		WinInvertRectangle(&e, 0);
+		RctSetRectangle(&e, (Coord)l, (Coord)(b - w), (Coord)(r - l), w);
+		WinInvertRectangle(&e, 0);
+		RctSetRectangle(&e, (Coord)l, (Coord)(t + w), w, (Coord)(b - t - 2 * w));
+		WinInvertRectangle(&e, 0);
+		RctSetRectangle(&e, (Coord)(r - w), (Coord)(t + w), w, (Coord)(b - t - 2 * w));
+		WinInvertRectangle(&e, 0);
+	}
+	NativeOff();
+}
+
+void SEC_EDITOR ViewEditWhere(UInt8 *x, UInt8 *y)
+{
+	*x = (UInt8)((gVx + gW / 2) / gTs);
+	*y = (UInt8)((gVy + gH / 2) / gTs);
 }
 
 #ifdef DRAW_BENCH

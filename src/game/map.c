@@ -170,20 +170,15 @@ static void SEC_COLD rotate_row(uint8_t y, uint8_t n, uint8_t *tmp)
 	mapstore_set_bytes(0, y, 256, tmp);
 }
 
-// WinBolo's mapCenter: moves the terrain and the items so the land's box
-// sits in the middle of the map. Squares wrap at 256 as WinBolo's BYTE
-// sums do; everything outside the box is deep sea, so a cyclic shift of
-// the whole map is the same thing.
-static void SEC_COLD map_center(MapInfo *info)
+// WinBolo's mapCenter box: the land's, widened left and up by the items.
+int SEC_COLD map_center_move(const MapInfo *info, int16_t *addX, int16_t *addY)
 {
 	int16_t l = 256, r = -1, t = 256, b = -1, il, ir, it, ib;
-	int16_t addX, addY;
 	uint16_t x, y, i;
-	uint8_t row[256], hold[256];
 
 	il = 256; ir = -1; it = 256; ib = -1;
 	for (i = 0; i < info->numPills; i++) {
-		MapPill *p = &info->pills[i];
+		const MapPill *p = &info->pills[i];
 		if (p->x < il) il = p->x;
 		if (p->x > ir) ir = p->x;
 		if (p->y < it) it = p->y;
@@ -192,7 +187,7 @@ static void SEC_COLD map_center(MapInfo *info)
 	box_add(&l, &r, &t, &b, il, ir, it, ib);
 	il = 256; ir = -1; it = 256; ib = -1;
 	for (i = 0; i < info->numBases; i++) {
-		MapBase *p = &info->bases[i];
+		const MapBase *p = &info->bases[i];
 		if (p->x < il) il = p->x;
 		if (p->x > ir) ir = p->x;
 		if (p->y < it) it = p->y;
@@ -201,7 +196,7 @@ static void SEC_COLD map_center(MapInfo *info)
 	box_add(&l, &r, &t, &b, il, ir, it, ib);
 	il = 256; ir = -1; it = 256; ib = -1;
 	for (i = 0; i < info->numStarts; i++) {
-		MapStart *p = &info->starts[i];
+		const MapStart *p = &info->starts[i];
 		if (p->x < il) il = p->x;
 		if (p->x > ir) ir = p->x;
 		if (p->y < it) it = p->y;
@@ -219,18 +214,27 @@ static void SEC_COLD map_center(MapInfo *info)
 			if ((int16_t)y > b) b = (int16_t)y;
 		}
 	}
+	*addX = *addY = 0;
 	if (t > b || l > r)
-		return;
-	addX = (int16_t)(127 - (l + r) / 2 - 1);
-	addY = (int16_t)(127 - (t + b) / 2 - 1);
-	if (addX == 0 || addY == 0)
-		return;
+		return 0;
+	*addX = (int16_t)(127 - (l + r) / 2 - 1);
+	*addY = (int16_t)(127 - (t + b) / 2 - 1);
+	return *addX != 0 && *addY != 0;
+}
 
-	for (y = 0; y < 256; y++)
-		rotate_row((uint8_t)y, (uint8_t)addX, row);
+// Squares wrap at 256 as WinBolo's BYTE sums do; everything outside the
+// box is deep sea, so a cyclic shift of the whole map is the same thing.
+void SEC_COLD map_shift(MapInfo *info, uint8_t addX, uint8_t addY)
+{
+	uint16_t x, y, i;
+	uint8_t row[256], hold[256];
+
+	if (addX)
+		for (y = 0; y < 256; y++)
+			rotate_row((uint8_t)y, addX, row);
 	// Rows move down by addY, following each cycle of the permutation.
-	{
-		uint8_t n = (uint8_t)addY, g = n, start;
+	if (addY) {
+		uint8_t n = addY, g = n, start;
 		uint16_t a = 256, c;
 
 		while (g) { c = a % g; a = g; g = (uint8_t)c; }
@@ -350,7 +354,12 @@ static int SEC_COLD parse(MapInfo *info, MapSource *ms)
 	if (err != MAP_OK)
 		return err;
 
-	map_center(info);
+	{
+		int16_t addX, addY;
+
+		if (map_center_move(info, &addX, &addY))
+			map_shift(info, (uint8_t)addX, (uint8_t)addY);
+	}
 	remove_border(info);
 
 	// Bases stand on road. A pill can't be in water or a building, and has
@@ -399,6 +408,8 @@ const char *SEC_COLD map_error_text(int err)
 	case MAP_ERR_COUNTS: return "too many pills, bases or starts";
 	case MAP_ERR_RUN: return "bad run header";
 	case MAP_ERR_DATA: return "bad run data";
+	case MAP_ERR_EDGE: return "land on the map's right edge";
+	case MAP_ERR_WRITE: return "can't write the map";
 	}
 	return "unknown error";
 }
