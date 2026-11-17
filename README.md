@@ -2,9 +2,17 @@
 
 PalmBolo is Bolo for Palm OS. Drive a tank around an island, capture bases and pillboxes, and send your builder out to build roads, walls, boats and pillboxes of your own.
 
-The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.10.0 has two-player infrared games and up to 7 bots in single-player. The current source also adds up to eight-player UDP network games and four-player Bluetooth games; neither is in the 0.10.0 release.
+The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.11.0 has up to 7 bots in single-player, two-player infrared, up to four players over Bluetooth and up to eight over a UDP network.
 
-The current source improves bot boats and maze routes. Bots can find or build a boat, gather nearby wood, cross water and collect a stranded builder. These builds use network protocol 2 and save layout 3; older builds cannot join them, and older saved games cannot resume. Existing save databases are left in place until a new save replaces them.
+New in 0.11.0:
+- New menus with a title screen, map previews and a lobby, laid out for square and tall screens, in colour and grey
+- UDP network games for up to eight and Bluetooth games for up to four
+- Import maps from a memory card and beam them between Palms
+- Carry on offline with bots when a network game drops or the host leaves, and Resume it later
+- Bots that find or build boats, cross water, get through mazes and refuel more sensibly
+- Native 320×320 drawing on older Sony Cliés, not yet tested on one
+
+Saves and network games from 0.10.0 don't work with 0.11.0: older Palms can't join, and an old saved game can't be resumed. The old save is left in place until a new one replaces it.
 
 Let me know what works and what doesn't, or open an issue here.
 
@@ -17,87 +25,54 @@ Dan
 
 <table>
   <tr>
-    <td align="center"><img src="doc/images/tx-title.png" width="200" alt="The title screen with the tank art and New game, Join game and Settings" /><br>Title, Tungsten TX</td>
-    <td align="center"><img src="doc/images/tx-newgame.png" width="200" alt="New game settings: game type, mines, time limit, bots and teams" /><br>New game, Tungsten TX</td>
-    <td align="center"><img src="doc/images/tx-game.png" width="200" alt="A tank on a road by a maze of walls, with the status panel and build tools" /><br>Tungsten TX</td>
+    <td align="center"><img src="doc/images/tx-title.png" width="200" alt="The title screen with the PalmBolo logo, a tank on a road and the Resume, New game, Join game and Settings buttons" /><br>Title, Tungsten TX</td>
+    <td align="center"><img src="doc/images/tx-map.png" width="200" alt="Choose a map, with a preview of Big island above the map list" /><br>Choose a map</td>
+    <td align="center"><img src="doc/images/tx-host.png" width="200" alt="The host lobby on Infrared for Everard Island, with the player and three bots waiting" /><br>Host lobby</td>
   </tr>
   <tr>
-    <td align="center"><img src="doc/images/iiix-game.png" width="200" alt="A game in 4 greys with maze walls, pillboxes and a boat" /><br>Palm IIIx</td>
-    <td align="center"><img src="doc/images/tg50-game.png" width="200" alt="A game with roads, a maze, a pillbox and trees" /><br>Clié TG50</td>
-    <td align="center"><img src="doc/images/z72-game.png" width="200" alt="A game in the forest with roads and pillboxes" /><br>Zire 72</td>
+    <td align="center"><img src="doc/images/tx-game.png" width="200" alt="A red bot tank firing at the player by roads, walls and a river on Everard Island, with the status panel and build tools" /><br>Tungsten TX</td>
+    <td align="center"><img src="doc/images/iiix-game.png" width="200" alt="A tank under fire from a pillbox among roads, walls and pillboxes on Everard Island, in greys" /><br>Palm IIIx</td>
+    <td align="center"><img src="doc/images/iiix-results.png" width="200" alt="Time is up: kills, deaths, bases and pillboxes for the player and three bots" /><br>Results, Palm IIIx</td>
   </tr>
 </table>
 
-All from the [Frond](https://github.com/roge-rm/frond) emulator.
+All from the [Frond](https://github.com/roge-rm/frond) emulator. The map preview shows Big island, one of the maps that come with WinBolo.
 
 ---
 
 ## Devices
 
-Palm OS 3.0 and up, from 160×160 mono to 320×480 colour. So far it's been tested in Frond on a Tungsten TX, a Palm IIIx (it runs at full speed there), a Zire 72 and a Clié TG50 for the keyboard.
+Palm OS 3.0 and up, from 160×160 mono to 320×480 colour. So far it's been tested in Frond on a Tungsten TX, a Palm IIIx (full speed there with up to 3 bots), a Zire 72, a Clié TG50 for the keyboard and a Palm E2 for memory cards.
 
-The current source adds native 320×320 drawing on older Clié devices through Sony's HR library, with 16-pixel art. It keeps 160×160 drawing when the library is unavailable. Sony rendering has focused host checks; emulator and physical-device checks remain pending. This is not in the 0.10.0 release.
+On older Clié devices with Sony's high-resolution library it draws at 320×320 with 16-pixel art, and at 160×160 if the library isn't there. This hasn't been tested on a Clié yet, in Frond or on a real one.
 
 ## Install
 
-Download `PalmBolo-0.10.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
+Download `PalmBolo-0.11.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
 
 Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
 ## Playing
 
-New game picks a map, game type, hidden mines, time limit, bots, bot level and teams. Leaving a single-player game saves it and Resume carries on.
+New game picks a map, game type, hidden mines, time limit, bots, bot level and teams. Leaving a game saves it and Resume carries on.
 
-For two-player infrared, point the Palms at each other. On one Palm choose New game, pick the map and settings, then Host. On the other choose Join game, select Infrared and tap Join. Tap Start on the host once both players are in the lobby. The joiner receives the map if needed and keeps it for later. If the joiner leaves, a bot takes over. In the published 0.10.0 build, host departure ends the game and multiplayer games cannot be resumed.
+None of infrared, Bluetooth, UDP, memory cards or beaming has been tried on real Palms yet. Infrared has been played between Frond emulators and card import tested on an emulated Palm E2. Bluetooth, UDP and beaming have only been through tests on Linux so far, so they may well not work yet.
 
-The current source offers offline play after leaving a network game or losing
-the connection. Choose Continue to keep your tank, map, teams and stocks, with
-the other players controlled by bots. It finishes an already-started buffered
-turn first, using the inputs it has; this is a local turn boundary, not a
-rollback to a turn acknowledged by every Palm. The offline game cannot rejoin.
-Leaving it saves it for Resume. If a save already exists, choose Replace or
-Keep old save; keeping it means the offline game will not be saved. Switching
-apps during network play saves an offline copy only when there is no existing
-save, without opening a prompt. An out-of-step game cannot continue offline.
+For two-player infrared, point the Palms at each other. On one Palm choose New game, pick the map and settings, then Host. On the other choose Join game, select Infrared and tap Join. Tap Start on the host once both players are in the lobby. The joiner receives the map if needed and keeps it for later.
 
-Infrared has been tested between Frond emulators, including a Palm IIIx and a Tungsten TX. It has not yet been tested between real Palms.
+For Bluetooth, choose Host, then Bluetooth in the link list. On the other Palms choose Join game, Bluetooth and Join, then pick the host in Palm's device list. Up to four people can play, with bots filling the other seats if selected. Hosting needs Bluetooth free of other apps. Devices without Bluetooth keep their other links.
 
-In the current source, Network uses the Palm's configured NetLib connection.
-Choose Host, then Network in the link list and a UDP port (5046 by default).
-Tap Address in the lobby to see the host's address and port. On the other Palms,
-choose Join game, Network and Join, then enter that IPv4 address and port.
-The host can start once the players have joined, up to eight people in all.
-Network settings last until you quit the app.
+For a network game, choose Host, then Network in the link list and a UDP port (5046 by default). It uses the Palm's NetLib connection. Tap Address in the lobby to see the host's address and port. On the other Palms choose Join game, Network and Join, then enter that address and port. Up to eight people can play. Network settings last until you quit the app.
 
-Use a reachable address on the same network, or arrange routing and UDP port
-forwarding yourself. There is no Internet lobby, host discovery or automatic
-router setup. Network play is unencrypted and has no password. If Address is
-unavailable, get the host's address from its network settings. The shared
-protocol and UDP framing pass focused eight-peer host tests; NetLib play
-between emulated or physical Palms still needs checking before release.
+The Palms need to reach each other on the same network, or you set up routing and UDP port forwarding yourself. There's no Internet lobby, host search or router setup, and network play is unencrypted with no password. If Address is unavailable, get the host's address from its network settings.
 
-For Bluetooth in the current source, choose Host, then Bluetooth in the link
-list. On the other Palms choose Join game, Bluetooth and Join, then select the
-host in Palm's device picker. PalmBolo finds its game service and connects.
-Up to four people can play, with bots filling the other seats if selected.
-Cancel or Back closes the connection. Hosting needs Bluetooth free of another
-open app connection. Devices without Bluetooth keep their other links.
-Bluetooth passes focused callback and four-peer lockstep tests on the host;
-Palm-to-Palm radio checks remain before-release work, with physical testing later.
+If a player leaves or drops, a bot takes over their tank. If you leave a network game, lose the connection or the host leaves, choose Continue to keep playing offline with your tank, map, teams and stocks, and bots for the other players. The offline game can't rejoin. Leaving it saves it for Resume. If there's already a save, choose Replace or Keep old save; keeping it means the offline game won't be saved. An out-of-step game can't continue offline.
 
-In the current source, open New game, then the Map menu on the map list.
-Import from card browses folders on a memory card. Folder names start with `/`;
-Open enters a folder or imports a `.map` file. Up goes to the parent, More shows
-the next seven entries (then returns to the first page), Card cycles mounted
-cards and Cancel stops browsing or copying. Imports are limited to 1 MB.
-Beam map sends the selected map, including Everard Island, through Palm's
-Exchange Manager. Launch PalmBolo once to register it for incoming `.map` files.
-Received maps are kept automatically after Palm's receive confirmation.
-Duplicate names get a number. Importing and receiving leave the saved game
-alone; incoming transfers are refused while a network lobby or game is open.
-Next maps pages through catalogues with more than 23 imported maps.
-Palms without VFS still support database maps and beaming. Card and paired
-beaming checks in Frond remain before-release work, with physical tests later.
+To add maps, open New game, then the Map menu on the map list:
+- Import from card browses folders on a memory card. Open enters a folder or imports a `.map` file, Up goes back, More shows the next page and Card switches cards. Imports are limited to 1 MB.
+- Beam map sends the selected map, Everard Island included, to another Palm. Launch PalmBolo once to receive maps. Maps that arrive are kept, and a name already in use gets a number.
+
+Palms without card support can still beam maps. Maps can't be received while a network lobby or game is open. Next maps pages through more than 23 imported maps.
 
 Controls:
 - Up and down: faster and slower
@@ -127,8 +102,8 @@ Needs prc-tools-remix, PilRC, Python 3 and the Palm OS SDK 5r3 in `../palm-os-sd
 - `make` builds `build/PalmBolo.prc`
 - `make DEBUG=1` adds the debug log, timers and self-test
 - `make host-test` runs the game rules tests on Linux
-- `make udp-test` runs focused UDP framing, eight-peer socket/lockstep and NetLib adapter checks
-- `make bt-test` runs focused Bluetooth lifecycle and four-peer adapter/lockstep checks
+- `make udp-test` and `make bt-test` run the UDP and Bluetooth link tests
+- `make map-test`, `make offline-test` and `make screen-test` run the map import, offline continuation and screen tests
 
 ## Licence
 
