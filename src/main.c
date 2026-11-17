@@ -22,6 +22,12 @@ static UInt8 gFire;         // ticks of fire left from a 5-way centre press
 static Int8 gSight;         // gunsight steps asked for by taps, sent next tick
 static UInt8 gAction;       // builder action chosen, LGM_TREE to LGM_MINE
 static UInt8 gBuild, gBuildX, gBuildY;  // builder order to send next tick
+static Boolean gDemo;       // the title's demo game is playing
+static Boolean gDemoSave;   // SaveAllowed() from before the demo
+static Boolean gDemoRest;   // a demo has played since the last user input
+static UInt32 gDemoAt;      // system tick the title was last touched, or the demo began
+#define kDemoIdleSecs   60
+#define kDemoRunSecs    180
 #ifdef DEBUG
 static Boolean gTimedFull;
 static UInt32 gStartTicks;  // when Start was tapped
@@ -315,6 +321,123 @@ void SEC_COLD AppOpenMap(UInt16 index, const Char *name)
 	FrmGotoForm(GameForm);
 }
 
+// The title sat idle: a game of four bots on Everard Island. It never
+// reads or writes the saved game, and makes no sound.
+static void SEC_COLD DemoStart(void)
+{
+	GameSetup setup;
+
+	MemSet(&setup, sizeof(setup), 0);
+	setup.numPlayers = 1;
+	setup.numBots = 3;
+	setup.botLevel = BOT_NORMAL;
+	if (MapLoad(0, "Everard Island", &gGame) != MAP_OK) {
+		gDemoAt = TimGetTicks();
+		gDemoRest = true;
+		return;
+	}
+	game_init(&gGame, TimGetSeconds() ^ (TimGetTicks() << 12), &setup);
+	game_set_bot(&gGame, 0, BOT_HARD);
+	gDemoSave = SaveAllowed();
+	SaveAllow(false);
+	gDemo = true;
+	gDemoRest = true;
+	gNet = false;
+	gInGame = true;
+	game_set_viewer(0);
+	gBuild = BUILD_NONE;
+	gDemoAt = TimGetTicks();
+	FrmGotoForm(GameForm);
+}
+
+// Leaves the demo state; the sounds it never played are dropped.
+static void SEC_COLD DemoStop(void)
+{
+	gDemo = false;
+	SaveAllow(gDemoSave);
+	gInGame = false;
+	gFormOpen = false;
+	gDemoAt = TimGetTicks();
+	game_take_sounds(NULL, 0);
+}
+
+static void SEC_COLD DemoEnd(void)
+{
+	DemoStop();
+	FrmGotoForm(TitleForm);
+}
+
+// 1 for a pen down, a typed character or one of the buttons, 2 for the keys
+// that put the Palm to sleep or wake it, 0 for anything else, which is the
+// system's own.
+static UInt8 DemoUser(const EventType *e)
+{
+	WChar c;
+
+	if (e->eType == penDownEvent)
+		return 1;
+	if (e->eType != keyDownEvent)
+		return 0;
+	c = e->data.keyDown.chr;
+	if (c == vchrLateWakeup || c == vchrPowerOff || c == vchrHardPower ||
+	    c == vchrResumeSleep)
+		return 2;
+	if (!(e->data.keyDown.modifiers & commandKeyMask) || IsGameKey(c) || c == vchrTxCenter ||
+	    c == 0x013D || (c >= 0x1700 && c <= 0x1721) || c == vchrMenu ||
+	    c == vchrLaunch || c == vchrFind || c == vchrCalc)
+		return 1;
+	return 0;
+}
+
+// User input ends the demo; the sleep and wake keys go on to the system,
+// the rest are eaten. The auto-off timer is held off while the demo runs.
+static Boolean DemoInput(const EventType *e)
+{
+	UInt8 u = DemoUser(e);
+
+	if (u)
+		DemoEnd();
+	return u == 1;
+}
+
+// The title counts idle time from user input; a form or alert on top of
+// it, or a network link, holds the count at zero, and it starts again when
+// the title comes back to the front. The auto-off timer is
+// held off until the demo starts and through it. After a demo has played,
+// the next waits for user input so the Palm can turn itself off.
+static Boolean DemoWatch(const EventType *e)
+{
+	UInt32 now = TimGetTicks();
+	FormType *frm = FrmGetActiveForm();
+
+	// A wake the user didn't cause doesn't start another demo.
+	if (DemoUser(e) == 1)
+		gDemoRest = false;
+	if (gDemo) {
+		EvtResetAutoOffTimer();
+		if (now - gDemoAt >= (UInt32)kDemoRunSecs * gDev.ticksPerSecond) {
+			Boolean eat = DemoInput(e);
+
+			if (gDemo)
+				DemoEnd();
+			return eat;
+		}
+		return false;
+	}
+	if (gForm != TitleForm || !frm || FrmGetFormId(frm) != TitleForm ||
+	    WinGetActiveWindow() != FrmGetWindowHandle(frm) ||
+	    (NetPhase() != NET_OFF && NetPhase() != NET_STOPPED) || DemoUser(e) ||
+	    e->eType == winEnterEvent)
+		gDemoAt = now;
+	else if (gDemoRest)
+		return false;
+	else if (now - gDemoAt >= (UInt32)kDemoIdleSecs * gDev.ticksPerSecond)
+		DemoStart();
+	else
+		EvtResetAutoOffTimer();
+	return false;
+}
+
 // The lobby set up a network game in gGame: play it.
 void SEC_COLD AppNetGame(void)
 {
@@ -363,6 +486,10 @@ static Boolean GameHandler(EventType *e)
 				NetEnd();
 				gNet = false;
 			}
+			if (gDemo) {
+				DemoStop();
+				gDemoRest = true;
+			}
 			gInGame = false;
 			FrmGotoForm(TitleForm);
 			return true;
@@ -371,7 +498,8 @@ static Boolean GameHandler(EventType *e)
 			NetPoll();
 		LOG(("start: view open %lu sys ticks after Start", TimGetTicks() - gStartTicks));
 		TimingHeap("view open");
-		SoundOpen(gDev.ticksPerSecond);
+		if (!gDemo)
+			SoundOpen(gDev.ticksPerSecond);
 		KeysStart(gDev.ticksPerSecond);
 		gFormOpen = true;
 		gDirty = gFull = true;
@@ -413,6 +541,8 @@ static Boolean HandleEvent(EventType *e)
 	UInt16 err;
 	FormType *frm;
 
+	if (gDemo && DemoInput(e))
+		return true;
 	// MenuHandleEvent can consume this before the application's switch.
 	if (e->eType == menuOpenEvent) {
 		gMenuOpen = true;
@@ -522,6 +652,8 @@ static Boolean HandleEvent(EventType *e)
 	case frmLoadEvent:
 		gForm = e->data.frmLoad.formID;
 		frm = FrmInitForm(gForm);
+		// Keeps a closed input area closed while the form comes up.
+		ViewDialogInputArea(frm);
 		FrmSetActiveForm(frm);
 		FrmSetEventHandler(frm, gForm == GameForm ? GameHandler : FrontHandler(gForm));
 		return true;
@@ -1068,7 +1200,8 @@ static void EventLoop(void)
 		TimingWait(wait, e.eType == nilEvent);
 		MARK(LP_DEBUG);
 #endif
-		HandleEvent(&e);
+		if (!DemoWatch(&e))
+			HandleEvent(&e);
 		if (gClockReset) {
 			gClockReset = false;
 			gPaceNew = true;
@@ -1190,7 +1323,9 @@ static void EventLoop(void)
 		}
 #endif
 		// The time limit ran out: show who did what.
-		if (gInGame && gForm == GameForm && gGame.over) {
+		if (gDemo && gInGame && gForm == GameForm && gGame.over)
+			DemoEnd();
+		else if (gInGame && gForm == GameForm && gGame.over) {
 			gInGame = false;
 			gFormOpen = false;
 			if (gNet) {
@@ -1203,7 +1338,7 @@ static void EventLoop(void)
 			gNet = false;
 		}
 		MARK(LP_OTHER);
-		if (gForm == GameForm && gFormOpen)
+		if (gForm == GameForm && gFormOpen && !gDemo)
 			SoundFrame(&gGame);
 		MARK(LP_SOUND);
 
@@ -1332,6 +1467,8 @@ static void SEC_COLD AppStop(void)
 	// App switching must not open continuation or replacement alerts.
 	if (gNet && !OfflineGame(false)) gInGame = false;
 	NetEnd();
+	if (gDemo)
+		gInGame = false;
 	if (gInGame && !gGame.over && SaveAllowed()) {
 		gInGame = false;
 		if (!SaveWrite(&gGame) && !wasNet)

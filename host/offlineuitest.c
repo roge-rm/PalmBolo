@@ -8,6 +8,7 @@
 static GameState gGame;
 static struct { UInt16 ticksPerSecond; } gDev={100};
 static Boolean gNet,gInGame,gFormOpen,gClockReset,gDirty,gFull,gKeepSave;
+static Boolean gDemo;
 static UInt8 gBuild,gFire;
 static Int8 gSight;
 static UInt16 gForm;
