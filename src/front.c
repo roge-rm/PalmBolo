@@ -283,14 +283,16 @@ UInt16 SEC_FRONT NetAsk(const Char *title, const Char *text, const Char *yes, co
 	FrmSetTitle(frm, (Char *)title);
 	fld = (FieldType *)Obj(frm, NetAskText);
 	FldSetTextPtr(fld, (Char *)text);
-	FldRecalculateField(fld, false);
 	CtlSetLabel((ControlType *)Obj(frm, NetAskYes), yes);
 	if (no)
 		CtlSetLabel((ControlType *)Obj(frm, NetAskNo), no);
 	else
 		FrmHideObject(frm, FrmGetObjectIndex(frm, NetAskNo));
 	FrmSetActiveForm(frm);
+	ViewDialogInputArea(frm);
 	FrmDrawForm(frm);
+	// OS 3.1 only wraps the text into lines when it redraws the field.
+	FldRecalculateField(fld, true);
 	// A few polls a second, as LS_DROP_MS of silence drops a player.
 	for (;;) {
 		EvtGetEvent(&e, SysTicksPerSecond() / 20 + 1);

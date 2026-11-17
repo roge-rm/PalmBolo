@@ -22,6 +22,7 @@ static inline char *StrCat(char *d,const char *s) { size_t n=strlen(d),i=0; do {
 #define dmModeReadWrite 3
 #define dmHdrAttrBackup 8
 #define noListSelection -1
+#define chrEllipsis 0x18
 #define exgErrBadData 1
 #define exgErrDeviceFull 2
 #define exgMemError 3

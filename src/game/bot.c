@@ -2043,6 +2043,24 @@ static void SEC_BOTS think(GameState *s, uint8_t t, GameInput *in)
 
 // ---- driving ----
 
+// util_distance's steps along the 16 headings at distance 8192 (cos, sin),
+// so sea_ahead scales them the same way without the calls. Not const, so
+// a 68k reads them off a5.
+static int16_t kDir16[16][2] = {
+	{ 0, -8192 }, { 3135, -7568 }, { 5793, -5793 }, { 7568, -3135 },
+	{ 8192, 0 }, { 7568, 3135 }, { 5793, 5793 }, { 3135, 7568 },
+	{ 0, 8192 }, { -3135, 7568 }, { -5793, 5793 }, { -7568, 3135 },
+	{ -8192, 0 }, { -7568, -3135 }, { -5793, -5793 }, { -3135, -7568 }
+};
+
+// util.c's scale: t * dist / 8192, rounded, the sign kept.
+static inline int16_t SEC_BOTS dir_scale(int16_t t, uint16_t dist)
+{
+	if (t >= 0)
+		return (int16_t)(((uint32_t)(uint16_t)t * dist + 4096) >> 13);
+	return (int16_t)-(int16_t)(((uint32_t)(uint16_t)-t * dist + 4096) >> 13);
+}
+
 // Deep sea within stopping distance along 16-way heading d: the squares
 // half way and at the end, and the corners the line may clip on the way.
 // A boat only counts deep sea past the land it would run onto.
@@ -2050,12 +2068,13 @@ static uint8_t SEC_BOTS sea_ahead(const Tank *k, uint8_t d)
 {
 	uint16_t stop = (uint16_t)(((uint16_t)k->speed * (uint16_t)k->speed >> 3) + 160), dist;
 	uint8_t x = (uint8_t)(k->x >> 8), y = (uint8_t)(k->y >> 8), nx, ny, a, c, land = !k->boat;
-	int16_t dx, dy;
+	int16_t dx, dy, *u = kDir16[d & 15];
 
 	if (stop > 1023)
 		stop = 1023;
 	for (dist = stop >> 1;; dist = stop) {
-		util_distance(&dx, &dy, (uint16_t)((d & 15) * 16 * ANGLE_ONE), dist);
+		dx = dir_scale(u[0], dist);
+		dy = dir_scale(u[1], dist);
 		nx = (uint8_t)((uint16_t)(k->x + dx) >> 8);
 		ny = (uint8_t)((uint16_t)(k->y + dy) >> 8);
 		a = terrain(nx, y);

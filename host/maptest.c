@@ -59,7 +59,8 @@ void *FrmGetObjectPtr(FormType *f,UInt16 n){(void)f;(void)n;return &list;}
 UInt16 FrmGetObjectIndex(FormType *f,UInt16 n){(void)f;return n;}
 void LstSetListChoices(ListType *l,Char **s,UInt16 n){(void)s;l->n=n;}
 void LstSetSelection(ListType *l,Int16 n){l->sel=n;}
-void FrmCopyLabel(FormType *f,UInt16 n,const Char *s){(void)f;(void)n;assert(strlen(s)<=24);}
+static char lastLabel[32];
+void FrmCopyLabel(FormType *f,UInt16 n,const Char *s){(void)f;(void)n;assert(strlen(s)<=24);strcpy(lastLabel,s);}
 UInt16 FrmDoDialog(FormType *f){int a;(void)f;assert(actionAt<20);a=actions[actionAt++];list.sel=0;return a?a:MapCardCancel;}
 Int16 LstGetSelection(ListType *l){return l->sel;}
 void FrmDeleteForm(FormType *f){(void)f;}
@@ -71,7 +72,7 @@ Err VFSFileOpen(UInt16 v,const Char *path,UInt16 m,FileRef *f){(void)m;strcpy(cu
 Err VFSFileClose(FileRef f){(void)f;return 0;}
 Err VFSFileSize(FileRef f,UInt32 *n){(void)f;*n=len;return 0;}
 Err VFSVolumeEnumerate(UInt16 *v,UInt32 *it){if((int)*it>=volumes)return 9;*v=*it+1;(*it)++;if((int)*it==volumes)*it=vfsIteratorStop;return 0;}
-Err VFSDirEntryEnumerate(FileRef f,UInt32 *it,FileInfoType *info){(void)f;if((int)*it>=dirEntries){*it=vfsIteratorStop;return expErrEnumerationEmpty;}sprintf(info->nameP,"Map%lu.map",(unsigned long)*it);info->attributes=0;if(dirFolder&&!strcmp(currentPath,"/")&&!*it){strcpy(info->nameP,"Folder");info->attributes=vfsFileAttrDirectory;}(*it)++;if((int)*it==dirEntries)*it=vfsIteratorStop;return 0;}
+Err VFSDirEntryEnumerate(FileRef f,UInt32 *it,FileInfoType *info){(void)f;if((int)*it>=dirEntries){*it=vfsIteratorStop;return expErrEnumerationEmpty;}sprintf(info->nameP,"Map%lu.map",(unsigned long)*it);info->attributes=0;if(dirFolder&&(dirFolder==2||!strcmp(currentPath,"/"))&&!*it){strcpy(info->nameP,dirFolder==2?"Long folder name":"Folder");info->attributes=vfsFileAttrDirectory;}(*it)++;if((int)*it==dirEntries)*it=vfsIteratorStop;return 0;}
 void EvtGetEvent(EventType *e,Int32 wait){(void)wait;memset(e,0,sizeof(*e));if(cancelEvent){e->eType=cancelEvent;e->data.ctlSelect.controlID=MapCopyCancel;cancelEvent=0;}}
 void EvtAddEventToQueue(EventType *e){(void)e;requeued++;}
 Boolean SysHandleEvent(EventType *e){(void)e;return 0;}
@@ -120,6 +121,8 @@ int main(void){Char name[32];ExgSocketType s;unsigned i;
  reset();dirEntries=10;failMapOpen=1;actions[0]=MapCardMore;actions[1]=MapCardOpen;actions[2]=MapCardOpen;MapBrowse();assert(alerts==1&&count()==1&&!strcmp(dbs[0].name,"Map7"));
  reset();dirFolder=1;actions[0]=MapCardOpen;actions[1]=MapCardOpen;MapBrowse();assert(count()==1&&!strcmp(currentPath,"/Folder/Map0.map"));
  reset();dirFolder=1;actions[0]=MapCardOpen;actions[1]=MapCardUp;actions[2]=MapCardCancel;MapBrowse();assert(count()==0&&!strcmp(currentPath,"/"));
+ reset();dirFolder=1;actions[0]=MapCardOpen;actions[1]=MapCardCancel;MapBrowse();assert(!strcmp(lastLabel,"Card 1: /Folder"));
+ reset();dirFolder=2;actions[0]=MapCardOpen;actions[1]=MapCardOpen;actions[2]=MapCardCancel;MapBrowse();assert(strlen(lastLabel)==24&&!strncmp(lastLabel,"Card 1: \x18",9)&&!strcmp(lastLabel+9,"g folder name/Long folder name"+15));
  reset();cancelEvent=ctlSelectEvent;MapBrowse();assert(count()==0&&!alerts);
  reset();cancelEvent=appStopEvent;MapBrowse();assert(count()==0&&requeued==1);
  reset();puts("map-test: importer, storage rollback, VFS and Exchange adapters passed");return 0;

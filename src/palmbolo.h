@@ -197,6 +197,7 @@ void SEC_UI ViewMessage(const Char *msg);
 Boolean SEC_UI ViewSetInputArea(Boolean closed);
 void SEC_UI ViewPins(Boolean on);
 void SEC_UI ViewFormInputArea(Boolean closed);
+void SEC_UI ViewDialogInputArea(FormType *frm);
 void SEC_UI ViewInputTrigger(void);
 // The builder action shown chosen in the button row (0 tree to 4 mine).
 void SEC_UI ViewSetAction(UInt8 action);

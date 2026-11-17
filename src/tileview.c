@@ -346,6 +346,19 @@ void SEC_UI ViewFormInputArea(Boolean closed)
 	ViewSetInputArea(closed);
 }
 
+// A modal dialog, made the active form: the input area stays as the form
+// under it had it.
+void SEC_UI ViewDialogInputArea(FormType *frm)
+{
+	if (!PinsAvailable())
+		return;
+	FrmSetDIAPolicyAttr(frm, frmDIAPolicyCustom);
+	if (gInputClosed) {
+		PINSetInputTriggerState(pinInputTriggerDisabled);
+		PINSetInputAreaState(pinInputAreaClosed);
+	}
+}
+
 // Lets the user open the input area from the status bar while it stays
 // closed.
 void SEC_UI ViewInputTrigger(void)

@@ -979,15 +979,26 @@ static Boolean SEC_COLD NetTurns(void)
 	return false;
 }
 
-// Reads the pen between a frame's ticks. On the IIIx a tap that starts and
-// ends between two EvtGetEvent calls, a frame's ticks and drawing apart, is
-// lost unless the pen is read in between.
-static void PenPoll(void)
+// Reads the pen between a frame's ticks. On the IIIx in network play a tap
+// that falls between two EvtGetEvent calls is lost, or its pen up comes
+// seconds late, unless the pen is read in between. EvtGetPen is slow on OS
+// 3.1, so it's only called once kPenGapMs has passed since the pen was last
+// read, or from a pen down until the pen reads up.
+#define kPenGapMs 60
+static Boolean gPenDown;
+static UInt32 gPenRead;
+
+static void PenPoll(UInt16 tps)
 {
 	Int16 x, y;
 	Boolean down;
+	UInt32 now = TimGetTicks();
 
+	if (!gPenDown && now - gPenRead < (UInt32)tps * kPenGapMs / 1000)
+		return;
 	EvtGetPen(&x, &y, &down);
+	gPenRead = now;
+	gPenDown = down;
 }
 
 static void EventLoop(void)
@@ -1044,6 +1055,11 @@ static void EventLoop(void)
 		MARK(LP_OTHER);
 		EvtGetEvent(&e, wait);
 		MARK(wait ? LP_SLEEP : LP_POLL);
+		gPenRead = TimGetTicks();
+		if (e.eType == penDownEvent)
+			gPenDown = true;
+		else if (e.eType == penUpEvent)
+			gPenDown = false;
 		// The wait ends on a system tick and started half way through one,
 		// on average.
 		if (wait > 0 && (t0 = TimGetTicks() - now) > 0)
@@ -1107,7 +1123,7 @@ static void EventLoop(void)
 				NetTick(&gGame, &in);
 			else
 				game_tick(&gGame, all);
-			PenPoll();
+			PenPoll(tps);
 #ifdef DEBUG
 			MARK(LP_TICK);
 			TimingTick(TimGetTicks() - t1);
@@ -1199,7 +1215,7 @@ static void EventLoop(void)
 			gFull = gDirty = false;
 			MARK(LP_OTHER);
 			ViewFrame(full, n != 0);
-			PenPoll();
+			PenPoll(tps);
 			NetService();
 			MARK(LP_DEBUG);
 			// Full repaints are rare and slow, so they stay out of the pacing.

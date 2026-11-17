@@ -119,11 +119,13 @@ void SEC_MAPIO MapBrowse(void)
 		if (err) { ShowError(err); break; }
 		LstSetListChoices(list, b->choices, b->count); LstSetSelection(list, noListSelection);
 		{
+			// The label holds 24 characters: a longer path keeps its end after an ellipsis.
 			Char label[25];
-			UInt16 n;
+			UInt16 n, len = StrLen(b->path);
 			StrPrintF(label, "Card %u: ", b->volume);
 			n = StrLen(label);
-			StrNCopy(label + n, b->path, 24 - n); label[24] = 0;
+			if (n + len > 24) { label[n++] = chrEllipsis; StrCopy(label + n, b->path + len - (24 - n)); }
+			else StrCopy(label + n, b->path);
 			FrmCopyLabel(frm, MapCardPath, label);
 		}
 		button = FrmDoDialog(frm);
