@@ -2,17 +2,14 @@
 
 PalmBolo is Bolo for Palm OS. Drive a tank around an island, capture bases and pillboxes, and send your builder out to build roads, walls, boats and pillboxes of your own.
 
-The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.11.0 has up to 7 bots in single-player, two-player infrared, up to four players over Bluetooth and up to eight over a UDP network.
+The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.12.0 has up to 7 bots in single-player, two-player infrared, up to four players over Bluetooth and up to eight over a UDP network.
 
-New in 0.11.0:
-- New menus with a title screen, map previews and a lobby, laid out for square and tall screens, in colour and grey
-- UDP network games for up to eight and Bluetooth games for up to four
-- Import maps from a memory card and beam them between Palms
-- Carry on offline with bots when a network game drops or the host leaves, and Resume it later
-- Bots that find or build boats, cross water, get through mazes and refuel more sensibly
-- Native 320×320 drawing on older Sony Cliés
+New in 0.12.0:
+- A demo game plays on the title screen after a minute idle
+- A map editor: edit a copy of any map or start a new island, paint with a brush, fill or box, place pillboxes, bases and starts, undo, and see the whole map at once
+- Test play a map with bots from the editor, then save it to the map list and beam it
 
-Saves and network games from 0.10.0 don't work with 0.11.0: older Palms can't join, and an old saved game can't be resumed. The old save is left in place until a new one replaces it.
+0.11.0 and 0.12.0 can play together, and a game saved in 0.11.0 can be resumed in 0.12.0.
 
 Let me know what works and what doesn't, or open an issue here.
 
@@ -34,6 +31,10 @@ Dan
     <td align="center"><img src="doc/images/iiix-game.png" width="200" alt="A tank under fire from a pillbox among roads, walls and pillboxes on Everard Island, in greys" /><br>Palm IIIx</td>
     <td align="center"><img src="doc/images/iiix-results.png" width="200" alt="Time is up: kills, deaths, bases and pillboxes for the player and three bots" /><br>Results, Palm IIIx</td>
   </tr>
+  <tr>
+    <td align="center"><img src="doc/images/tx-editor.png" width="200" alt="The map editor on Everard Island: a base in the middle of a spiral road through forest, with pillboxes and water around it, and Paint picked in the bar along the bottom" /><br>Map editor, Tungsten TX</td>
+    <td align="center"><img src="doc/images/iiix-editor.png" width="200" alt="The same spiral road and base in the map editor in greys, with forest, pillboxes and the bar along the bottom" /><br>Map editor, Palm IIIx</td>
+  </tr>
 </table>
 
 All from the [Frond](https://github.com/roge-rm/frond) emulator. The map preview shows Big island, one of the maps that come with WinBolo.
@@ -48,7 +49,7 @@ On older Clié devices with Sony's high-resolution library it draws at 320×320 
 
 ## Install
 
-Download `PalmBolo-0.11.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
+Download `PalmBolo-0.12.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
 
 Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
@@ -94,6 +95,25 @@ With a keyboard (Clié TG50, NX and UX, Treo or Centro, a Palm Universal or Wire
 - Backspace or Escape: menu
 
 On a Clié the jog dial moves the gunsight and pressing it fires.
+
+## Map editor
+
+On the map list, Edit opens a copy of the selected map and New starts a new island, small, medium or large. The map you started from only changes if you save over it, and Everard Island never changes.
+
+The buttons along the bottom:
+- Pan: drag the map around. The hardware buttons, the 5-way and arrow keys scroll it too.
+- Paint, Place or Erase: draw with what's chosen. With a terrain picked, tap it again to pick the tool: Paint, Paint 3x3, Paint 5x5, Fill or Box, and the button shows its name. Fill paints the joined squares of the same terrain, Box paints a box you drag out.
+- The tile: picks a terrain, a pill, base or start, or Erase item.
+- Zoom: the whole map at once. The tools work there too, and a tap with Pan goes back to the normal view at that spot.
+- Save, and Done to leave the editor.
+
+With a pill, base or start picked, tap an empty square to place one or tap one to choose it, then drag it to move it. Hold the pen on one for its owner, armour, shells and mines, or a start's facing. Item settings (/I) in the menu does the same. Erase item takes away the one you tap.
+
+In the menu, Undo (/U) takes back the last stroke, fill, box or item change, Whole map (/W) is the same as Zoom and Test play (/T) plays the map with three bots and your New game settings. Leaving the test game goes back to the editor, and it doesn't touch your saved game.
+
+Save asks for a name and adds the map to the map list, or replaces your own map of that name. It won't save a map with no start, more than 16 pills, bases or starts, a pill, base or start outside the playable area, a pill or base on deep sea, or land too near the edges to be centred when the map loads.
+
+If you leave the app while editing or in a test game, your changes are kept and the editor opens with them next time. Saved maps can be beamed to another Palm with Beam map, like any other.
 
 ## Building
 

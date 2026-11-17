@@ -61,5 +61,7 @@ static void Dirty(Coord x,Coord y,Coord right,Coord bottom) {
 #define WinSetClip ScreenWinSetClip
 static void WinResetClip(void) {}
 """+patch
-text+='\nstatic Coord gTs,gW,gH,gBarY; static Int32 gVx,gVy;\n#define kButtons 7\n#define kTapPanel 7\nstatic int covered; static Boolean PanelCovers(void) {return covered;}\n'+tap+tests
+text+='\nstatic Coord gTs,gW,gH,gBarY; static Int32 gVx,gVy;\n#define kButtons 7\n#define kTapPanel 7\nstatic int covered; static Boolean PanelCovers(void) {return covered;}\n'\
+'static Boolean gEdit,gZoom; static UInt8 gEditButtons;\n'\
+'static Int16 ZoomTap(Int32 nx,Int32 ny,UInt8 *mx,UInt8 *my) {(void)nx;(void)ny;(void)mx;(void)my;assert(0);return 0;}\n'+tap+tests
 Path('build/screen-test.c').write_text(text)

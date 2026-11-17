@@ -377,6 +377,8 @@ Boolean SEC_EDITOR EditKey(const EventType *e);
 // EditNew asks for a size and opens a new map in the editor. EditDrop
 // frees what the editor keeps over a test game, when the app stops.
 void SEC_EDITOR EditNew(void);
+// The map list opens with this map chosen, once (front.c).
+void SEC_FRONT MapListPick(const Char *name);
 void SEC_EDITOR EditDrop(void);
 // EditStop keeps unsaved work in the draft as the app stops, before the
 // view closes. EditResume opens the editor on the draft at launch, false

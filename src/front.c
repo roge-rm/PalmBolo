@@ -345,7 +345,11 @@ static Boolean SEC_FRONT NetworkDialog(Boolean host)
 		FrmHideObject(frm, FrmGetObjectIndex(frm, NetSetupAddress));
 		FrmHideObject(frm, FrmGetObjectIndex(frm, NetSetupAddressLabel));
 	}
+	// Selected, so typing replaces them.
+	FldSetSelection(Obj(frm, NetSetupAddress), 0, StrLen(gUdpHost));
+	FldSetSelection(Obj(frm, NetSetupPort), 0, StrLen(gUdpPort));
 	ViewInputTrigger();
+	FrmSetFocus(frm, FrmGetObjectIndex(frm, host ? NetSetupPort : NetSetupAddress));
 	for (;;) {
 		const Char *a, *p;
 		result = FrmDoDialog(frm);
@@ -519,6 +523,13 @@ static Boolean SEC_FRONT TitleHandler(EventType *e)
 // ---- new game ----
 
 static Char gNames[kMaxMaps][kMapNameLen];
+static Char gPick[kMapNameLen];     // the map to choose when the list opens next
+
+void SEC_FRONT MapListPick(const Char *name)
+{
+	StrNCopy(gPick, name, kMapNameLen - 1);
+	gPick[kMapNameLen - 1] = 0;
+}
 static Char *gNamePtrs[kMaxMaps];
 static UInt16 gNumMaps;
 static UInt16 gMapPage;
@@ -592,6 +603,10 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 	ListType *lst;
 	Char selected[kMapNameLen];
 	StrCopy(selected, AppPrefsGet()->map);
+	if (e->eType == frmOpenEvent && gPick[0]) {
+		StrCopy(selected, gPick);
+		gPick[0] = 0;
+	}
 	if (e->eType == frmUpdateEvent) {
 		Int16 sel = LstGetSelection((ListType *)Obj(frm, MapList));
 		if (sel >= 0 && sel < gNumMaps) StrCopy(selected, gNames[sel]);
@@ -668,11 +683,17 @@ static Boolean SEC_FRONT MapListHandler(EventType *e)
 		if (e->data.ctlSelect.controlID == MapEdit) {
 			Int16 sel = LstGetSelection((ListType *)Obj(frm, MapList));
 
-			if (sel >= 0 && sel < (Int16)gNumMaps)
+			if (sel >= 0 && sel < (Int16)gNumMaps) {
+				MapListPick(gNames[sel]);
 				EditStart((UInt16)sel, gNames[sel]);
+			}
 			return true;
 		}
 		if (e->data.ctlSelect.controlID == MapNew) {
+			Int16 sel = LstGetSelection((ListType *)Obj(frm, MapList));
+
+			if (sel >= 0 && sel < (Int16)gNumMaps)
+				MapListPick(gNames[sel]);
 			EditNew();
 			return true;
 		}
@@ -1043,6 +1064,8 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 			StrCopy((Char *)MemHandleLock(h), p->name);
 			MemHandleUnlock(h);
 			FldSetTextHandle(fld, h);
+			// Selected, so typing replaces it.
+			FldSetSelection(fld, 0, StrLen(p->name));
 		}
 		CtlSetValue((ControlType *)Obj(frm, SetSound), p->sound);
 		CtlSetValue((ControlType *)Obj(frm, SetSlow), p->autoSlow);
@@ -1053,7 +1076,7 @@ static Boolean SEC_FRONT SettingsHandler(EventType *e)
 		}
 		FormDraw(frm);
 		GsiSetLocation(75, (Coord)(146 + gBotShift));
-		FrmSetFocus(frm, noFocus);
+		FrmSetFocus(frm, FrmGetObjectIndex(frm, SetName));
 		return true;
 	}
 	case frmCloseEvent: {

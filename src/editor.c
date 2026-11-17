@@ -49,6 +49,12 @@ typedef struct DraftHead {
 	Char name[kMapNameLen];
 } DraftHead;
 
+// After the MapInfo in newer drafts: the tools as they were. A draft
+// without it loads with the defaults.
+typedef struct DraftTools {
+	UInt8 tool, last, brush, choice;
+} DraftTools;
+
 // Tools, and the buttons along the bottom.
 enum { TOOL_PAN, TOOL_PAINT, TOOL_FILL, TOOL_BOX };
 enum { BTN_PAN, BTN_TOOL, BTN_TERRAIN, BTN_ZOOM, BTN_SAVE, BTN_DONE, BTN_COUNT };
@@ -181,8 +187,10 @@ void SEC_EDITOR EditNew(void)
 	FrmDeleteForm(frm);
 	if (old)
 		FrmSetActiveForm(old);
-	if (b < EditSizeSmall || b > EditSizeLarge)
+	if (b < EditSizeSmall || b > EditSizeLarge) {
+		MapListPick("");
 		return;
+	}
 	EditStart(0, "New map");
 	if (gEd)
 		gEd->fresh = (UInt8)(b - EditSizeSmall + 1);
@@ -277,8 +285,9 @@ static void SEC_EDITOR UndoFree(void)
 // kDraftName, with cx, cy the middle of the view. False without room.
 static Boolean SEC_EDITOR DraftKeep(UInt8 cx, UInt8 cy)
 {
-	DmOpenRef db = MakeDb(kDraftName, sizeof(DraftHead) + sizeof(MapInfo));
+	DmOpenRef db = MakeDb(kDraftName, sizeof(DraftHead) + sizeof(MapInfo) + sizeof(DraftTools));
 	DraftHead head;
+	DraftTools tools;
 	UInt16 i, y;
 	MemHandle h;
 	void *p;
@@ -294,6 +303,10 @@ static Boolean SEC_EDITOR DraftKeep(UInt8 cx, UInt8 cy)
 	head.cx = cx;
 	head.cy = cy;
 	StrCopy(head.name, gEd->name);
+	tools.tool = gEd->tool;
+	tools.last = gEd->last;
+	tools.brush = gEd->brush;
+	tools.choice = gEd->choice;
 	for (i = 0; i <= kRecs; i++) {
 		h = DmGetRecord(db, i);
 		p = MemHandleLock(h);
@@ -303,6 +316,7 @@ static Boolean SEC_EDITOR DraftKeep(UInt8 cx, UInt8 cy)
 		} else {
 			DmWrite(p, 0, &head, sizeof(head));
 			DmWrite(p, sizeof(head), &AppGame()->map, sizeof(MapInfo));
+			DmWrite(p, sizeof(head) + sizeof(MapInfo), &tools, sizeof(tools));
 		}
 		MemHandleUnlock(h);
 		DmReleaseRecord(db, i, true);
@@ -324,7 +338,10 @@ static UInt8 SEC_EDITOR DraftBack(GameState *g)
 	UInt16 i, y;
 	const UInt8 *p;
 
-	if (h && MemHandleSize(h) == sizeof(DraftHead) + sizeof(MapInfo)) {
+	UInt32 size = h ? MemHandleSize(h) : 0;
+
+	if (size == sizeof(DraftHead) + sizeof(MapInfo) ||
+			size == sizeof(DraftHead) + sizeof(MapInfo) + sizeof(DraftTools)) {
 		head = (const DraftHead *)MemHandleLock(h);
 		if (head->version == kDraftVersion && head->infoSize == sizeof(MapInfo)) {
 			res = mapstore_open(TERRAIN_DEEP_SEA) == 0 ? 0 : 2;
@@ -337,6 +354,18 @@ static UInt8 SEC_EDITOR DraftBack(GameState *g)
 				MemMove(gEd->name, head->name, kMapNameLen);
 				gEd->name[kMapNameLen - 1] = 0;
 				MemMove(&g->map, head + 1, sizeof(MapInfo));
+				if (size > sizeof(DraftHead) + sizeof(MapInfo)) {
+					const DraftTools *t = (const DraftTools *)((const UInt8 *)(head + 1) + sizeof(MapInfo));
+
+					if (t->tool <= TOOL_BOX && t->last >= TOOL_PAINT && t->last <= TOOL_BOX &&
+							(t->brush == 1 || t->brush == 3 || t->brush == 5) &&
+							t->choice < MAP_EDIT_CHOICES) {
+						gEd->tool = t->tool;
+						gEd->last = t->last;
+						gEd->brush = t->brush;
+						gEd->choice = t->choice;
+					}
+				}
 			}
 		}
 		MemHandleUnlock(h);
@@ -777,6 +806,9 @@ static void SEC_EDITOR Leave(void)
 		if (a == 2 || (a == 0 && !Save()))
 			return;
 	}
+	// A new map not saved yet leaves the list as it was.
+	if (!gEd->fresh)
+		MapListPick(gEd->name);
 	FrmGotoForm(MapListForm);
 }
 
