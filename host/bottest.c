@@ -27,6 +27,45 @@ static void plan(uint8_t x,uint8_t y)
  while(g.search.who) { search_step(&g,12); assert(++ticks<400); }
 }
 static uint16_t at(uint8_t x,uint8_t y) {return (uint16_t)(x-g.search.ox+(y-g.search.oy)*BOT_WIN);}
+// A window of known mines, 24 a step, with a winding lane into an open
+// half, so costs run far past 2047 (the f a heap key holds without a
+// rebase). Every distance must match a plain Dijkstra.
+static uint8_t mine_open(int lx,int ly)
+{
+ return lx>=0&&lx<BOT_WIN&&ly>=0&&ly<BOT_WIN&&mapstore_get(g.search.ox+lx,g.search.oy+ly)==TERRAIN_MINE_GRASS;
+}
+static void mined_window(void)
+{
+ static uint16_t ref[BOT_CELLS]; static uint8_t done[BOT_CELLS];
+ int x,y,d,i,ticks=0; uint16_t most=0;
+ setup(100,100,131,131); mapstore_fill(TERRAIN_BUILDING);
+ // Lanes on even rows 100-114 joined at alternate ends, then rows 116-131 open.
+ for(y=100;y<=131;y++)for(x=100;x<=131;x++)
+  if(y>=116||!(y&1)||(((y-101)/2)&1?x==100:x==131))mapstore_set(x,y,TERRAIN_MINE_GRASS);
+ mapstore_set(100,100,TERRAIN_GRASS); mapstore_set(131,131,TERRAIN_BUILDING);
+ set_goal(&g.bots[0],BG_PATROL,0,131,131); search_begin(&g,0);
+ assert(g.search.ox==100&&g.search.oy==100);
+ while(g.search.who){search_step(&g,12);assert(++ticks<2000);}
+ for(i=0;i<BOT_CELLS;i++){ref[i]=BOT_NO_CELL;done[i]=0;}
+ ref[0]=0;
+ for(;;){
+  int b=-1;
+  for(i=0;i<BOT_CELLS;i++)if(!done[i]&&ref[i]!=BOT_NO_CELL&&(b<0||ref[i]<ref[b]))b=i;
+  if(b<0)break;
+  done[b]=1;
+  for(d=0;d<8;d++){
+   int nx=(b&31)+kDX[d],ny=(b>>5)+kDY[d];
+   if(!mine_open(nx,ny))continue;
+   if((d&1)&&(!mine_open(b&31,ny)||!mine_open(nx,b>>5)))continue;
+   if(ref[b]+MINE_COST<ref[nx+ny*BOT_WIN])ref[nx+ny*BOT_WIN]=(uint16_t)(ref[b]+MINE_COST);
+  }
+ }
+ for(i=0;i<BOT_CELLS;i++){
+  assert(g.search.distance[i]==ref[i]);
+  if(ref[i]!=BOT_NO_CELL&&ref[i]>most)most=ref[i];
+ }
+ assert(most>4096);
+}
 static void planner(void)
 {
  int x,y; uint16_t n;
@@ -55,7 +94,7 @@ static void planner(void)
  plan(103,101);assert(g.bots[0].wayN && g.search.distance[at(103,101)]!=BOT_NO_CELL);
  // Every heap slot is available and ties are stable.
  memset(&g.search,0,sizeof(g.search));g.search.near=255;
- for(x=0;x<BOT_CELLS;x++){g.search.position[x]=BOT_NO_CELL;g.search.distance[x]=1000+x;heap_up(&g.search,x);}
+ for(x=0;x<BOT_CELLS;x++){g.search.distance[x]=1000+x;heap_up(&g.search,x);}
  g.search.distance[999]=0;heap_up(&g.search,999);assert(heap_pop(&g.search)==999);
  for(x=0;x<BOT_CELLS;x++)if(x!=999)assert(heap_pop(&g.search)==x);
  assert(!g.search.count);
@@ -63,8 +102,9 @@ static void planner(void)
  setup(100,100,106,100); plan(106,100);g.bots[0].boatTask=2;
  {uint8_t nx=g.bots[0].way[0][0],ny=g.bots[0].way[0][1];next_square(&g,&g.tanks[0],&nx,&ny);mapstore_set(nx,ny,TERRAIN_BUILDING);}
  navigate(&g,0,&input[0]); assert(g.bots[0].wayN==0 && !g.bots[0].boatTask && g.bots[0].want && !(input[0].keys&IN_FASTER));
+ mined_window();
  (void)y;
- puts("planner: cheaper detour, exact hazard cost, full window, heap decrease and changed obstacle pass");
+ puts("planner: cheaper detour, exact hazard cost, full window, heap decrease, mined window and changed obstacle pass");
 }
 static uint32_t run_capture(const char *name,int limit,int *boarded,int *landed)
 {
@@ -180,4 +220,129 @@ static void scenarios(void)
  printf("builder across water: %d ticks\n",x);assert(g.men[0].inTank && !g.tanks[0].destroyed);
 
 }
-int main(void) {planner();scenarios();printf("bot checks pass; GameState %zu, BotSearch %zu, Bot %zu bytes on host\n",sizeof(GameState),sizeof(BotSearch),sizeof(Bot));return 0;}
+// A live neutral pill at x, y in slot i.
+static void pill(uint8_t i,uint8_t x,uint8_t y)
+{
+ MapPill *p=&g.map.pills[i];
+ memset(p,0,sizeof(*p));p->x=x;p->y=y;p->owner=MAP_NEUTRAL;p->armour=R_PILL_MAX_ARMOUR;
+ p->speed=p->reload=R_PILL_ATTACK_NORMAL;p->active=1;
+ if(g.map.numPills<=i)g.map.numPills=(uint8_t)(i+1);
+}
+// An own base at x, y in slot i.
+static void put_base(uint8_t i,uint8_t x,uint8_t y)
+{
+ MapBase *b=&g.map.bases[i];
+ memset(b,0,sizeof(*b));b->x=x;b->y=y;b->owner=0;b->armour=90;b->shells=90;b->active=1;
+ if(g.map.numBases<=i)g.map.numBases=(uint8_t)(i+1);
+}
+typedef struct Fire { int ticks,entries[2],onHot,maxStay,minArmour,live,heat,deaths,hits,filled,idle,took; } Fire;
+// Runs the bot by bases under pill fire. Counts the times it drives onto
+// each base from more than a square away, the ticks it is on one that pills
+// reach and the longest such stay, its deaths, the armour it takes off
+// pills, the armour and shells bases give it, the pills and bases it takes
+// and the longest it stays on one square with one goal. It must not die
+// filling up on a base. With stop 1 it ends when the tank is full, with 2 when no hostile
+// pill is left.
+static int hostile_left(void)
+{
+ int i,n=0;
+ for(i=0;i<g.map.numPills;i++)n+=pill_hostile(&g,&g.map.pills[i],0);
+ return n;
+}
+static Fire run_fire(const char *name,int limit,int stop)
+{
+ Fire f={0};int i,j,stay=0,still=0,away[2]={1,1},dead=0;
+ uint8_t pa[MAP_MAX_PILLS],po[MAP_MAX_PILLS],bo[MAP_MAX_BASES],lx=0,ly=0,lg=0,lt=0;
+ f.minArmour=40;
+ for(i=0;i<limit && !(stop==1 && g.tanks[0].armour==40 && g.tanks[0].shells>=36) && !(stop==2 && !hostile_left());i++) {
+  int on,arm=g.tanks[0].armour,sh=g.tanks[0].shells,now;
+  uint8_t tx,ty;
+  for(j=0;j<g.map.numPills;j++){pa[j]=g.map.pills[j].armour;po[j]=g.map.pills[j].owner;}
+  for(j=0;j<g.map.numBases;j++)bo[j]=g.map.bases[j].owner;
+  if(getenv("BOT_TRACE") && i%50==0)fprintf(stderr,"%s %d at %u,%u arm %u sh %u goal %u tgt %u to %u,%u mode %u pills %u/%u speed %u/%u base %u/%u\n",name,i,g.tanks[0].x>>8,g.tanks[0].y>>8,g.tanks[0].armour,g.tanks[0].shells,g.bots[0].goal,g.bots[0].target,g.bots[0].goalX,g.bots[0].goalY,g.bots[0].mode,g.map.pills[0].armour,g.map.pills[1].armour,g.map.pills[0].speed,g.map.pills[1].speed,g.map.bases[0].armour,g.map.bases[0].shells);
+  game_tick(&g,input);
+  tx=(uint8_t)(g.tanks[0].x>>8);ty=(uint8_t)(g.tanks[0].y>>8);
+  on=g_base_at(&g,tx,ty);
+  now=g.tanks[0].destroyed || g.tanks[0].deathWait;
+  if(now && !dead) {
+   f.deaths++;
+   if(on>=0 && lg==BG_REFUEL) {
+    printf("%s: died filling up on base %d at tick %d\n",name,on,i);fflush(stdout);
+    assert(!"bot died filling up on a base under pill fire");
+   }
+  }
+  dead=now;
+  if(dead){still=0;continue;}
+  for(j=0;j<g.map.numPills;j++) {
+   if(g.map.pills[j].armour<pa[j])f.hits+=pa[j]-g.map.pills[j].armour;
+   if(g.map.pills[j].owner!=po[j])f.took++;
+  }
+  for(j=0;j<g.map.numBases;j++)if(g.map.bases[j].owner!=bo[j])f.took++;
+  if(on>=0 && g.tanks[0].armour>arm)f.filled+=g.tanks[0].armour-arm;
+  if(on>=0 && g.tanks[0].shells>sh)f.filled+=g.tanks[0].shells-sh;
+  for(j=0;j<2 && j<g.map.numBases;j++) {
+   if(on==j && away[j])f.entries[j]++;
+   away[j]=on==j?0:away[j] || cheb(tx,ty,g.map.bases[j].x,g.map.bases[j].y)>1;
+  }
+  if(on>=0 && pill_heat(&g,0,g.map.bases[on].x,g.map.bases[on].y)) {
+   f.onHot++;if(++stay>f.maxStay)f.maxStay=stay;
+  } else stay=0;
+  // Idle: one square and one goal, and nothing coming from a base.
+  if(tx==lx && ty==ly && g.bots[0].goal==lg && g.bots[0].target==lt && g.tanks[0].armour<=arm && g.tanks[0].shells<=sh) {
+   if(++still>f.idle)f.idle=still;
+  } else still=0;
+  lx=tx;ly=ty;lg=g.bots[0].goal;lt=g.bots[0].target;
+  if(g.tanks[0].armour<f.minArmour)f.minArmour=g.tanks[0].armour;
+ }
+ f.ticks=i;
+ for(i=0;i<g.map.numPills;i++)f.live+=pill_hostile(&g,&g.map.pills[i],0) && g.map.pills[i].armour>0;
+ f.heat=pill_heat(&g,0,(uint8_t)(g.tanks[0].x>>8),(uint8_t)(g.tanks[0].y>>8));
+ printf("%s: %d ticks, base entries %d and %d, %d ticks on a base under fire (longest %d), least armour %d, armour %u shells %u, live pills %d, heat where it is %d, deaths %d, pill armour shot off %d, filled %d, took %d, longest idle %d\n",
+  name,f.ticks,f.entries[0],f.entries[1],f.onHot,f.maxStay,f.minArmour,g.tanks[0].armour,g.tanks[0].shells,f.live,f.heat,f.deaths,f.hits,f.filled,f.took,f.idle);
+ fflush(stdout);
+ return f;
+}
+static void under_fire(void)
+{
+ Fire f;
+ // Its only base under two neutral pills, low on armour with shells.
+ setup(100,100,104,100);put_base(0,104,100);pill(0,104,95);pill(1,108,103);
+ g.tanks[0].armour=15;
+ f=run_fire("only base under two pills, with shells",20000,2);
+ // Cornered, it runs at the pills anyway: it shoots them, never waits long
+ // and gets somewhere, by taking a pill, filling up or coming back full.
+ assert(f.hits>0 && (f.took || f.filled || f.deaths) && f.idle<=1500 && f.entries[0]<=4);
+ // Two bases, the nearer one under a pill: it fills up at the other.
+ setup(96,104,103,100);put_base(0,103,100);put_base(1,96,116);pill(0,106,98);
+ g.tanks[0].armour=8;g.tanks[0].shells=2;
+ f=run_fire("two bases, the nearer under a pill",6000,1);
+ assert(g.tanks[0].armour==40 && g.tanks[0].shells>=36);
+ assert(!f.entries[0] && f.entries[1]==1 && !f.onHot && f.minArmour==8);
+ assert((g.tanks[0].x>>8)==96 && (g.tanks[0].y>>8)==116);
+ // Its only base under two neutral pills and no shells.
+ setup(100,100,104,100);put_base(0,104,100);pill(0,104,95);pill(1,108,103);
+ g.tanks[0].armour=15;g.tanks[0].shells=0;
+ f=run_fire("only base under two pills, no shells",20000,2);
+ // With nothing else to do it takes shells from the base, leaves before the
+ // base runs dry under it, and then runs at the pills.
+ assert(f.entries[0]>=1 && f.entries[0]<=4 && f.maxStay<=1200 && f.filled>0);
+ assert(f.hits>0 && f.idle<=1500);
+ // Its only base under one pill at rest and no shells: a few visits for
+ // shells, then runs at the pill.
+ setup(100,100,104,100);put_base(0,104,100);pill(0,104,95);
+ g.tanks[0].shells=0;
+ f=run_fire("only base under one pill, no shells",20000,2);
+ assert(f.entries[0]>=1 && f.entries[0]<=6 && f.maxStay<=1200 && f.filled>=30 && f.hits>0 && f.idle<=1500);
+}
+// A full tank whose only base is under fire still has a base: it shoots
+// the pill guarding a neutral base before taking it.
+static void guarded(void)
+{
+ int i;
+ setup(100,100,103,100);put_base(1,100,140);pill(0,100,143);pill(1,97,138);pill(2,106,100);
+ for(i=0;i<60 && g.bots[0].goal==BG_NONE;i++)game_tick(&g,input);
+ printf("guarded neutral base with its own base under fire: goal %u target %u\n",g.bots[0].goal,g.bots[0].target);
+ assert(fuel_base(&g,0)<0 && own_base(&g,0)==1);
+ assert(g.bots[0].goal==BG_PILL && g.bots[0].target==2);
+}
+int main(void) {planner();scenarios();under_fire();guarded();printf("bot checks pass; GameState %zu, BotSearch %zu, Bot %zu bytes on host\n",sizeof(GameState),sizeof(BotSearch),sizeof(Bot));return 0;}

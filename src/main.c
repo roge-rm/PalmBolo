@@ -777,6 +777,13 @@ static void SEC_COLD SelfTest(void)
 		HexStr(v, hex);
 		LOG(("script %d %s checksum %s ticks %lu in %lu sys ticks", (Int16)n,
 			script_name(n), hex, gGame.tick, t1 - t0));
+#ifdef EXPAND_CHECK
+		{
+			extern unsigned long gExpandChecked, gExpandDiffer;
+
+			LOG(("expand check %lu cells, %lu differ", gExpandChecked, gExpandDiffer));
+		}
+#endif
 		if (n == 33 || n == 34)
 			BenchBots();
 	}

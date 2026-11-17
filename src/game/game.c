@@ -1020,17 +1020,17 @@ uint32_t SEC_COLD game_checksum(const GameState *s)
 			crc = c16(crc, q->best);
 			crc = c16(crc, q->cur);
 			crc = c16(crc, q->count);
+			crc = c16(crc, q->fbase);
 			crc = c16(crc, q->launch);
 			crc = c16(crc, q->launchScore);
 			crc = util_crc(crc, &q->way[0][0], sizeof(q->way));
 			crc = util_crc(crc, q->cell, sizeof(q->cell));
 			crc = util_crc(crc, q->danger, sizeof(q->danger));
-			for (j = 0; j < BOT_CELLS; j++) {
+			crc = util_crc(crc, q->settled, sizeof(q->settled));
+			for (j = 0; j < BOT_CELLS; j++)
 				crc = c16(crc, q->distance[j]);
-				crc = c16(crc, q->position[j]);
-			}
 			for (j = 0; j < q->count; j++)
-				crc = c16(crc, q->heap[j]);
+				crc = c32(crc, q->heap[j]);
 		}
 	}
 	return ~crc;

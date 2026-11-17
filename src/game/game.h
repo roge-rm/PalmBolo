@@ -225,12 +225,15 @@ typedef struct BotSearch {
 	uint8_t bestH, wayN, near, zone, lastDir, wayPos;
 	uint8_t launchKind, launchX, launchY, startH;
 	uint16_t best, cur, count, launch, launchScore;
+	uint16_t fbase;          // f the heap keys are taken from (bot.c)
 	uint8_t way[BOT_WAYS][2];
 	uint8_t cell[BOT_CELLS / 2]; // 0 new, 1..8 parent direction, 9 start, 15 solid
 	uint8_t danger[BOT_CELLS / 8];
+	uint8_t settled[BOT_CELLS / 8]; // a bit for each cell taken off the heap
 	uint16_t distance[BOT_CELLS];
-	uint16_t heap[BOT_CELLS];
-	uint16_t position[BOT_CELLS]; // BOT_NO_CELL when absent from the heap
+	// Sort keys with the cell in the low 10 bits (bot.c). A cheaper arrival
+	// adds an entry and leaves the old one, which is passed over when taken.
+	uint32_t heap[BOT_CELLS];
 } BotSearch;
 
 typedef struct GameState {

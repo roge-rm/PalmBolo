@@ -45,7 +45,9 @@ GAMESRCS += script
 endif
 # Network play, segment net.
 NETSRCS  = lockstep link infrared udp udpwire bluetooth
-OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS) $(NETSRCS)))
+# Hand-written 68k for the bots' path search (bot.c), segment bots.
+ASMSRCS  = expand68k
+OBJS     = $(addprefix $(BUILD)/,$(addsuffix .o,$(SRCS) $(GAMESRCS) $(NETSRCS) $(ASMSRCS)))
 
 all: build/$(PRC)
 
@@ -70,6 +72,9 @@ $(BUILD)/%.o: src/%.c src/palmbolo.h src/resource.h src/game/*.h src/net/*.h src
 
 $(addprefix $(BUILD)/,$(addsuffix .o,$(GAMESRCS))): $(BUILD)/%.o: src/game/%.c src/game/*.h | $(BUILD)
 	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@
+
+$(addprefix $(BUILD)/,$(addsuffix .o,$(ASMSRCS))): $(BUILD)/%.o: src/game/%.S src/game/expand68k.h | $(BUILD)
+	@echo AS $<; $(CC) $(DEFS) -Isrc/game -c $< -o $@
 
 $(addprefix $(BUILD)/,$(addsuffix .o,$(NETSRCS))): $(BUILD)/%.o: src/net/%.c src/net/*.h src/game/*.h | $(BUILD)
 	@echo CC $<; $(CC) $(CFLAGS) -c $< -o $@

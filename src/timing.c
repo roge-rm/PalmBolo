@@ -160,10 +160,104 @@ static void SEC_COLD PartsLog(void)
 }
 #endif
 
+#ifdef SEARCH_PARTS
+// Debug: times the bots' path search with the DragonBall's timer 1 (OS 3
+// and 4), which counts up to its compare value once a system tick. bot.c
+// calls search_mark(0) before a step and search_mark(1) after it, and
+// counts the cells in gSearchCells. Sums are in timer counts.
+#define kSrCompare    ((volatile UInt16 *)0xFFFFF604UL)
+#define kSrCounter    ((volatile UInt16 *)0xFFFFF608UL)
+UInt32 gSearchCells, gSearchExpand, gSearchTake, gSearchSlow, gSearchSlowN, gSearchLaunch, gSearchLaunchN;
+UInt16 gSearchDiv;      // timer counts a system tick
+static UInt16 gSearchC;
+static UInt32 gSearchT, gSearchSum, gSearchSteps, gSearchWorst;
+
+void SEC_UI search_mark(UInt8 end)
+{
+	UInt32 t, d;
+	UInt16 c;
+
+	if (!gSearchDiv)
+		return;
+	do {
+		t = TimGetTicks();
+		c = *kSrCounter;
+	} while (TimGetTicks() != t);
+	if (end) {
+		d = (t - gSearchT) * gSearchDiv + c - gSearchC;
+		gSearchSum += d;
+		gSearchSteps++;
+		if (d > gSearchWorst)
+			gSearchWorst = d;
+	}
+	gSearchT = t;
+	gSearchC = c;
+}
+
+// Timer counts to microseconds.
+static UInt32 SEC_COLD SearchUs(UInt32 f)
+{
+	UInt32 perTick = 1000000UL / gTps;
+
+	return f / gSearchDiv * perTick + f % gSearchDiv * perTick / gSearchDiv;
+}
+
+static void SEC_COLD SearchLog(void)
+{
+	if (gSearchDiv)
+		LogF("search %lu us in %lu steps, %lu cells, worst step %lu us, expand %lu us, take %lu us",
+			SearchUs(gSearchSum), gSearchSteps, gSearchCells, SearchUs(gSearchWorst),
+			SearchUs(gSearchExpand), SearchUs(gSearchTake));
+	if (gSearchDiv)
+		LogF("search parts: C expand %lu us in %lu, launch %lu us in %lu",
+			SearchUs(gSearchSlow), gSearchSlowN, SearchUs(gSearchLaunch), gSearchLaunchN);
+	gSearchSlow = gSearchSlowN = gSearchLaunch = gSearchLaunchN = 0;
+	gSearchSum = gSearchSteps = gSearchCells = gSearchWorst = gSearchExpand = gSearchTake = 0;
+}
+#endif
+
+#ifdef EXPAND_CHECK
+#include "game/game.h"
+
+// Debug: room for two copies of the search state, for the check in bot.c of
+// expand68k.S against the C, and its count in the log.
+extern unsigned long gExpandChecked, gExpandDiffer;
+extern UInt16 gExpandFirst;
+static BotSearch *gCheckCopy[2];
+
+BotSearch *SEC_UI search_check_copy(BotSearch *q, UInt8 which, UInt8 back)
+{
+	if (!gCheckCopy[which])
+		gCheckCopy[which] = MemPtrNew(sizeof(BotSearch));
+	if (!gCheckCopy[which])
+		return NULL;
+	if (back)
+		MemMove(q, gCheckCopy[which], sizeof(BotSearch));
+	else
+		MemMove(gCheckCopy[which], q, sizeof(BotSearch));
+	return gCheckCopy[which];
+}
+
+static void SEC_COLD ExpandCheckLog(void)
+{
+	LogF("expand check %lu cells, %lu differ, first at cell %u%s", gExpandChecked, gExpandDiffer,
+		gExpandFirst, gCheckCopy[1] ? "" : ", no memory for the copies");
+}
+#endif
+
 void SEC_COLD TimingInit(UInt16 tps)
 {
 	gTps = tps ? tps : 100;
 	gLastLogTicks = TimGetTicks();
+#ifdef SEARCH_PARTS
+	{
+		UInt32 rom = 0;
+
+		FtrGet(sysFtrCreator, sysFtrNumROMVersion, &rom);
+		if (rom < 0x05000000UL && *kSrCompare > 100)
+			gSearchDiv = *kSrCompare;
+	}
+#endif
 #ifdef LOOP_PARTS
 	FineInit();
 #endif
@@ -289,6 +383,12 @@ void SEC_COLD TimingMaybeLog(void)
 	TimingHeap("play");
 #ifdef LOOP_PARTS
 	PartsLog();
+#endif
+#ifdef SEARCH_PARTS
+	SearchLog();
+#endif
+#ifdef EXPAND_CHECK
+	ExpandCheckLog();
 #endif
 	gLastLogTicks = TimGetTicks();
 	gTickSum = gTickCount = gTickWorst = 0;
