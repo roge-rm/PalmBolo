@@ -372,6 +372,16 @@ static void SEC_NET TransportSync(void)
 		if (gLs.seated & (1 << i)) nodes |= 1 << gLs.node[i];
 	if (gKind == LINK_UDP) udp_sync(gLs.host && gLs.state == LS_LOBBY, nodes);
 	else if (gKind == LINK_BT) bt_sync(gLs.host && gLs.state == LS_LOBBY, nodes);
+	else if (gKind == LINK_IR) ir_sync(gLs.host && gLs.state == LS_LOBBY, nodes);
+}
+
+// The infrared link is gone for good and lockstep won't say so: a host in
+// the lobby, or a joiner that hasn't been seated.
+static Boolean SEC_NET IrLost(void)
+{
+	if (gKind != LINK_IR || !ir_lost())
+		return false;
+	return gLs.host ? gLs.state == LS_LOBBY : gLs.state == LS_HELLO && !gLs.inLobby;
 }
 
 UInt8 NetPoll(void)
@@ -388,9 +398,9 @@ UInt8 NetPoll(void)
 	if (gKind == LINK_LOOP)
 		loop_time(now);
 #endif
-	if (gKind == LINK_UDP || gKind == LINK_BT) TransportSync();
+	if (gKind != LINK_LOOP) TransportSync();
 	ls_poll(&gLs, now);
-	if (gKind == LINK_UDP || gKind == LINK_BT) TransportSync();
+	if (gKind != LINK_LOOP) TransportSync();
 	// A STOP that came in says why the game ended, so it goes before a link
 	// error or a join that ran out of time.
 	if (gLs.state != LS_STOPPED) {
@@ -399,6 +409,9 @@ UInt8 NetPoll(void)
 
 		if (why[0]) {
 			Why(why);
+			gPhase = NET_STOPPED;
+		} else if (IrLost()) {
+			Why("Infrared connection lost.");
 			gPhase = NET_STOPPED;
 		} else if (!gLs.host && gLs.state == LS_HELLO && !gLs.inLobby &&
 		           (wait = JoinWait(&why)) != 0 && now - gJoinAt >= wait) {

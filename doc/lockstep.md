@@ -51,7 +51,7 @@ The game is over on the same tick everywhere. Each Palm then calls `ls_finish` a
 
 1. Joiner sends HELLO every 500 ms until START comes.
 2. The host seats each new node in the next slot. Once a second, and whenever the seats change, it sends each joiner SEATS (their slot, who is seated, the bots, teams and the map's name) and the other players' NAMEs, so joiners see the lobby.
-3. A joiner who sends LEAVE, or is silent for 3 s, loses their seat and those after move up a slot, so players stay in slots 0 up. A joiner who hears nothing from the host for 3 s once seated stops with "host lost".
+3. A joiner who sends LEAVE, or is silent for 3 s, loses their seat and those after move up a slot, so players stay in slots 0 up. A joiner who hears nothing from the host for 3 s once seated stops with "host lost". An infrared host takes a new connection once the seat is free (`doc/infrared.md`).
 4. When the host starts the game it sends START and every player's NAME to each joiner, again every 200 ms (or the resend time) until that joiner's READY or MAPGET.
 5. A joiner with START and all names looks for the map. If it lacks it, it gets it (below). Then it sets up its game from START (`ls_setup`, `game_init` with the seed) and sends READY.
 6. The host plays once every joiner is READY. While the game starts either side allows 10 s of silence (`LS_START_MS`), as loading a map takes a while on a slow Palm. A joiner silent that long is handed to a bot.

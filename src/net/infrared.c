@@ -12,7 +12,8 @@
 #define IR_DROP_SECS 3
 
 // IR_DROP is a joiner waiting for IrLAP to go down before it discovers again.
-enum { IR_LISTEN, IR_DISCOVER, IR_LAP, IR_QUERY, IR_CONNECT, IR_UP, IR_DEAD, IR_DROP };
+// IR_WAIT is a lobby host whose joiner went away, until that seat is free.
+enum { IR_LISTEN, IR_DISCOVER, IR_LAP, IR_QUERY, IR_CONNECT, IR_UP, IR_DEAD, IR_DROP, IR_WAIT };
 typedef struct IrFrame {
 	UInt8 len, data[LINK_FRAME_MAX];
 } IrFrame;
@@ -22,6 +23,8 @@ static Boolean gOpen, gBound, gBusy, gControlBusy, gEver;
 static Boolean gServicing;
 // gLmp: IrLMP is confirmed, so data may arrive. gDrop: polling must drop IrLAP.
 static Boolean gLmp, gDrop;
+// gAccept: a host may take a joiner again. gAsked: a joiner's IrLMP connect waits for an answer.
+static Boolean gAccept, gAsked;
 static UInt8 gRole, gState, gEvent, gQueryDone, gQueryStatus, gPick;
 static UInt32 gRetry, gDeadline;
 #ifdef DEBUG
@@ -153,12 +156,20 @@ static void IrCallbackBody(IrCallBackParms *p)
 		}
 		break;
 	case LEVENT_LAP_CON_CNF:
-		if (gRole == LINK_ROLE_JOIN && gState == IR_LAP)
+		if (gRole != LINK_ROLE_JOIN)
+			break;
+		if (gState == IR_LAP) {
 			gEvent = 2;
+		} else if (gState == IR_LISTEN || gState == IR_DISCOVER || gState == IR_DROP) {
+			// No step is waiting for this IrLAP, so polling drops it.
+			gState = IR_DROP;
+			gDrop = true;
+		}
 		break;
 	case LEVENT_LM_CON_IND:
-		if (gRole == LINK_ROLE_HOST && !gEver)
-			gEvent = 3;
+		// Polling answers once the host is listening.
+		if (gRole == LINK_ROLE_HOST && gState != IR_UP && (!gEver || gAccept))
+			gAsked = true;
 		break;
 	case LEVENT_LM_CON_CNF:
 		if (gRole != LINK_ROLE_JOIN || gState != IR_CONNECT)
@@ -180,11 +191,13 @@ static void IrCallbackBody(IrCallBackParms *p)
 	case LEVENT_LM_DISCON_IND:
 	case LEVENT_LAP_DISCON_IND:
 		gBusy = false;
-		gLmp = gDrop = false;
+		gLmp = gDrop = gAsked = false;
 		gTxCount = gTxOffset = 0;
 		gEvent = 0;
 		// Whole received frames stay for ir_recv. A partial one can't finish.
 		gRxOffset = 0;
+		if (gState == IR_WAIT)
+			break;
 		if (gEver || gState == IR_DEAD) {
 			gState = IR_DEAD;
 			break;
@@ -208,6 +221,7 @@ static void IrCallbackBody(IrCallBackParms *p)
 			if (gRxCount == IR_QUEUE) {
 				// Stop on overflow rather than silently losing reliable data.
 				gState = IR_DEAD;
+				gDrop = gRole == LINK_ROLE_HOST;
 				break;
 			}
 			f = &gRx[(gRxHead + gRxCount) % IR_QUEUE];
@@ -215,6 +229,7 @@ static void IrCallbackBody(IrCallBackParms *p)
 				f->len = p->rxBuff[i];
 				if (!f->len || f->len > LINK_FRAME_MAX) {
 					gState = IR_DEAD;
+					gDrop = gRole == LINK_ROLE_HOST;
 					break;
 				}
 				gRxOffset = 1;
@@ -290,7 +305,8 @@ int ir_open(Link *l, uint8_t role)
 	gState = IR_LISTEN;
 	gRetry = gDeadline = TimGetTicks();
 	gEvent = gQueryDone = gPick = 0;
-	gLmp = gDrop = false;
+	gLmp = gDrop = gAsked = false;
+	gAccept = role == LINK_ROLE_HOST;
 	gTxHead = gTxCount = gRxHead = gRxCount = gTxOffset = gRxOffset = 0;
 	MemSet(&gCon, sizeof(gCon), 0);
 	MemSet(&gPacket, sizeof(gPacket), 0);
@@ -380,6 +396,10 @@ static void SEC_NET IrPump(void)
 			gState, gBusy, gTxCount, gRxCount, gSent, gReceived, gFailed, gFragments, gMaxWire, gMaxFrame));
 	}
 #endif
+	if (gAsked && gState == IR_LISTEN) {
+		gAsked = false;
+		ev = 3;
+	}
 	if (ev)
 		LOG(("ir: action %u state %u", ev, gState));
 	if (ev == 1) {
@@ -404,6 +424,8 @@ static void SEC_NET IrPump(void)
 				return;
 			}
 			gControlBusy = true;
+			// Nothing from an earlier joiner reaches this one.
+			gRxHead = gRxCount = gRxOffset = 0;
 			status = IrConnectRsp(gRef, &gCon, &gControlPacket, 0);
 #if defined(DEBUG) && defined(IR_TRACE)
 			Trace(129, status, &gControlPacket, 0, NULL);
@@ -483,6 +505,7 @@ static void SEC_NET IrPump(void)
 #endif
 		if (!max) {
 			gState = IR_DEAD;
+			gDrop = gRole == LINK_ROLE_HOST;
 			return;
 		}
 		while (n < max && offset <= f->len) {
@@ -560,8 +583,46 @@ uint8_t ir_recv(Link *l, uint8_t *from, uint8_t *buf)
 	return len;
 }
 
+// A host in the lobby (accepting) listens again after its joiner went away,
+// once the old frames are read and lockstep has freed node 1's seat (nodes
+// has a bit for each seated node). After the start a lost session stays dead.
+void ir_sync(uint8_t accepting, uint8_t nodes)
+{
+	if (!gOpen || gRole != LINK_ROLE_HOST)
+		return;
+	gAccept = accepting != 0;
+	if (!gAccept) {
+		gAsked = false;
+		if (gState == IR_WAIT)
+			gState = IR_DEAD;
+		return;
+	}
+	// A control packet IrLib still holds can't be used for the next answer.
+	if (gState == IR_DEAD && !gControlBusy) {
+		// Bad data ended the session with IrLMP still connected.
+		if (gDrop)
+			IrDisconnectIrLap(gRef);
+		gDrop = false;
+		gState = IR_WAIT;
+	}
+	if (gState == IR_WAIT && !gRxCount && !(nodes & 2)) {
+		LOG(("ir: listening again"));
+		gBusy = false;
+		gTxHead = gTxCount = gTxOffset = 0;
+		gRxHead = gRxOffset = 0;
+		gEver = false;
+		gState = IR_LISTEN;
+	}
+}
+
 // True once the session has ended and every received frame has been read.
 int ir_dead(void)
+{
+	return gOpen && (gState == IR_DEAD || gState == IR_WAIT) && !gRxCount;
+}
+
+// True when the session has ended and the link won't take another.
+int ir_lost(void)
 {
 	return gOpen && gState == IR_DEAD && !gRxCount;
 }

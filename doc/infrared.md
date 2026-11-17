@@ -8,10 +8,12 @@ The host advertises PalmBolo/LSAP through IAS. A joiner discovers it,
 connects IrLAP, queries LSAP and opens IrLMP. Host and joiner are nodes
 0 and 1. Link frames have a one-byte length and up to 64 payload bytes,
 split at IrMaxTxSize. TX and RX queues hold 16 frames each. Receive
-overflow ends the session. A disconnected session is not reopened. Frames
+overflow ends the session. A disconnected session is not reopened, except by
+a host in the lobby (below). Frames
 received before a disconnect or overflow stay queued, `ir_recv` still hands
 them out, and `ir_dead` reports the ended session once they are all read.
-The queue is cleared when a new IrLMP connection is confirmed. Connection
+The queue is cleared when a new IrLMP connection is confirmed, and on the
+host before it answers one. Connection
 control has its own persistent packet and buffer; only a pending data packet
 blocks the next data send. A control packet still held by IrLib is not reused
 before close. OS 5 may return a copied IrPacket, so completion matches an
@@ -21,10 +23,26 @@ structure address is not used to match completion.
 A joiner has 10 seconds for each step (discovery, IrLAP, the LSAP query and
 the IrLMP connect). When a step runs out, fails to start, or IrLMP drops
 before the link was up, it disconnects IrLAP, waits up to 3 seconds for that
-(asking again if it's still up) and goes back to discovery. A host that has
-already had a session doesn't answer a new IrLMP connect, so that joiner keeps
-retrying until the game gives up. Data that arrives after the IrLMP confirm
-but before polling marks the link up is queued.
+(asking again if it's still up) and goes back to discovery. An IrLAP confirm
+that comes when no step is waiting for it is dropped the same way. Data that
+arrives after the IrLMP confirm but before polling marks the link up is queued.
+
+`NetPoll` calls `ir_sync(accepting, nodes)` before and after each lockstep
+poll. `accepting` is set while the host is in the lobby, and `nodes` has a bit
+for each seated node. A lobby host whose session ended (a disconnect, bad data
+or overflow, where it drops IrLAP itself) waits until the old frames are read
+and lockstep has freed the joiner's seat, by its LEAVE or after 3 seconds of
+silence. Then it listens again and takes a connection from the same Palm or
+another. An IrLMP connect that comes during the wait is answered when it ends.
+Once the game has started a lost session stays dead: lockstep hands the
+joiner's tank to a bot. A started host that has no session, because nobody
+joined or the joiner left in the lobby, still answers one connect, and
+lockstep turns that joiner away with a FULL stop.
+
+`ir_lost` is true when the session is over and won't be replaced. A lobby
+host (only when IrLib still holds the control packet) or a joiner that isn't
+seated yet then stops with "Infrared connection lost." In the other cases
+lockstep gives the reason.
 
 Callbacks enter code1, recover A5 through feature Rmrf/16 and restore A5
 on return. They copy data and record state changes in memory. Normal
