@@ -10,7 +10,7 @@ New in 0.11.0:
 - Import maps from a memory card and beam them between Palms
 - Carry on offline with bots when a network game drops or the host leaves, and Resume it later
 - Bots that find or build boats, cross water, get through mazes and refuel more sensibly
-- Native 320×320 drawing on older Sony Cliés, not yet tested on one
+- Native 320×320 drawing on older Sony Cliés
 
 Saves and network games from 0.10.0 don't work with 0.11.0: older Palms can't join, and an old saved game can't be resumed. The old save is left in place until a new one replaces it.
 
@@ -42,9 +42,9 @@ All from the [Frond](https://github.com/roge-rm/frond) emulator. The map preview
 
 ## Devices
 
-Palm OS 3.0 and up, from 160×160 mono to 320×480 colour. So far it's been tested in Frond on a Tungsten TX, a Palm IIIx (full speed there with up to 3 bots), a Zire 72, a Clié TG50 for the keyboard and a Palm E2 for memory cards.
+Palm OS 3.0 and up, from 160×160 mono to 320×480 colour. So far it's been tested in Frond on a Tungsten TX, a Palm IIIx (full speed there with up to 3 bots), a Zire 72, a Clié TG50 for the keyboard, a Clié T415 and a Palm E2 for memory cards.
 
-On older Clié devices with Sony's high-resolution library it draws at 320×320 with 16-pixel art, and at 160×160 if the library isn't there. This hasn't been tested on a Clié yet, in Frond or on a real one.
+On older Clié devices with Sony's high-resolution library it draws at 320×320 with 16-pixel art, and at 160×160 if the library isn't there. That's been tested on the T415 in Frond, not on a real Clié yet.
 
 ## Install
 
@@ -56,7 +56,7 @@ Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
 New game picks a map, game type, hidden mines, time limit, bots, bot level and teams. Leaving a game saves it and Resume carries on.
 
-None of infrared, Bluetooth, UDP, memory cards or beaming has been tried on real Palms yet. Infrared has been played between Frond emulators and card import tested on an emulated Palm E2. Bluetooth, UDP and beaming have only been through tests on Linux so far, so they may well not work yet.
+None of infrared, Bluetooth, UDP, memory cards or beaming has been tried on real Palms yet. Infrared and UDP games have been played between Frond emulators, card import tested on an emulated Palm E2 and maps beamed between an emulated IIIx and T415. Bluetooth has only been through tests on Linux so far, so it may well not work yet.
 
 For two-player infrared, point the Palms at each other. On one Palm choose New game, pick the map and settings, then Host. On the other choose Join game, select Infrared and tap Join. Tap Start on the host once both players are in the lobby. The joiner receives the map if needed and keeps it for later.
 
