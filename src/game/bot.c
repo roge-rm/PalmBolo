@@ -19,7 +19,7 @@
 
 enum { BG_NONE, BG_BASE, BG_PILL, BG_REFUEL, BG_TANK, BG_PATROL, BG_MAN };
 enum { BM_NAV, BM_RUN, BM_VEER, BM_ESCAPE };
-enum { BK_BASE = 1, BK_PILL = 2, BK_TANK = 3 };     // kinds for Bot.skip
+enum { BK_BASE = 1, BK_PILL = 2, BK_TANK = 3, BK_MAN = 4 };   // kinds for Bot.skip
 
 #define NO_TANK         255
 #define NO_BASE         255     // target of a patrol that is not round a base
@@ -39,7 +39,7 @@ enum { BK_BASE = 1, BK_PILL = 2, BK_TANK = 3 };     // kinds for Bot.skip
 #define BOT_EVERY       4
 // SB_TIME: the last full look counted down modeTime, so the ticks after
 // it do too.
-enum { SB_ON = 1, SB_KEEP = 2, SB_SEA = 4, SB_FIRE = 8, SB_TIME = 16 };        // Bot.steerBits
+enum { SB_ON = 1, SB_KEEP = 2, SB_FIRE = 8, SB_TIME = 16 };        // Bot.steerBits
 
 // Per level: ticks between looks round, ticks before firing at a new
 // foe, most aim error (4/32 bradians), lead on a moving tank (halves),
@@ -1911,7 +1911,8 @@ static uint8_t SEC_BOTS man_lost(const GameState *s, uint8_t t)
 	const Bot *b = &s->bots[t];
 	uint8_t tx = (uint8_t)(k->x >> 8), ty = (uint8_t)(k->y >> 8);
 
-	if (m->inTank || m->isDead || m->state != LGM_STATE_RETURN)
+	// A builder it couldn't get to is left a while.
+	if (m->inTank || m->isDead || m->state != LGM_STATE_RETURN || b->skip == BK_MAN << 5)
 		return 0;
 	if (b->goal == BG_MAN)
 		return 1;
@@ -1942,9 +1943,9 @@ static void SEC_BOTS think(GameState *s, uint8_t t, GameInput *in)
 		return;
 	if (b->fails >= 3) {
 		// Can't get there: leave it a while.
-		if (b->goal == BG_BASE || b->goal == BG_PILL || b->goal == BG_TANK) {
-			b->skip = (uint8_t)(((b->goal == BG_BASE ? BK_BASE : b->goal == BG_PILL ? BK_PILL : BK_TANK)
-				<< 5) | b->target);
+		if (b->goal == BG_BASE || b->goal == BG_PILL || b->goal == BG_TANK || b->goal == BG_MAN) {
+			b->skip = (uint8_t)(((b->goal == BG_BASE ? BK_BASE : b->goal == BG_PILL ? BK_PILL :
+				b->goal == BG_TANK ? BK_TANK : BK_MAN) << 5) | b->target);
 			b->skipTime = 250;
 		}
 		b->goal = BG_NONE;
@@ -2042,25 +2043,35 @@ static void SEC_BOTS think(GameState *s, uint8_t t, GameInput *in)
 
 // ---- driving ----
 
-// Deep sea within stopping distance ahead.
-static uint8_t SEC_BOTS sea_ahead(const Tank *k)
+// Deep sea within stopping distance along 16-way heading d: the squares
+// half way and at the end, and the corners the line may clip on the way.
+// A boat only counts deep sea past the land it would run onto.
+static uint8_t SEC_BOTS sea_ahead(const Tank *k, uint8_t d)
 {
+	uint16_t stop = (uint16_t)(((uint16_t)k->speed * (uint16_t)k->speed >> 3) + 160), dist;
+	uint8_t x = (uint8_t)(k->x >> 8), y = (uint8_t)(k->y >> 8), nx, ny, a, c, land = !k->boat;
 	int16_t dx, dy;
-	uint16_t stop;
-	uint16_t a = (uint16_t)(util_dir16(k->angle) * 16 * ANGLE_ONE);
 
-	if (k->boat)
-		return 0;
-	stop = (uint16_t)(((uint16_t)k->speed * (uint16_t)k->speed >> 3) + 160);
 	if (stop > 1023)
 		stop = 1023;
-	util_distance(&dx, &dy, a, stop);
-	if (terrain((uint8_t)((uint16_t)(k->x + dx) >> 8), (uint8_t)((uint16_t)(k->y + dy) >> 8)) ==
-	    TERRAIN_DEEP_SEA)
-		return 1;
-	util_distance(&dx, &dy, a, (uint16_t)(stop >> 1));
-	return terrain((uint8_t)((uint16_t)(k->x + dx) >> 8), (uint8_t)((uint16_t)(k->y + dy) >> 8)) ==
-		TERRAIN_DEEP_SEA;
+	for (dist = stop >> 1;; dist = stop) {
+		util_distance(&dx, &dy, (uint16_t)((d & 15) * 16 * ANGLE_ONE), dist);
+		nx = (uint8_t)((uint16_t)(k->x + dx) >> 8);
+		ny = (uint8_t)((uint16_t)(k->y + dy) >> 8);
+		a = terrain(nx, y);
+		c = terrain(x, ny);
+		if (land && (a == TERRAIN_DEEP_SEA || c == TERRAIN_DEEP_SEA))
+			return 1;
+		land |= !water(a) || !water(c);
+		a = terrain(nx, ny);
+		if (land && a == TERRAIN_DEEP_SEA)
+			return 1;
+		land |= !water(a);
+		if (dist == stop)
+			return 0;
+		x = nx;
+		y = ny;
+	}
 }
 
 // The keys for what steer last set, from the tank as it is now: turns
@@ -2094,8 +2105,29 @@ static void SEC_BOTS steer_keys(const Tank *k, const Bot *b, GameInput *in)
 	} else if (ad > 2048 && tsp > 16) {
 		tsp = 16;
 	}
-	if (b->steerBits & SB_SEA)
-		tsp = 0;
+	// Checked each tick: it stops for deep sea ahead (for a boat, past
+	// land it would run onto) and while moving turns only onto a heading
+	// clear of it, away from it if it can.
+	if (tsp || k->speed) {
+		uint8_t dir = util_dir16(k->angle), sea = sea_ahead(k, dir);
+
+		if (k->speed && (sea || (in->keys & (IN_LEFT | IN_RIGHT)))) {
+			uint8_t key = in->keys & (IN_LEFT | IN_RIGHT);
+
+			in->keys &= (uint8_t)~(IN_LEFT | IN_RIGHT);
+			if (!key)
+				key = IN_RIGHT;
+			if (sea_ahead(k, (uint8_t)(dir + (key == IN_RIGHT ? 1 : -1)))) {
+				key ^= IN_LEFT | IN_RIGHT;
+				if (!sea || sea_ahead(k, (uint8_t)(dir + (key == IN_RIGHT ? 1 : -1))))
+					key = 0;
+				tsp = 0;
+			}
+			in->keys |= key;
+		}
+		if (sea)
+			tsp = 0;
+	}
 	if (k->speed < tsp)
 		in->keys |= IN_FASTER;
 	else if (k->speed > (tsp ? tsp + 3 : 0))
@@ -2104,7 +2136,7 @@ static void SEC_BOTS steer_keys(const Tank *k, const Bot *b, GameInput *in)
 
 // Turns towards want (within dead, at most 255) and makes for speed tsp
 // (quarters, 0 to 255), slowing for a sharp turn unless keep is set. Kept
-// for the ticks to the next full look; deep sea ahead stops it till then.
+// for the ticks to the next full look.
 static void SEC_BOTS steer(const Tank *k, Bot *b, uint16_t want, int16_t tsp, int16_t dead, uint8_t keep,
 	GameInput *in)
 {
@@ -2112,8 +2144,7 @@ static void SEC_BOTS steer(const Tank *k, Bot *b, uint16_t want, int16_t tsp, in
 	b->wantLo = (uint8_t)want;
 	b->tsp = (uint8_t)tsp;
 	b->dead = (uint8_t)dead;
-	b->steerBits = (uint8_t)((b->steerBits & (SB_FIRE | SB_TIME)) | SB_ON | (keep ? SB_KEEP : 0) |
-		(tsp && sea_ahead(k) ? SB_SEA : 0));
+	b->steerBits = (uint8_t)((b->steerBits & (SB_FIRE | SB_TIME)) | SB_ON | (keep ? SB_KEEP : 0));
 	steer_keys(k, b, in);
 }
 
@@ -2515,11 +2546,14 @@ static void SEC_BOTS pill_attack(GameState *s, uint8_t t, GameInput *in)
 		b->modeTime = 200;
 	}
 	if (b->mode == BM_RUN) {
-		// A cornered tank runs on however low its armour.
-		if (range >= PILL_VEER_RANGE && count_down(b) &&
-		    (k->armour >= kLevel[b->level].retreat || run_ok(s, t))) {
-			uint16_t a = (uint16_t)((aim + (int8_t)b->aimErr * 4) & (ANGLE_MAX - 1));
+		uint16_t a = (uint16_t)((aim + (int8_t)b->aimErr * 4) & (ANGLE_MAX - 1));
 
+		// A cornered tank runs on however low its armour. Deep sea on the
+		// way ends the run and counts as failing.
+		if (!k->boat && sea_ahead(k, util_dir16(a))) {
+			b->fails++;
+		} else if (range >= PILL_VEER_RANGE && count_down(b) &&
+		    (k->armour >= kLevel[b->level].retreat || run_ok(s, t))) {
 			b->steerBits |= SB_TIME;
 			sight(b, range);
 			steer(k, b, a, FULL_SPEED, 8, 1, in);

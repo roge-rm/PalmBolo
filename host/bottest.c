@@ -178,6 +178,9 @@ static void scenarios(void)
   b=l=0;sea(1);sums[repeat]=run_capture("board, cross and land",7000,&b,&l);assert(b==1 && l==1);
  }
  assert(sums[0]==sums[1]);
+ // Landing straight off deep sea.
+ b=l=0;sea(1);for(y=MAP_EDGE_LOW+1;y<MAP_EDGE_HIGH;y++)mapstore_set(105,y,TERRAIN_DEEP_SEA);
+ run_capture("board, cross and land from deep sea",7000,&b,&l);assert(b==1 && l==1);
  b=l=0;sea(0);run_capture("build, cross and land",9000,&b,&l);assert(b==1 && l==1);
  b=l=0;sea(0);g.tanks[0].trees=8;
  mapstore_set(98,99,TERRAIN_FOREST);mapstore_set(99,99,TERRAIN_FOREST);mapstore_set(100,99,TERRAIN_FOREST);
@@ -345,4 +348,25 @@ static void guarded(void)
  assert(fuel_base(&g,0)<0 && own_base(&g,0)==1);
  assert(g.bots[0].goal==BG_PILL && g.bots[0].target==2);
 }
-int main(void) {planner();scenarios();under_fire();guarded();printf("bot checks pass; GameState %zu, BotSearch %zu, Bot %zu bytes on host\n",sizeof(GameState),sizeof(BotSearch),sizeof(Bot));return 0;}
+// Saved while the builder is out to build a boat and resumed after another
+// game: it plays on the same as the game that wasn't saved.
+static void save_boat(void)
+{
+ static GameState saved;
+ int i,at=-1,b=0,l=0;uint32_t straight;
+ sea(0);
+ for(i=0;i<9000 && at<0;i++) {
+  game_tick(&g,input);
+  if(g.bots[0].boatTask==2 && !g.men[0].inTank && g.men[0].state==LGM_STATE_GOING)at=i;
+ }
+ assert(at>=0);
+ memcpy(&saved,&g,sizeof(g));assert(mapstore_save()==0);
+ straight=run_capture("boat build, played straight",9000,&b,&l);
+ sea(1);for(i=0;i<300;i++)game_tick(&g,input);
+ assert(mapstore_resume()==0);memcpy(&g,&saved,sizeof(g));
+ b=l=0;
+ assert(run_capture("boat build, saved and resumed",9000,&b,&l)==straight);
+ mapstore_drop_save();
+ printf("save during a boat build at tick %d: resumed game matches\n",at);
+}
+int main(void) {planner();scenarios();under_fire();guarded();save_boat();printf("bot checks pass; GameState %zu, BotSearch %zu, Bot %zu bytes on host\n",sizeof(GameState),sizeof(BotSearch),sizeof(Bot));return 0;}

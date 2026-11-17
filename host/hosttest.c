@@ -724,6 +724,70 @@ static void save_resume(const uint8_t *ev, uint32_t len)
 	CHECK(a.over && a.tick == 3000, "limit: over at 3000");
 }
 
+// A bot path search part way through.
+static int save_busy_now(const GameState *g)
+{
+	return g->search.who != 0 && g->search.phase == 0 && g->search.count > 20;
+}
+
+// Saves a bot game at the first tick a search is part way, plays another
+// game, resumes and checks it ends the same as the game run straight. The
+// boat build case is in bottest.c.
+static void save_busy(const uint8_t *ev, uint32_t len)
+{
+	static GameState a, b, c, saved;
+	GameSetup setup;
+	uint32_t seed, at = 0, sumA, sumB, terrA;
+	const char *name = "save during a bot search";
+
+	memset(&setup, 0, sizeof(setup));
+	setup.numPlayers = 1;
+	setup.numBots = 7;
+	setup.botLevel = BOT_NORMAL;
+	game_set_viewer(0);
+	for (seed = 41; seed < 61 && !at; seed++) {
+		uint32_t t;
+
+		CHECK(parse_buf(&a.map, ev, len) == MAP_OK, "busy: map");
+		game_init(&a, seed, &setup);
+		for (t = 0; t < 30000 && !at; t++) {
+			run_ticks(&a, t, t + 1);
+			if (t >= 300 && save_busy_now(&a))
+				at = t + 1;
+		}
+	}
+	seed--;
+	if (!at) {
+		printf("%s: no busy tick found\n", name);
+		CHECK(0, "busy: found a tick to save at");
+		return;
+	}
+	run_ticks(&a, at, at + 2000);
+	sumA = game_checksum(&a);
+	terrA = game_terrain_checksum();
+
+	CHECK(parse_buf(&b.map, ev, len) == MAP_OK, "busy: map");
+	game_init(&b, seed, &setup);
+	run_ticks(&b, 0, at);
+	CHECK(save_busy_now(&b), "busy: busy at the save");
+	CHECK(mapstore_save() == 0, "busy: saved");
+	memcpy(&saved, &b, sizeof(b));
+	memset(&b, 0xA5, sizeof(b));
+	CHECK(parse_buf(&c.map, ev, len) == MAP_OK, "busy: map");
+	game_init(&c, 999, &setup);
+	run_ticks(&c, 0, 700);
+	CHECK(mapstore_resume() == 0, "busy: resumed");
+	memcpy(&b, &saved, sizeof(b));
+	run_ticks(&b, at, at + 2000);
+	sumB = game_checksum(&b);
+	printf("%s: seed %lu tick %lu, straight %08lx, resumed %08lx, terrain %08lx %08lx\n", name,
+		(unsigned long)seed, (unsigned long)at, (unsigned long)sumA, (unsigned long)sumB,
+		(unsigned long)terrA, (unsigned long)game_terrain_checksum());
+	CHECK(sumA == sumB && terrA == game_terrain_checksum() && memcmp(&a, &b, sizeof(a)) == 0,
+		"busy: resumed game matches");
+	mapstore_drop_save();
+}
+
 
 // ---- bots ----
 
@@ -737,6 +801,9 @@ typedef struct BotStats {
 	// squares entered.
 	int wading, onBoat, boarded, manOut, manDead, manLong, manRiver, squares;
 	int outFor[GAME_MAX_TANKS];
+	// Ticks a bot has sat on one square with one goal getting nothing from a
+	// base, stretches of 1500 such ticks, and the longest.
+	int still[GAME_MAX_TANKS], stuck, stillMax;
 	int basesOwned[GAME_MAX_TANKS], pillsOwned[GAME_MAX_TANKS];
 } BotStats;
 
@@ -748,6 +815,7 @@ static void bot_tick(GameState *g, BotStats *st)
 	GameSound snd[GAME_MAX_SOUNDS];
 	uint8_t alive[GAME_MAX_TANKS], carry[GAME_MAX_TANKS], boat[GAME_MAX_TANKS], bump[GAME_MAX_TANKS], i, n;
 	uint8_t near[GAME_MAX_TANKS], arm[GAME_MAX_TANKS], parm[MAP_MAX_PILLS], ally[GAME_MAX_TANKS];
+	uint8_t shl[GAME_MAX_TANKS], goal[GAME_MAX_TANKS], tgt[GAME_MAX_TANKS];
 	uint16_t sq[GAME_MAX_TANKS];
 
 	memset(in, 0, sizeof(in));
@@ -809,6 +877,9 @@ static void bot_tick(GameState *g, BotStats *st)
 			st->outFor[i] = 0;
 		}
 		sq[i] = (uint16_t)((g->tanks[i].x >> 8) | (g->tanks[i].y & 0xFF00));
+		shl[i] = g->tanks[i].shells;
+		goal[i] = g->bots[i].goal;
+		tgt[i] = g->bots[i].target;
 		boat[i] = g->tanks[i].boat;
 		bump[i] = g->tanks[i].bumpX || g->tanks[i].bumpY;
 	}
@@ -830,6 +901,22 @@ static void bot_tick(GameState *g, BotStats *st)
 		if (alive[i] && !k->destroyed && !k->deathWait) {
 			st->boarded += k->boat && !boat[i];
 			st->squares += sq[i] != (uint16_t)((k->x >> 8) | (k->y & 0xFF00));
+			if ((g->botMask & (1 << i)) && sq[i] == (uint16_t)((k->x >> 8) | (k->y & 0xFF00)) &&
+			    goal[i] == g->bots[i].goal && tgt[i] == g->bots[i].target &&
+			    k->armour <= arm[i] && k->shells <= shl[i]) {
+				if (++st->still[i] == 1500) {
+					st->stuck++;
+					if (getenv("STUCKDBG"))
+						printf("  stuck g%d tank %u at %u,%u goal %u tgt %u tick %u\n", gSoakGame, i,
+							k->x >> 8, k->y >> 8, g->bots[i].goal, g->bots[i].target, (unsigned)g->tick);
+				}
+				if (st->still[i] > st->stillMax)
+					st->stillMax = st->still[i];
+			} else {
+				st->still[i] = 0;
+			}
+		} else {
+			st->still[i] = 0;
 		}
 		if (k->numCarry > carry[i])
 			st->pickups += k->numCarry - carry[i];
@@ -883,6 +970,56 @@ static void bot_tally(const GameState *g, BotStats *st)
 }
 
 static int gTeams;      // soak games in teams of two: tanks 0 and 1, 2 and 3...
+static int gSoakMap;    // SOAK_MAP: 1 "sea" bases beside deep sea, 2 "fire" bases under pills
+
+static int map_taken(const MapInfo *m, int x, int y, int pills)
+{
+	int i;
+
+	for (i = 0; i < m->numBases; i++)
+		if (m->bases[i].x == x && m->bases[i].y == y)
+			return 1;
+	for (i = 0; i < pills; i++)
+		if (m->pills[i].x == x && m->pills[i].y == y)
+			return 1;
+	for (i = 0; i < m->numStarts; i++)
+		if (m->starts[i].x == x && m->starts[i].y == y)
+			return 1;
+	return 0;
+}
+
+// Changes Everard Island for a soak: deep sea in the squares east of every
+// base (sea), or a pill 2-3 squares from every base, on grass (fire).
+static void soak_map(MapInfo *m)
+{
+	static const int8_t kOff[][2] = { { 0, -3 }, { 3, 0 }, { 0, 3 }, { -3, 0 }, { 2, 2 }, { -2, -2 }, { 2, -2 }, { -2, 2 } };
+	int i, j, x, y;
+
+	for (i = 0; i < m->numBases; i++) {
+		const MapBase *b = &m->bases[i];
+
+		if (gSoakMap == 1) {
+			for (j = 0; j < 4; j++) {
+				x = b->x + (j < 3 ? 1 : 2);
+				y = b->y + (j < 3 ? j - 1 : 0);
+				if (!map_taken(m, x, y, m->numPills))
+					game_set_terrain((uint8_t)x, (uint8_t)y, TERRAIN_DEEP_SEA);
+			}
+		} else if (i < m->numPills) {
+			for (j = 0; j < 8; j++) {
+				x = b->x + kOff[j][0];
+				y = b->y + kOff[j][1];
+				if (game_terrain((uint8_t)x, (uint8_t)y) != TERRAIN_DEEP_SEA && !map_taken(m, x, y, m->numPills))
+					break;
+			}
+			if (j < 8) {
+				m->pills[i].x = (uint8_t)x;
+				m->pills[i].y = (uint8_t)y;
+				game_set_terrain((uint8_t)x, (uint8_t)y, TERRAIN_GRASS);
+			}
+		}
+	}
+}
 
 static void bot_new(GameState *g, const uint8_t *ev, uint32_t len, uint32_t seed, int players,
 	int bots, int level)
@@ -897,6 +1034,8 @@ static void bot_new(GameState *g, const uint8_t *ev, uint32_t len, uint32_t seed
 	st.numBots = bots;
 	st.botLevel = level;
 	CHECK(parse_buf(&g->map, ev, len) == MAP_OK, "bot map");
+	if (gSoakMap)
+		soak_map(&g->map);
 	game_set_viewer(0);
 	game_init(g, seed, &st);
 }
@@ -1101,6 +1240,9 @@ static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
 		tot.manLong += st.manLong;
 		tot.squares += st.squares;
 		tot.firstCapture += st.firstCapture < 0 ? ticks : st.firstCapture;
+		tot.stuck += st.stuck;
+		if (st.stillMax > tot.stillMax)
+			tot.stillMax = st.stillMax;
 	}
 	if (games > 0)
 		printf("total over %d games: captures %d (first at %d on average) pickups %d placed %d kills %d deaths %d"
@@ -1117,6 +1259,9 @@ static void bot_soak(const uint8_t *ev, uint32_t len, int games, int ticks)
 			(int)((long)tot.manRiver * 100 / tot.botTicks), (int)((long)tot.manRiver * 1000 / tot.botTicks % 10),
 			(int)((long)tot.manDead * 100 / tot.botTicks), (int)((long)tot.manDead * 1000 / tot.botTicks % 10),
 			tot.manLong, (int)((long)tot.squares * 1000 / tot.botTicks));
+	if (games > 0)
+		printf("   bots stuck 1500 ticks %d, longest on one square with one goal %d ticks\n",
+			tot.stuck, tot.stillMax);
 	CHECK(totalDrowned == 0, "soak: no drowning");
 }
 
@@ -1281,8 +1426,16 @@ int main(int argc, char **argv)
 			int games = argc > 2 ? atoi(argv[2]) : 6, ticks = argc > 3 ? atoi(argv[3]) : 30000;
 
 			gTeams = argc > 4 && strcmp(argv[4], "teams") == 0;
+			if (getenv("SOAK_MAP"))
+				gSoakMap = strcmp(getenv("SOAK_MAP"), "sea") == 0 ? 1 : strcmp(getenv("SOAK_MAP"), "fire") == 0 ? 2 : 0;
 
 			bot_soak(ev, len, games, ticks);
+			free(ev);
+			printf(gFails ? "%d checks failed\n" : "ok\n", gFails);
+			return gFails != 0;
+		}
+		if (argc > 1 && strcmp(argv[1], "--save-busy") == 0) {
+			save_busy(ev, len);
 			free(ev);
 			printf(gFails ? "%d checks failed\n" : "ok\n", gFails);
 			return gFails != 0;
