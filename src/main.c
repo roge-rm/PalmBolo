@@ -185,7 +185,9 @@ static void SEC_COLD LeaveGame(void)
 {
 	if (gInGame && gForm == GameForm) {
 		if (gNet) {
-			if (FrmAlert(LeaveNetAlert) != 0) return;
+			if (NetAsk("Leave network game", "Disconnect from the other players?", "Leave",
+			    "Cancel") != 0)
+				return;
 			if (OfflineGame(true)) return;
 		} else if (!gGame.over && SaveAllowed() && !SaveWrite(&gGame)) {
 			FrmAlert(SaveFailAlert);
@@ -474,8 +476,14 @@ static Boolean HandleEvent(EventType *e)
 		// The TX status bar sends positive coordinates outside the form.
 		if (e->screenX < bounds.extent.x && e->screenY < bounds.extent.y) {
 			UInt8 mx, my;
-			Int16 b = ViewTap(e->screenX, e->screenY, &mx, &my);
+			Int16 b;
 
+			// The menu has to see taps too: after a tap outside an open menu
+			// closes it, the next Menu press does nothing unless that tap came
+			// back to it.
+			if (MenuHandleEvent(0, e, &err))
+				return true;
+			b = ViewTap(e->screenX, e->screenY, &mx, &my);
 			if (b < 0) {
 				gBuild = (UInt8)(gAction + 1);
 				gBuildX = mx;
@@ -971,6 +979,17 @@ static Boolean SEC_COLD NetTurns(void)
 	return false;
 }
 
+// Reads the pen between a frame's ticks. On the IIIx a tap that starts and
+// ends between two EvtGetEvent calls, a frame's ticks and drawing apart, is
+// lost unless the pen is read in between.
+static void PenPoll(void)
+{
+	Int16 x, y;
+	Boolean down;
+
+	EvtGetPen(&x, &y, &down);
+}
+
 static void EventLoop(void)
 {
 	EventType e;
@@ -1088,6 +1107,7 @@ static void EventLoop(void)
 				NetTick(&gGame, &in);
 			else
 				game_tick(&gGame, all);
+			PenPoll();
 #ifdef DEBUG
 			MARK(LP_TICK);
 			TimingTick(TimGetTicks() - t1);
@@ -1179,6 +1199,7 @@ static void EventLoop(void)
 			gFull = gDirty = false;
 			MARK(LP_OTHER);
 			ViewFrame(full, n != 0);
+			PenPoll();
 			NetService();
 			MARK(LP_DEBUG);
 			// Full repaints are rare and slow, so they stay out of the pacing.

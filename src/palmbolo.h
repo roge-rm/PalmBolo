@@ -311,6 +311,10 @@ FormEventHandlerType *SEC_FRONT FrontHandler(UInt16 formId);
 // Shows the results of a game that ended and goes on to the title. net
 // is true for a network game, whose names come from netgame.h.
 void SEC_FRONT FrontResults(const struct GameState *g, Boolean net);
+// A modal message for a network game, which keeps the link going while it
+// shows (an alert would stop it). Returns 0 for yes, 1 for no; no is NULL
+// for one button.
+UInt16 SEC_FRONT NetAsk(const Char *title, const Char *text, const Char *yes, const Char *no);
 // The saved game: the game state in a database of its own and the map
 // store kept beside it.
 Boolean SEC_FRONT SaveExists(void);

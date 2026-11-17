@@ -45,6 +45,9 @@ UInt8 SEC_NET NetPoll(void);
 // Services the active radio during long operations without dispatching UI input.
 void SEC_NET NetService(void);
 Boolean SEC_NET NetServiceActive(void);
+// Keeps the link and lockstep going while a dialog is up: polls and sends
+// what's due without running a game tick.
+void SEC_NET NetIdle(void);
 UInt8 SEC_NET NetPhase(void);
 Boolean SEC_NET NetIsHost(void);
 // This Palm's slot (its tank) and why the game stopped.

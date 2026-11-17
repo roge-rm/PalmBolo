@@ -271,6 +271,51 @@ static void SEC_FRONT FormDraw(FormType *frm)
 	FntSetFont(old);
 }
 
+UInt16 SEC_FRONT NetAsk(const Char *title, const Char *text, const Char *yes, const Char *no)
+{
+	FormType *old = FrmGetActiveForm(), *frm = FrmInitForm(NetAskForm);
+	FieldType *fld;
+	EventType e;
+	UInt16 result = no ? 1 : 0;
+
+	if (!frm)
+		return result;
+	FrmSetTitle(frm, (Char *)title);
+	fld = (FieldType *)Obj(frm, NetAskText);
+	FldSetTextPtr(fld, (Char *)text);
+	FldRecalculateField(fld, false);
+	CtlSetLabel((ControlType *)Obj(frm, NetAskYes), yes);
+	if (no)
+		CtlSetLabel((ControlType *)Obj(frm, NetAskNo), no);
+	else
+		FrmHideObject(frm, FrmGetObjectIndex(frm, NetAskNo));
+	FrmSetActiveForm(frm);
+	FrmDrawForm(frm);
+	// A few polls a second, as LS_DROP_MS of silence drops a player.
+	for (;;) {
+		EvtGetEvent(&e, SysTicksPerSecond() / 20 + 1);
+		NetIdle();
+		if (e.eType == appStopEvent) {
+			EvtAddEventToQueue(&e);
+			break;
+		}
+		if (SysHandleEvent(&e))
+			continue;
+		if (e.eType == ctlSelectEvent && (e.data.ctlSelect.controlID == NetAskYes ||
+		    e.data.ctlSelect.controlID == NetAskNo)) {
+			result = e.data.ctlSelect.controlID == NetAskYes ? 0 : 1;
+			break;
+		}
+		FrmHandleEvent(frm, &e);
+	}
+	FldSetTextPtr(fld, NULL);
+	FrmEraseForm(frm);
+	FrmDeleteForm(frm);
+	if (old)
+		FrmSetActiveForm(old);
+	return result;
+}
+
 // Network settings last for this app session without changing saved preferences.
 static Char gUdpHost[16];
 static Char gUdpPort[6] = "5046";
@@ -851,14 +896,14 @@ static Boolean SEC_FRONT LobbyHandler(EventType *e)
 		if (e->data.ctlSelect.controlID == LobAddress) {
 			Char address[48];
 			udp_local(address);
-			FrmCustomAlert(ViewAlert, address, "", "");
+			NetAsk("PalmBolo", address, "OK", NULL);
 			return true;
 		}
 		if (e->data.ctlSelect.controlID == LobStart) {
 			if (!NetCanStart())
 				return true;
 			if (!NetStart()) {
-				FrmCustomAlert(ViewAlert, NetWhy(), "", "");
+				NetAsk("PalmBolo", NetWhy(), "OK", NULL);
 				return true;
 			}
 			ShowObj(frm, LobStart, false);

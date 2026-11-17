@@ -96,6 +96,9 @@
 #define MapCopyForm 1810
 #define MapCopyCancel 1811
 
-#define LeaveNetAlert 1120
 #define OfflineAlert 1121
 #define OfflineSaveAlert 1122
+#define NetAskForm 1125
+#define NetAskText 1126
+#define NetAskYes 1127
+#define NetAskNo 1128

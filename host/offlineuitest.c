@@ -26,11 +26,14 @@ Boolean SaveAllowed(void) { return allowed; }
 Boolean SaveWrite(const GameState *g) { (void)g; assert(allowed); saves++; return true; }
 static UInt16 FrmAlert(UInt16 id) {
  assert(numShown<8); shown[numShown++]=id;
- if(id!=LeaveNetAlert) assert(!connected);
+ if(id!=NetAskForm) assert(!connected);
  return answers[nextAnswer++];
 }
 UInt16 FrmCustomAlert(UInt16 id,const Char *a,const Char *b,const Char *c) {
  (void)a;(void)b;(void)c; return FrmAlert(id);
+}
+static UInt16 NetAsk(const Char *t,const Char *x,const Char *y,const Char *n) {
+ (void)t;(void)x;(void)y;(void)n; return FrmAlert(NetAskForm);
 }
 static void NetEnd(void) { closes++; connected=0; }
 static UInt8 NetOffline(GameState *g) { NetEnd(); if(result==2)g->over=1; return result; }
@@ -46,7 +49,7 @@ static void reset(void) {
 }
 int main(void) {
  reset(); answers[0]=1; LeaveGame();
- assert(gNet && gInGame && connected && !closes && !saves && shown[0]==LeaveNetAlert);
+ assert(gNet && gInGame && connected && !closes && !saves && shown[0]==NetAskForm);
  reset(); LeaveGame();
  assert(!gNet && gInGame && !connected && gClockReset && !gBuild && !gFire && !gSight && gDirty && gFull);
  assert(numShown==2 && shown[1]==OfflineAlert); LeaveGame(); assert(saves==1 && destination==TitleForm);

@@ -255,12 +255,14 @@ BEGIN
  BUTTON "Cancel" ID MapCopyCancel AT (40 38 60 13) RECTFRAME USABLE
 END
 
-ALERT ID LeaveNetAlert
-CONFIRMATION
+// NetAsk (front.c): a message that keeps a network game's link going.
+FORM ID NetAskForm AT (2 70 156 88)
+MODAL SAVEBEHIND USABLE
 BEGIN
-  TITLE "Leave network game"
-  MESSAGE "Disconnect from the other players?"
-  BUTTONS "Leave" "Cancel"
+  TITLE "PalmBolo"
+  FIELD ID NetAskText AT (6 16 144 48) USABLE NONEDITABLE MULTIPLELINES MAXCHARS 80
+  BUTTON "Cancel" ID NetAskYes AT (6 70 50 12) RECTFRAME USABLE
+  BUTTON "Cancel" ID NetAskNo AT (62 70 50 12) RECTFRAME USABLE
 END
 
 ALERT ID OfflineAlert

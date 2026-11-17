@@ -463,6 +463,20 @@ void NetService(void)
 		NetPoll();
 }
 
+void NetIdle(void)
+{
+	if (gPhase == NET_OFF || gPhase == NET_STOPPED)
+		return;
+	if (gPhase == NET_PLAY) {
+		// NetService only runs for IR and Bluetooth; UDP needs the poll too.
+		if (gKind == LINK_IR) ir_service();
+		else if (gKind == LINK_BT) bt_service();
+		if (!gInPoll && !gInTick)
+			NetPoll();
+	} else
+		NetPoll();
+}
+
 Boolean NetServiceActive(void)
 {
 	return (gKind == LINK_IR || gKind == LINK_BT) && gPhase != NET_OFF && gPhase != NET_STOPPED;
