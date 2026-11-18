@@ -45,7 +45,7 @@ static UInt16 gDropped;     // passes that fell over a frame behind and dropped 
 // The app's own settings, kept in its preferences.
 #define kAppCreator     'Rmrf'
 #define kPrefsId        0
-#define kPrefsVersion   2
+#define kPrefsVersion   3
 
 // Bots in a new game and their level; EXTRA can set either.
 #ifdef BOT_COUNT
@@ -75,9 +75,9 @@ static void SEC_COLD Defaults(void)
 	gPrefs.numBots = kDefBots;
 	gPrefs.botLevel = kDefLevel;
 	gPrefs.keys[0] = KEY_LEFT;
-	gPrefs.keys[1] = KEY_FIRE;
-	gPrefs.keys[2] = KEY_MINE;
-	gPrefs.keys[3] = KEY_RIGHT;
+	gPrefs.keys[1] = KEY_RIGHT;
+	gPrefs.keys[2] = KEY_FIRE;
+	gPrefs.keys[3] = KEY_MINE;
 	StrCopy(gPrefs.name, "Player");
 	// The HotSync user name, if there is one.
 	user[0] = 0;
@@ -93,8 +93,15 @@ static void SEC_COLD LoadPrefs(void)
 	Int16 v;
 
 	v = PrefGetAppPreferences(kAppCreator, kPrefsId, &gPrefs, &size, true);
-	if (v != kPrefsVersion || size != sizeof(gPrefs))
+	if ((v != kPrefsVersion && v != 2) || size != sizeof(gPrefs))
 		Defaults();
+	else if (v == 2 && gPrefs.keys[0] == KEY_LEFT && gPrefs.keys[1] == KEY_FIRE &&
+			gPrefs.keys[2] == KEY_MINE && gPrefs.keys[3] == KEY_RIGHT) {
+		// Version 2's default buttons move to the new defaults.
+		gPrefs.keys[1] = KEY_RIGHT;
+		gPrefs.keys[2] = KEY_FIRE;
+		gPrefs.keys[3] = KEY_MINE;
+	}
 	SoundSetOn(gPrefs.sound != 0);
 }
 

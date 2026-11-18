@@ -2,14 +2,17 @@
 
 PalmBolo is Bolo for Palm OS. Drive a tank around an island, capture bases and pillboxes, and send your builder out to build roads, walls, boats and pillboxes of your own.
 
-The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.12.0 has up to 7 bots in single-player, two-player infrared, up to four players over Bluetooth and up to eight over a UDP network.
+The game rules come from [WinBolo 2](https://github.com/john-winbolo/winbolo), rewritten to run on everything from a 16 MHz Palm III to a Tungsten TX, one build for all of them. Version 0.12.1 has up to 7 bots in single-player, two-player infrared, up to four players over Bluetooth and up to eight over a UDP network.
+
+New in 0.12.1:
+- New default buttons: 1 and 2 turn, 3 fires, 4 lays a mine
 
 New in 0.12.0:
 - A demo game plays on the title screen after a minute idle
 - A map editor: edit a copy of any map or start a new island, paint with a brush, fill or box, place pillboxes, bases and starts, undo, and see the whole map at once
 - Test play a map with bots from the editor, then save it to the map list and beam it
 
-0.11.0 and 0.12.0 can play together, and a game saved in 0.11.0 can be resumed in 0.12.0.
+0.11.0, 0.12.0 and 0.12.1 can play together, and a game saved in 0.11.0 or 0.12.0 can be resumed in 0.12.1.
 
 Let me know what works and what doesn't, or open an issue here.
 
@@ -49,7 +52,7 @@ On older Clié devices with Sony's high-resolution library it draws at 320×320 
 
 ## Install
 
-Download `PalmBolo-0.12.0.prc` from the releases page and install it with HotSync, or beam it from another Palm.
+Download `PalmBolo-0.12.1.prc` from the releases page and install it with HotSync, or beam it from another Palm.
 
 Real Bolo and WinBolo `.map` files work too. Everard Island is built in.
 
@@ -77,9 +80,9 @@ Palms without card support can still beam maps. Maps can't be received while a n
 
 Controls:
 - Up and down: faster and slower
-- Buttons 1 and 4, or the 5-way left and right: turn
-- Button 2 or the 5-way centre: fire
-- Button 3: lay a mine
+- Buttons 1 and 2, or the 5-way left and right: turn
+- Button 3 or the 5-way centre: fire
+- Button 4: lay a mine
 - Tap the map to send the builder, and pick what he builds on the panel
 
 The four buttons can be changed in Settings.
