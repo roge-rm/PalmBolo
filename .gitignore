@@ -1,2 +1,5 @@
 build/
 HANDOFF.md
+PLAN.md
+__pycache__/
+*.pyc
