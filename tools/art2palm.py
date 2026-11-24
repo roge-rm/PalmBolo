@@ -183,14 +183,13 @@ def family(out, members, with_ids=None):
 
 
 def title_and_icons(out, mats, preview):
-    """The launcher icons (OS 3 before 3.5 reads the 32x22 1 and 2-bit
-    members, later systems the 32x32 ones) and the title picture family.
+    """The launcher icons and the title picture family.
     Only the title form loads the title, from storage."""
     r = []
     r.append("ICONFAMILYEX\nBEGIN\n")
     r += family(out, [("icon-22", 1, 1, False, False), ("icon-22", 2, 1, False, False),
-                      ("icon-32", 4, 1, False, True), ("icon-32", 8, 1, True, True),
-                      ("icon-64", 8, 2, True, True)])
+                      ("icon-22", 4, 1, False, True), ("icon-22", 8, 1, True, True),
+                      ("icon-44", 8, 2, True, True)])
     r.append("END\n\nSMALLICONFAMILYEX\nBEGIN\n")
     r += family(out, [("icon-15", 1, 1, False, False), ("icon-15", 2, 1, False, False),
                       ("icon-15", 4, 1, False, True), ("icon-15", 8, 1, True, True),

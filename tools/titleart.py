@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # Draws the launcher icons and the title screen into res/art:
-#   icon-32.png  32x32 large icon        icon-64.png  its double density
-#   icon-22.png  32x22 large icon (OS 3 before 3.5)
+#   icon-22.png  32x22 large icon        icon-44.png  its double density
 #   icon-15.png  15x9 small icon         icon-30.png  its double density
 #   title-160.png, title-320.png  title screens, the bottom 50 (100)
 #                                 rows left plain for the buttons
@@ -286,12 +285,9 @@ def draw_a(c, ox, oy, k, h=32, game_s=None):
 # ---------------------------------------------------------------------------
 # Icons.
 
-def icon(w, h):
-    """The large icons: drawn in a 32 grid at 1 or 2 pixels to the unit and
-    outlined."""
-    k = w // 32
-    c = Canvas(w, h)
-    draw_a(c, 0, 0, k, 32 if h == w else 22, game_s=16 if k == 2 else None)
+def icon(k):
+    c = Canvas(32 * k, 22 * k)
+    draw_a(c, 0, 0, k, 22, game_s=8 if k == 2 else None)
     c.outline()
     return c
 
@@ -437,9 +433,8 @@ def sources():
     return {
         "icon-15": small_icon(1),
         "icon-30": small_icon(2),
-        "icon-22": icon(32, 22),
-        "icon-32": icon(32, 32),
-        "icon-64": icon(64, 64),
+        "icon-22": icon(1),
+        "icon-44": icon(2),
         "title-160": title(160),
         "title-320": title(320),
     }
@@ -460,7 +455,7 @@ def label(img, text):
 def contact(imgs, path, scale=4):
     """Every size and depth, scaled up: icons in a block on the left, titles
     beside them."""
-    order = ["icon-15", "icon-30", "icon-22", "icon-32", "icon-64", "title-160", "title-320"]
+    order = ["icon-15", "icon-30", "icon-22", "icon-44", "title-160", "title-320"]
     gap = 16
     cols_w = [imgs[n].size[0] * scale for n in order]
     row_h = max(imgs[n].size[1] for n in order) * scale
